@@ -1,0 +1,1084 @@
+---
+title: "第10讲：同步与互斥"
+description: "南京大学操作系统2025 - 临界区问题、互斥锁的实现、信号量机制"
+---
+
+# 第10讲：同步与互斥
+
+## 并发问题概述
+
+### 竞态条件
+
+竞态条件是指多个线程同时访问和修改共享数据，导致执行结果依赖于线程执行顺序的问题。
+
+**竞态条件示例**
+```c
+#include <pthread.h>
+#include <stdio.h>
+
+int counter = 0;
+
+void* increment_counter(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        counter++;  // 竞态条件
+    }
+    return NULL;
+}
+
+int main() {
+    pthread_t t1, t2;
+
+    pthread_create(&t1, NULL, increment_counter, NULL);
+    pthread_create(&t2, NULL, increment_counter, NULL);
+
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    printf("Counter: %d\n", counter);  // 结果不确定
+    return 0;
+}
+```
+
+### 临界区问题
+
+临界区是指访问共享资源的代码段，必须保证互斥访问。
+
+**临界区的四个必要条件**
+1. **互斥**：一次只有一个线程可以进入临界区
+2. **进展**：如果没有线程在临界区，其他线程可以进入
+3. **有限等待**：线程等待进入临界区的时间是有限的
+4. **无假设**：不假设线程的相对速度
+
+## 互斥锁的实现
+
+### 软件解决方案
+
+**Peterson算法**
+```c
+#include <stdatomic.h>
+#include <stdbool.h>
+
+typedef struct {
+    bool flag[2];
+    int turn;
+} peterson_lock_t;
+
+void peterson_lock(peterson_lock_t *lock, int thread_id) {
+    int other = 1 - thread_id;
+
+    lock->flag[thread_id] = true;
+    lock->turn = other;
+
+    while (lock->flag[other] && lock->turn == other) {
+        // 等待
+    }
+}
+
+void peterson_unlock(peterson_lock_t *lock, int thread_id) {
+    lock->flag[thread_id] = false;
+}
+```
+
+**Dekker算法**
+```c
+typedef struct {
+    bool want_to_enter[2];
+    int turn;
+} dekker_lock_t;
+
+void dekker_lock(dekker_lock_t *lock, int thread_id) {
+    int other = 1 - thread_id;
+
+    lock->want_to_enter[thread_id] = true;
+
+    while (lock->want_to_enter[other]) {
+        if (lock->turn == other) {
+            lock->want_to_enter[thread_id] = false;
+            while (lock->turn == other) {
+                // 等待
+            }
+            lock->want_to_enter[thread_id] = true;
+        }
+    }
+}
+
+void dekker_unlock(dekker_lock_t *lock, int thread_id) {
+    lock->want_to_enter[thread_id] = false;
+    lock->turn = 1 - thread_id;
+}
+```
+
+### 硬件支持
+
+**Test-and-Set指令**
+```c
+#include <stdatomic.h>
+
+typedef struct {
+    atomic_bool locked;
+} tas_lock_t;
+
+void tas_lock(tas_lock_t *lock) {
+    while (atomic_exchange(&lock->locked, true)) {
+        // 等待
+    }
+}
+
+void tas_unlock(tas_lock_t *lock) {
+    atomic_store(&lock->locked, false);
+}
+```
+
+**Compare-and-Swap指令**
+```c
+typedef struct {
+    atomic_int ticket;
+    atomic_int serving;
+} ticket_lock_t;
+
+void ticket_lock(ticket_lock_t *lock) {
+    int my_ticket = atomic_fetch_add(&lock->ticket, 1);
+
+    while (atomic_load(&lock->serving) != my_ticket) {
+        // 等待
+    }
+}
+
+void ticket_unlock(ticket_lock_t *lock) {
+    atomic_fetch_add(&lock->serving, 1);
+}
+```
+
+### 自旋锁与阻塞锁
+
+**自旋锁**
+```c
+typedef struct {
+    atomic_bool locked;
+} spinlock_t;
+
+void spin_lock(spinlock_t *lock) {
+    while (atomic_exchange(&lock->locked, true)) {
+        // 自旋等待
+        while (atomic_load(&lock->locked)) {
+            // 减少缓存竞争
+            __builtin_ia32_pause();
+        }
+    }
+}
+
+void spin_unlock(spinlock_t *lock) {
+    atomic_store(&lock->locked, false);
+}
+```
+
+**阻塞锁**
+```c
+#include <pthread.h>
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool locked;
+} blocking_lock_t;
+
+void blocking_lock_init(blocking_lock_t *lock) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->cond, NULL);
+    lock->locked = false;
+}
+
+void blocking_lock(blocking_lock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    while (lock->locked) {
+        pthread_cond_wait(&lock->cond, &lock->mutex);
+    }
+
+    lock->locked = true;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void blocking_unlock(blocking_lock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->locked = false;
+    pthread_cond_signal(&lock->cond);
+    pthread_mutex_unlock(&lock->mutex);
+}
+```
+
+### 读写锁
+
+**读写锁实现**
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    int readers;
+    int writers;
+    int waiting_writers;
+} rwlock_t;
+
+void rwlock_init(rwlock_t *lock) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->read_cond, NULL);
+    pthread_cond_init(&lock->write_cond, NULL);
+    lock->readers = 0;
+    lock->writers = 0;
+    lock->waiting_writers = 0;
+}
+
+void read_lock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    while (lock->writers > 0 || lock->waiting_writers > 0) {
+        pthread_cond_wait(&lock->read_cond, &lock->mutex);
+    }
+
+    lock->readers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void read_unlock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->readers--;
+
+    if (lock->readers == 0 && lock->waiting_writers > 0) {
+        pthread_cond_signal(&lock->write_cond);
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void write_lock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->waiting_writers++;
+
+    while (lock->readers > 0 || lock->writers > 0) {
+        pthread_cond_wait(&lock->write_cond, &lock->mutex);
+    }
+
+    lock->waiting_writers--;
+    lock->writers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void write_unlock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->writers--;
+
+    if (lock->waiting_writers > 0) {
+        pthread_cond_signal(&lock->write_cond);
+    } else {
+        pthread_cond_broadcast(&lock->read_cond);
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+```
+
+## 信号量机制
+
+### 信号量基本概念
+
+信号量是一个整数变量，除了初始化外，只能通过两个原子操作：wait(P)和signal(V)来访问。
+
+**信号量操作**
+- **wait(S)**：如果S > 0，则S = S - 1；否则等待
+- **signal(S)**：S = S + 1；如果有进程在等待，唤醒一个
+
+### 二进制信号量
+
+```c
+#include <stdatomic.h>
+#include <stdbool.h>
+
+typedef struct {
+    atomic_int value;
+} binary_semaphore_t;
+
+void binary_semaphore_init(binary_semaphore_t *sem, int initial_value) {
+    atomic_init(&sem->value, initial_value);
+}
+
+void binary_semaphore_wait(binary_semaphore_t *sem) {
+    while (atomic_exchange(&sem->value, 0) == 0) {
+        // 等待
+        __builtin_ia32_pause();
+    }
+}
+
+void binary_semaphore_signal(binary_semaphore_t *sem) {
+    atomic_store(&sem->value, 1);
+}
+```
+
+### 计数信号量
+
+```c
+#include <stdatomic.h>
+
+typedef struct {
+    atomic_int value;
+} counting_semaphore_t;
+
+void counting_semaphore_init(counting_semaphore_t *sem, int initial_value) {
+    atomic_init(&sem->value, initial_value);
+}
+
+void counting_semaphore_wait(counting_semaphore_t *sem) {
+    int expected, desired;
+
+    do {
+        expected = atomic_load(&sem->value);
+        if (expected <= 0) {
+            // 等待
+            while (atomic_load(&sem->value) <= 0) {
+                __builtin_ia32_pause();
+            }
+            continue;
+        }
+        desired = expected - 1;
+    } while (!atomic_compare_exchange_weak(&sem->value, &expected, desired));
+}
+
+void counting_semaphore_signal(counting_semaphore_t *sem) {
+    atomic_fetch_add(&sem->value, 1);
+}
+```
+
+### 阻塞信号量
+
+```c
+#include <pthread.h>
+
+typedef struct {
+    int value;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} blocking_semaphore_t;
+
+void blocking_semaphore_init(blocking_semaphore_t *sem, int initial_value) {
+    sem->value = initial_value;
+    pthread_mutex_init(&sem->mutex, NULL);
+    pthread_cond_init(&sem->cond, NULL);
+}
+
+void blocking_semaphore_wait(blocking_semaphore_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+
+    while (sem->value <= 0) {
+        pthread_cond_wait(&sem->cond, &sem->mutex);
+    }
+
+    sem->value--;
+    pthread_mutex_unlock(&sem->mutex);
+}
+
+void blocking_semaphore_signal(blocking_semaphore_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+    sem->value++;
+    pthread_cond_signal(&sem->cond);
+    pthread_mutex_unlock(&sem->mutex);
+}
+```
+
+### 信号量应用示例
+
+**生产者-消费者问题**
+```c
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define BUFFER_SIZE 10
+
+typedef struct {
+    int buffer[BUFFER_SIZE];
+    int in, out;
+    blocking_semaphore_t empty;
+    blocking_semaphore_t full;
+    blocking_semaphore_t mutex;
+} bounded_buffer_t;
+
+void bounded_buffer_init(bounded_buffer_t *buffer) {
+    buffer->in = 0;
+    buffer->out = 0;
+    blocking_semaphore_init(&buffer->empty, BUFFER_SIZE);
+    blocking_semaphore_init(&buffer->full, 0);
+    blocking_semaphore_init(&buffer->mutex, 1);
+}
+
+void producer(bounded_buffer_t *buffer, int item) {
+    blocking_semaphore_wait(&buffer->empty);
+    blocking_semaphore_wait(&buffer->mutex);
+
+    buffer->buffer[buffer->in] = item;
+    buffer->in = (buffer->in + 1) % BUFFER_SIZE;
+
+    blocking_semaphore_signal(&buffer->mutex);
+    blocking_semaphore_signal(&buffer->full);
+}
+
+int consumer(bounded_buffer_t *buffer) {
+    int item;
+
+    blocking_semaphore_wait(&buffer->full);
+    blocking_semaphore_wait(&buffer->mutex);
+
+    item = buffer->buffer[buffer->out];
+    buffer->out = (buffer->out + 1) % BUFFER_SIZE;
+
+    blocking_semaphore_signal(&buffer->mutex);
+    blocking_semaphore_signal(&buffer->empty);
+
+    return item;
+}
+
+void* producer_thread(void *arg) {
+    bounded_buffer_t *buffer = (bounded_buffer_t *)arg;
+
+    for (int i = 0; i < 100; i++) {
+        producer(buffer, i);
+        printf("Produced: %d\n", i);
+    }
+
+    return NULL;
+}
+
+void* consumer_thread(void *arg) {
+    bounded_buffer_t *buffer = (bounded_buffer_t *)arg;
+
+    for (int i = 0; i < 100; i++) {
+        int item = consumer(buffer);
+        printf("Consumed: %d\n", item);
+    }
+
+    return NULL;
+}
+
+int main() {
+    pthread_t producer_tid, consumer_tid;
+    bounded_buffer_t buffer;
+
+    bounded_buffer_init(&buffer);
+
+    pthread_create(&producer_tid, NULL, producer_thread, &buffer);
+    pthread_create(&consumer_tid, NULL, consumer_thread, &buffer);
+
+    pthread_join(producer_tid, NULL);
+    pthread_join(consumer_tid, NULL);
+
+    return 0;
+}
+```
+
+**读者-写者问题**
+```c
+typedef struct {
+    blocking_semaphore_t mutex;
+    blocking_semaphore_t wrt;
+    int read_count;
+} reader_writer_lock_t;
+
+void rw_lock_init(reader_writer_lock_t *lock) {
+    blocking_semaphore_init(&lock->mutex, 1);
+    blocking_semaphore_init(&lock->wrt, 1);
+    lock->read_count = 0;
+}
+
+void reader_lock(reader_writer_lock_t *lock) {
+    blocking_semaphore_wait(&lock->mutex);
+    lock->read_count++;
+
+    if (lock->read_count == 1) {
+        blocking_semaphore_wait(&lock->wrt);
+    }
+
+    blocking_semaphore_signal(&lock->mutex);
+}
+
+void reader_unlock(reader_writer_lock_t *lock) {
+    blocking_semaphore_wait(&lock->mutex);
+    lock->read_count--;
+
+    if (lock->read_count == 0) {
+        blocking_semaphore_signal(&lock->wrt);
+    }
+
+    blocking_semaphore_signal(&lock->mutex);
+}
+
+void writer_lock(reader_writer_lock_t *lock) {
+    blocking_semaphore_wait(&lock->wrt);
+}
+
+void writer_unlock(reader_writer_lock_t *lock) {
+    blocking_semaphore_signal(&lock->wrt);
+}
+```
+
+### 哲学家就餐问题
+
+```c
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define NUM_PHILOSOPHERS 5
+
+typedef struct {
+    blocking_semaphore_t chopsticks[NUM_PHILOSOPHERS];
+    blocking_semaphore_t mutex;
+} dining_table_t;
+
+void dining_table_init(dining_table_t *table) {
+    blocking_semaphore_init(&table->mutex, 1);
+
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        blocking_semaphore_init(&table->chopsticks[i], 1);
+    }
+}
+
+void pickup_chopsticks(dining_table_t *table, int philosopher_id) {
+    int left = philosopher_id;
+    int right = (philosopher_id + 1) % NUM_PHILOSOPHERS;
+
+    // 为了避免死锁，奇数哲学家先拿左筷子，偶数先拿右筷子
+    if (philosopher_id % 2 == 1) {
+        blocking_semaphore_wait(&table->chopsticks[left]);
+        blocking_semaphore_wait(&table->chopsticks[right]);
+    } else {
+        blocking_semaphore_wait(&table->chopsticks[right]);
+        blocking_semaphore_wait(&table->chopsticks[left]);
+    }
+}
+
+void putdown_chopsticks(dining_table_t *table, int philosopher_id) {
+    int left = philosopher_id;
+    int right = (philosopher_id + 1) % NUM_PHILOSOPHERS;
+
+    blocking_semaphore_signal(&table->chopsticks[left]);
+    blocking_semaphore_signal(&table->chopsticks[right]);
+}
+
+void* philosopher(void *arg) {
+    int id = *(int *)arg;
+    dining_table_t *table = (dining_table_t *)((int *)arg)[1];
+
+    for (int i = 0; i < 3; i++) {
+        printf("Philosopher %d is thinking\n", id);
+        sleep(1);
+
+        printf("Philosopher %d is hungry\n", id);
+        pickup_chopsticks(table, id);
+
+        printf("Philosopher %d is eating\n", id);
+        sleep(1);
+
+        putdown_chopsticks(table, id);
+    }
+
+    return NULL;
+}
+
+int main() {
+    pthread_t philosophers[NUM_PHILOSOPHERS];
+    dining_table_t table;
+    int args[NUM_PHILOSOPHERS][2];
+
+    dining_table_init(&table);
+
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        args[i][0] = i;
+        args[i][1] = (int)&table;
+        pthread_create(&philosophers[i], NULL, philosopher, args[i]);
+    }
+
+    for (int i = 0; i < NUM_PHILOSOPHERS; i++) {
+        pthread_join(philosophers[i], NULL);
+    }
+
+    return 0;
+}
+```
+
+## 同步原语的性能分析
+
+### 锁的粒度
+
+**粗粒度锁**
+```c
+typedef struct {
+    int data[1000];
+    pthread_mutex_t global_lock;  // 全局锁
+} coarse_data_t;
+```
+
+**细粒度锁**
+```c
+typedef struct {
+    int data[1000];
+    pthread_mutex_t locks[10];  // 每100个元素一个锁
+} fine_data_t;
+
+void update_fine_data(fine_data_t *data, int index, int value) {
+    int lock_index = index / 100;
+    pthread_mutex_lock(&data->locks[lock_index]);
+    data->data[index] = value;
+    pthread_mutex_unlock(&data->locks[lock_index]);
+}
+```
+
+### 锁争用优化
+
+**锁消除**
+```c
+// 编译器可以识别局部变量的锁使用情况
+void local_operations() {
+    pthread_mutex_t local_mutex;
+    pthread_mutex_init(&local_mutex, NULL);
+
+    // 如果编译器发现锁只在一个线程使用，可以消除锁
+    pthread_mutex_lock(&local_mutex);
+    // ... 操作
+    pthread_mutex_unlock(&local_mutex);
+}
+```
+
+**锁合并**
+```c
+typedef struct {
+    int counter1;
+    int counter2;
+    pthread_mutex_t lock1;
+    pthread_mutex_t lock2;
+} counters_t;
+
+// 如果两个计数器经常一起使用，可以合并锁
+typedef struct {
+    int counter1;
+    int counter2;
+    pthread_mutex_t lock;
+} merged_counters_t;
+```
+
+### 无锁编程
+
+**原子操作**
+```c
+#include <stdatomic.h>
+
+typedef struct {
+    atomic_int value;
+} atomic_counter_t;
+
+void atomic_increment(atomic_counter_t *counter) {
+    atomic_fetch_add(&counter->value, 1);
+}
+
+int atomic_get(atomic_counter_t *counter) {
+    return atomic_load(&counter->value);
+}
+```
+
+**无锁队列**
+```c
+typedef struct node {
+    int value;
+    struct node *next;
+} node_t;
+
+typedef struct {
+    node_t *head;
+    node_t *tail;
+    pthread_mutex_t head_lock;
+    pthread_mutex_t tail_lock;
+} lock_free_queue_t;
+
+void lock_free_enqueue(lock_free_queue_t *queue, int value) {
+    node_t *new_node = malloc(sizeof(node_t));
+    new_node->value = value;
+    new_node->next = NULL;
+
+    pthread_mutex_lock(&queue->tail_lock);
+    queue->tail->next = new_node;
+    queue->tail = new_node;
+    pthread_mutex_unlock(&queue->tail_lock);
+}
+
+int lock_free_dequeue(lock_free_queue_t *queue) {
+    pthread_mutex_lock(&queue->head_lock);
+
+    if (queue->head->next == NULL) {
+        pthread_mutex_unlock(&queue->head_lock);
+        return -1;  // 队列为空
+    }
+
+    node_t *old_head = queue->head;
+    int value = old_head->next->value;
+    queue->head = old_head->next;
+
+    pthread_mutex_unlock(&queue->head_lock);
+    free(old_head);
+
+    return value;
+}
+```
+
+## 实验项目：同步原语实现
+
+### 实验目标
+
+实现一个包含互斥锁、读写锁和信号量的同步原语库，并通过经典同步问题验证其正确性。
+
+### 实验代码框架
+
+```c
+// sync_primitives.h
+#ifndef SYNC_PRIMITIVES_H
+#define SYNC_PRIMITIVES_H
+
+#include <pthread.h>
+
+// 自旋锁
+typedef struct {
+    volatile int locked;
+} spinlock_t;
+
+void spinlock_init(spinlock_t *lock);
+void spinlock_lock(spinlock_t *lock);
+void spinlock_unlock(spinlock_t *lock);
+
+// 读写锁
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    int readers;
+    int writers;
+    int waiting_writers;
+} rwlock_t;
+
+void rwlock_init(rwlock_t *lock);
+void rwlock_read_lock(rwlock_t *lock);
+void rwlock_read_unlock(rwlock_t *lock);
+void rwlock_write_lock(rwlock_t *lock);
+void rwlock_write_unlock(rwlock_t *lock);
+
+// 信号量
+typedef struct {
+    int value;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} semaphore_t;
+
+void semaphore_init(semaphore_t *sem, int initial_value);
+void semaphore_wait(semaphore_t *sem);
+void semaphore_signal(semaphore_t *sem);
+
+#endif // SYNC_PRIMITIVES_H
+```
+
+```c
+// sync_primitives.c
+#include "sync_primitives.h"
+#include <stdatomic.h>
+
+// 自旋锁实现
+void spinlock_init(spinlock_t *lock) {
+    lock->locked = 0;
+}
+
+void spinlock_lock(spinlock_t *lock) {
+    while (__sync_lock_test_and_set(&lock->locked, 1)) {
+        // 自旋等待
+        while (lock->locked) {
+            __builtin_ia32_pause();
+        }
+    }
+}
+
+void spinlock_unlock(spinlock_t *lock) {
+    __sync_lock_release(&lock->locked);
+}
+
+// 读写锁实现
+void rwlock_init(rwlock_t *lock) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->read_cond, NULL);
+    pthread_cond_init(&lock->write_cond, NULL);
+    lock->readers = 0;
+    lock->writers = 0;
+    lock->waiting_writers = 0;
+}
+
+void rwlock_read_lock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    while (lock->writers > 0 || lock->waiting_writers > 0) {
+        pthread_cond_wait(&lock->read_cond, &lock->mutex);
+    }
+
+    lock->readers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void rwlock_read_unlock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->readers--;
+
+    if (lock->readers == 0 && lock->waiting_writers > 0) {
+        pthread_cond_signal(&lock->write_cond);
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void rwlock_write_lock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->waiting_writers++;
+
+    while (lock->readers > 0 || lock->writers > 0) {
+        pthread_cond_wait(&lock->write_cond, &lock->mutex);
+    }
+
+    lock->waiting_writers--;
+    lock->writers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void rwlock_write_unlock(rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->writers--;
+
+    if (lock->waiting_writers > 0) {
+        pthread_cond_signal(&lock->write_cond);
+    } else {
+        pthread_cond_broadcast(&lock->read_cond);
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+// 信号量实现
+void semaphore_init(semaphore_t *sem, int initial_value) {
+    sem->value = initial_value;
+    pthread_mutex_init(&sem->mutex, NULL);
+    pthread_cond_init(&sem->cond, NULL);
+}
+
+void semaphore_wait(semaphore_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+
+    while (sem->value <= 0) {
+        pthread_cond_wait(&sem->cond, &sem->mutex);
+    }
+
+    sem->value--;
+    pthread_mutex_unlock(&sem->mutex);
+}
+
+void semaphore_signal(semaphore_t *sem) {
+    pthread_mutex_lock(&sem->mutex);
+    sem->value++;
+    pthread_cond_signal(&sem->cond);
+    pthread_mutex_unlock(&sem->mutex);
+}
+```
+
+### 测试程序
+
+```c
+// test_sync_primitives.c
+#include "sync_primitives.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/time.h>
+
+#define NUM_THREADS 10
+#define NUM_OPERATIONS 1000000
+
+// 全局变量
+int counter = 0;
+spinlock_t spin_lock;
+rwlock_t rw_lock;
+semaphore_t semaphore;
+
+// 自旋锁测试
+void* spinlock_test(void *arg) {
+    for (int i = 0; i < NUM_OPERATIONS; i++) {
+        spinlock_lock(&spin_lock);
+        counter++;
+        spinlock_unlock(&spin_lock);
+    }
+    return NULL;
+}
+
+// 读写锁测试
+void* rwlock_test_reader(void *arg) {
+    for (int i = 0; i < NUM_OPERATIONS / 10; i++) {
+        rwlock_read_lock(&rw_lock);
+        // 读取操作
+        int value = counter;
+        (void)value;  // 避免未使用变量警告
+        rwlock_read_unlock(&rw_lock);
+    }
+    return NULL;
+}
+
+void* rwlock_test_writer(void *arg) {
+    for (int i = 0; i < NUM_OPERATIONS / 100; i++) {
+        rwlock_write_lock(&rw_lock);
+        counter++;
+        rwlock_write_unlock(&rw_lock);
+    }
+    return NULL;
+}
+
+// 信号量测试（生产者-消费者）
+typedef struct {
+    int buffer[10];
+    int in, out;
+    semaphore_t empty, full, mutex;
+} bounded_buffer_t;
+
+void* producer(void *arg) {
+    bounded_buffer_t *buffer = (bounded_buffer_t *)arg;
+
+    for (int i = 0; i < NUM_OPERATIONS / 10; i++) {
+        semaphore_wait(&buffer->empty);
+        semaphore_wait(&buffer->mutex);
+
+        buffer->buffer[buffer->in] = i;
+        buffer->in = (buffer->in + 1) % 10;
+
+        semaphore_signal(&buffer->mutex);
+        semaphore_signal(&buffer->full);
+    }
+
+    return NULL;
+}
+
+void* consumer(void *arg) {
+    bounded_buffer_t *buffer = (bounded_buffer_t *)arg;
+    int item;
+
+    for (int i = 0; i < NUM_OPERATIONS / 10; i++) {
+        semaphore_wait(&buffer->full);
+        semaphore_wait(&buffer->mutex);
+
+        item = buffer->buffer[buffer->out];
+        buffer->out = (buffer->out + 1) % 10;
+
+        semaphore_signal(&buffer->mutex);
+        semaphore_signal(&buffer->empty);
+    }
+
+    return NULL;
+}
+
+double get_time_diff(struct timeval start, struct timeval end) {
+    return (end.tv_sec - start.tv_sec) +
+           (end.tv_usec - start.tv_usec) / 1000000.0;
+}
+
+int main() {
+    pthread_t threads[NUM_THREADS];
+    struct timeval start, end;
+
+    // 初始化同步原语
+    spinlock_init(&spin_lock);
+    rwlock_init(&rw_lock);
+    semaphore_init(&semaphore, 1);
+
+    // 自旋锁测试
+    printf("Testing spinlock...\n");
+    counter = 0;
+    gettimeofday(&start, NULL);
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, spinlock_test, NULL);
+    }
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    gettimeofday(&end, NULL);
+    printf("Spinlock counter: %d\n", counter);
+    printf("Spinlock time: %.2f seconds\n", get_time_diff(start, end));
+
+    // 读写锁测试
+    printf("\nTesting read-write lock...\n");
+    counter = 0;
+    gettimeofday(&start, NULL);
+
+    // 创建读者和写者线程
+    for (int i = 0; i < NUM_THREADS - 2; i++) {
+        pthread_create(&threads[i], NULL, rwlock_test_reader, NULL);
+    }
+    pthread_create(&threads[NUM_THREADS - 2], NULL, rwlock_test_writer, NULL);
+    pthread_create(&threads[NUM_THREADS - 1], NULL, rwlock_test_writer, NULL);
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    gettimeofday(&end, NULL);
+    printf("RWLock counter: %d\n", counter);
+    printf("RWLock time: %.2f seconds\n", get_time_diff(start, end));
+
+    // 信号量测试
+    printf("\nTesting semaphore (producer-consumer)...\n");
+    bounded_buffer_t buffer = {
+        .in = 0, .out = 0
+    };
+    semaphore_init(&buffer.empty, 10);
+    semaphore_init(&buffer.full, 0);
+    semaphore_init(&buffer.mutex, 1);
+
+    gettimeofday(&start, NULL);
+
+    // 创建生产者和消费者
+    pthread_create(&threads[0], NULL, producer, &buffer);
+    pthread_create(&threads[1], NULL, consumer, &buffer);
+
+    pthread_join(threads[0], NULL);
+    pthread_join(threads[1], NULL);
+
+    gettimeofday(&end, NULL);
+    printf("Semaphore test completed\n");
+    printf("Semaphore time: %.2f seconds\n", get_time_diff(start, end));
+
+    return 0;
+}
+```
+
+### 实验扩展
+
+1. **性能优化**：实现自适应自旋锁，根据争用情况自动选择自旋或阻塞
+2. **死锁检测**：添加死锁检测和预防机制
+3. **公平性**：实现公平的读写锁，避免写者饥饿
+4. **无锁实现**：使用原子操作实现无锁队列和栈
+
+## 课后练习
+
+1. **思考题**：分析不同同步机制的性能特点，讨论在什么场景下选择哪种同步原语。
+
+2. **编程题**：实现一个线程安全的循环缓冲区，支持多生产者和多消费者。
+
+3. **设计题**：设计一个适合大规模AI训练的同步机制，考虑GPU和CPU之间的协同。
+
+## 下一讲预告
+
+第11讲：高级同步机制 - 条件变量、读写锁、屏障同步。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第10讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect10.md](https://jyywiki.cn/OS/2025/lect10.md)*

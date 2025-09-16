@@ -1,0 +1,1147 @@
+---
+title: "第11讲：高级同步机制"
+description: "南京大学操作系统2025 - 条件变量、读写锁、屏障同步"
+---
+
+# 第11讲：高级同步机制
+
+## 条件变量
+
+### 条件变量概述
+
+条件变量是一种同步机制，允许线程等待某个条件成立时被唤醒。
+
+**条件变量的特点**
+- **与互斥锁配合使用**：通常与互斥锁一起使用
+- **原子性操作**：等待和唤醒操作具有原子性
+- **避免忙等待**：线程在等待时会被阻塞，不会消耗CPU
+
+### 条件变量的基本操作
+
+```c
+#include <pthread.h>
+
+// 条件变量初始化
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+// 条件变量动态初始化
+pthread_cond_t cond;
+pthread_cond_init(&cond, NULL);
+
+// 等待条件变量
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void wait_for_condition() {
+    pthread_mutex_lock(&mutex);
+
+    // 检查条件
+    while (!condition_is_true()) {
+        pthread_cond_wait(&cond, &mutex);
+    }
+
+    // 条件成立，执行操作
+    do_work();
+
+    pthread_mutex_unlock(&mutex);
+}
+
+// 唤醒等待的线程
+void signal_condition() {
+    pthread_mutex_lock(&mutex);
+
+    // 改变条件
+    change_condition();
+
+    // 唤醒一个等待的线程
+    pthread_cond_signal(&cond);
+
+    pthread_mutex_unlock(&mutex);
+}
+
+// 唤醒所有等待的线程
+void broadcast_condition() {
+    pthread_mutex_lock(&mutex);
+
+    change_condition();
+
+    // 唤醒所有等待的线程
+    pthread_cond_broadcast(&cond);
+
+    pthread_mutex_unlock(&mutex);
+}
+```
+
+### 条件变量的使用示例
+
+**生产者-消费者模型**
+```c
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define BUFFER_SIZE 10
+
+typedef struct {
+    int buffer[BUFFER_SIZE];
+    int in, out;
+    int count;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+} thread_safe_buffer_t;
+
+void buffer_init(thread_safe_buffer_t *buffer) {
+    buffer->in = 0;
+    buffer->out = 0;
+    buffer->count = 0;
+    pthread_mutex_init(&buffer->mutex, NULL);
+    pthread_cond_init(&buffer->not_empty, NULL);
+    pthread_cond_init(&buffer->not_full, NULL);
+}
+
+void buffer_put(thread_safe_buffer_t *buffer, int item) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    // 等待缓冲区不满
+    while (buffer->count >= BUFFER_SIZE) {
+        pthread_cond_wait(&buffer->not_full, &buffer->mutex);
+    }
+
+    // 放入项目
+    buffer->buffer[buffer->in] = item;
+    buffer->in = (buffer->in + 1) % BUFFER_SIZE;
+    buffer->count++;
+
+    printf("Producer: put %d, count = %d\n", item, buffer->count);
+
+    // 通知消费者
+    pthread_cond_signal(&buffer->not_empty);
+
+    pthread_mutex_unlock(&buffer->mutex);
+}
+
+int buffer_get(thread_safe_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    // 等待缓冲区不空
+    while (buffer->count <= 0) {
+        pthread_cond_wait(&buffer->not_empty, &buffer->mutex);
+    }
+
+    // 取出项目
+    int item = buffer->buffer[buffer->out];
+    buffer->out = (buffer->out + 1) % BUFFER_SIZE;
+    buffer->count--;
+
+    printf("Consumer: get %d, count = %d\n", item, buffer->count);
+
+    // 通知生产者
+    pthread_cond_signal(&buffer->not_full);
+
+    pthread_mutex_unlock(&buffer->mutex);
+
+    return item;
+}
+
+void* producer(void *arg) {
+    thread_safe_buffer_t *buffer = (thread_safe_buffer_t *)arg;
+
+    for (int i = 0; i < 20; i++) {
+        buffer_put(buffer, i);
+        usleep(100000);  // 100ms
+    }
+
+    return NULL;
+}
+
+void* consumer(void *arg) {
+    thread_safe_buffer_t *buffer = (thread_safe_buffer_t *)arg;
+
+    for (int i = 0; i < 20; i++) {
+        int item = buffer_get(buffer);
+        usleep(150000);  // 150ms
+    }
+
+    return NULL;
+}
+
+int main() {
+    pthread_t producer_thread, consumer_thread;
+    thread_safe_buffer_t buffer;
+
+    buffer_init(&buffer);
+
+    pthread_create(&producer_thread, NULL, producer, &buffer);
+    pthread_create(&consumer_thread, NULL, consumer, &buffer);
+
+    pthread_join(producer_thread, NULL);
+    pthread_join(consumer_thread, NULL);
+
+    return 0;
+}
+```
+
+### 带超时的条件等待
+
+```c
+#include <time.h>
+
+int timed_wait(pthread_cond_t *cond, pthread_mutex_t *mutex, int timeout_ms) {
+    struct timespec abs_time;
+    struct timeval now;
+
+    gettimeofday(&now, NULL);
+
+    // 计算绝对时间
+    abs_time.tv_sec = now.tv_sec + timeout_ms / 1000;
+    abs_time.tv_nsec = (now.tv_usec + (timeout_ms % 1000) * 1000) * 1000;
+
+    // 处理纳秒溢出
+    if (abs_time.tv_nsec >= 1000000000) {
+        abs_time.tv_sec++;
+        abs_time.tv_nsec -= 1000000000;
+    }
+
+    return pthread_cond_timedwait(cond, mutex, &abs_time);
+}
+
+// 使用示例
+void wait_with_timeout() {
+    pthread_mutex_lock(&mutex);
+
+    int result;
+    do {
+        result = timed_wait(&cond, &mutex, 5000);  // 5秒超时
+
+        if (result == ETIMEDOUT) {
+            printf("Timeout occurred, checking condition again...\n");
+        }
+    } while (!condition_is_true() && result == ETIMEDOUT);
+
+    if (result == 0 && condition_is_true()) {
+        // 条件成立，执行操作
+        do_work();
+    }
+
+    pthread_mutex_unlock(&mutex);
+}
+```
+
+### 条件变量的高级应用
+
+**多条件变量同步**
+```c
+typedef struct {
+    int data[100];
+    int count;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+    pthread_cond_t threshold_reached;
+} advanced_buffer_t;
+
+void advanced_buffer_init(advanced_buffer_t *buffer) {
+    buffer->count = 0;
+    pthread_mutex_init(&buffer->mutex, NULL);
+    pthread_cond_init(&buffer->not_empty, NULL);
+    pthread_cond_init(&buffer->not_full, NULL);
+    pthread_cond_init(&buffer->threshold_reached, NULL);
+}
+
+void advanced_buffer_put(advanced_buffer_t *buffer, int item) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count >= 100) {
+        pthread_cond_wait(&buffer->not_full, &buffer->mutex);
+    }
+
+    buffer->data[buffer->count++] = item;
+
+    // 检查是否达到阈值
+    if (buffer->count == 50) {
+        pthread_cond_broadcast(&buffer->threshold_reached);
+    }
+
+    pthread_cond_signal(&buffer->not_empty);
+    pthread_mutex_unlock(&buffer->mutex);
+}
+
+void wait_for_threshold(advanced_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count < 50) {
+        pthread_cond_wait(&buffer->threshold_reached, &buffer->mutex);
+    }
+
+    printf("Threshold reached: %d items\n", buffer->count);
+    pthread_mutex_unlock(&buffer->mutex);
+}
+```
+
+## 读写锁
+
+### 读写锁的变体
+
+**优先级读写锁**
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    int readers;
+    int writers;
+    int waiting_readers;
+    int waiting_writers;
+    int write_priority;  // 写者优先标志
+} priority_rwlock_t;
+
+void priority_rwlock_init(priority_rwlock_t *lock, int write_priority) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->read_cond, NULL);
+    pthread_cond_init(&lock->write_cond, NULL);
+    lock->readers = 0;
+    lock->writers = 0;
+    lock->waiting_readers = 0;
+    lock->waiting_writers = 0;
+    lock->write_priority = write_priority;
+}
+
+void priority_rwlock_read_lock(priority_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->waiting_readers++;
+
+    while (lock->writers > 0 ||
+           (lock->write_priority && lock->waiting_writers > 0)) {
+        pthread_cond_wait(&lock->read_cond, &lock->mutex);
+    }
+
+    lock->waiting_readers--;
+    lock->readers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void priority_rwlock_write_lock(priority_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->waiting_writers++;
+
+    while (lock->readers > 0 || lock->writers > 0) {
+        pthread_cond_wait(&lock->write_cond, &lock->mutex);
+    }
+
+    lock->waiting_writers--;
+    lock->writers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void priority_rwlock_read_unlock(priority_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->readers--;
+
+    if (lock->readers == 0) {
+        if (lock->write_priority && lock->waiting_writers > 0) {
+            pthread_cond_signal(&lock->write_cond);
+        } else {
+            pthread_cond_broadcast(&lock->read_cond);
+        }
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void priority_rwlock_write_unlock(priority_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->writers--;
+
+    if (lock->write_priority && lock->waiting_writers > 0) {
+        pthread_cond_signal(&lock->write_cond);
+    } else {
+        pthread_cond_broadcast(&lock->read_cond);
+    }
+
+    pthread_mutex_unlock(&lock->mutex);
+}
+```
+
+**升级读写锁**
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t upgrade_cond;
+    int readers;
+    int writer;
+    int upgrading_reader;
+    int waiting_upgraders;
+} upgrade_rwlock_t;
+
+void upgrade_rwlock_init(upgrade_rwlock_t *lock) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->upgrade_cond, NULL);
+    lock->readers = 0;
+    lock->writer = 0;
+    lock->upgrading_reader = 0;
+    lock->waiting_upgraders = 0;
+}
+
+void upgrade_rwlock_read_lock(upgrade_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    while (lock->writer || lock->upgrading_reader || lock->waiting_upgraders > 0) {
+        pthread_cond_wait(&lock->upgrade_cond, &lock->mutex);
+    }
+
+    lock->readers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+void upgrade_rwlock_write_lock(upgrade_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    while (lock->readers || lock->writer || lock->upgrading_reader) {
+        pthread_cond_wait(&lock->upgrade_cond, &lock->mutex);
+    }
+
+    lock->writer = 1;
+    pthread_mutex_unlock(&lock->mutex);
+}
+
+int upgrade_rwlock_upgrade(upgrade_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    // 检查是否已经是写锁
+    if (lock->writer) {
+        pthread_mutex_unlock(&lock->mutex);
+        return 0;  // 已经是写锁
+    }
+
+    // 检查是否是读锁持有者
+    if (lock->readers == 0) {
+        pthread_mutex_unlock(&lock->mutex);
+        return -1;  // 没有持有读锁
+    }
+
+    lock->waiting_upgraders++;
+    lock->readers--;
+
+    // 等待其他读者离开
+    while (lock->readers > 0 || lock->writer) {
+        pthread_cond_wait(&lock->upgrade_cond, &lock->mutex);
+    }
+
+    lock->waiting_upgraders--;
+    lock->upgrading_reader = 1;
+    pthread_mutex_unlock(&lock->mutex);
+
+    return 0;
+}
+
+void upgrade_rwlock_downgrade(upgrade_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+    lock->upgrading_reader = 0;
+    lock->readers++;
+    pthread_cond_broadcast(&lock->upgrade_cond);
+    pthread_mutex_unlock(&lock->mutex);
+}
+```
+
+### 读写锁的性能优化
+
+**自适应读写锁**
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    int readers;
+    int writers;
+    int waiting_readers;
+    int waiting_writers;
+    int contention_count;  // 争用计数
+    int use_fair_mode;     // 是否使用公平模式
+} adaptive_rwlock_t;
+
+void adaptive_rwlock_init(adaptive_rwlock_t *lock) {
+    pthread_mutex_init(&lock->mutex, NULL);
+    pthread_cond_init(&lock->read_cond, NULL);
+    pthread_cond_init(&lock->write_cond, NULL);
+    lock->readers = 0;
+    lock->writers = 0;
+    lock->waiting_readers = 0;
+    lock->waiting_writers = 0;
+    lock->contention_count = 0;
+    lock->use_fair_mode = 0;
+}
+
+void adaptive_rwlock_read_lock(adaptive_rwlock_t *lock) {
+    pthread_mutex_lock(&lock->mutex);
+
+    // 检测争用情况
+    if (lock->waiting_writers > 0) {
+        lock->contention_count++;
+
+        // 如果争用频繁，切换到公平模式
+        if (lock->contention_count > 100) {
+            lock->use_fair_mode = 1;
+        }
+    }
+
+    if (lock->use_fair_mode) {
+        // 公平模式：等待写者优先
+        lock->waiting_readers++;
+        while (lock->writers > 0 || lock->waiting_writers > 0) {
+            pthread_cond_wait(&lock->read_cond, &lock->mutex);
+        }
+        lock->waiting_readers--;
+    } else {
+        // 性能模式：读写平等
+        while (lock->writers > 0) {
+            pthread_cond_wait(&lock->read_cond, &lock->mutex);
+        }
+    }
+
+    lock->readers++;
+    pthread_mutex_unlock(&lock->mutex);
+}
+```
+
+## 屏障同步
+
+### 屏障同步概述
+
+屏障同步是一种同步机制，要求所有线程到达某个点后才能继续执行。
+
+**屏障的类型**
+- **计数屏障**：等待指定数量的线程到达
+- **可重用屏障**：可以重复使用的屏障
+- **相位屏障**：支持多个同步阶段
+
+### 基本屏障实现
+
+```c
+#include <pthread.h>
+
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int required_threads;
+    int waiting_threads;
+    int phase;
+} barrier_t;
+
+void barrier_init(barrier_t *barrier, int required_threads) {
+    pthread_mutex_init(&barrier->mutex, NULL);
+    pthread_cond_init(&barrier->cond, NULL);
+    barrier->required_threads = required_threads;
+    barrier->waiting_threads = 0;
+    barrier->phase = 0;
+}
+
+void barrier_wait(barrier_t *barrier) {
+    pthread_mutex_lock(&barrier->mutex);
+
+    barrier->waiting_threads++;
+
+    if (barrier->waiting_threads >= barrier->required_threads) {
+        // 所有线程都已到达，唤醒所有线程
+        barrier->phase++;
+        barrier->waiting_threads = 0;
+        pthread_cond_broadcast(&barrier->cond);
+    } else {
+        // 等待其他线程
+        int current_phase = barrier->phase;
+        while (current_phase == barrier->phase) {
+            pthread_cond_wait(&barrier->cond, &barrier->mutex);
+        }
+    }
+
+    pthread_mutex_unlock(&barrier->mutex);
+}
+```
+
+### 可重用屏障
+
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int required_threads;
+    int waiting_threads;
+    int cycle;
+} reusable_barrier_t;
+
+void reusable_barrier_init(reusable_barrier_t *barrier, int required_threads) {
+    pthread_mutex_init(&barrier->mutex, NULL);
+    pthread_cond_init(&barrier->cond, NULL);
+    barrier->required_threads = required_threads;
+    barrier->waiting_threads = 0;
+    barrier->cycle = 0;
+}
+
+void reusable_barrier_wait(reusable_barrier_t *barrier) {
+    pthread_mutex_lock(&barrier->mutex);
+
+    int my_cycle = barrier->cycle;
+    barrier->waiting_threads++;
+
+    if (barrier->waiting_threads >= barrier->required_threads) {
+        // 所有线程到达，进入下一周期
+        barrier->cycle++;
+        barrier->waiting_threads = 0;
+        pthread_cond_broadcast(&barrier->cond);
+    } else {
+        // 等待当前周期结束
+        while (my_cycle == barrier->cycle) {
+            pthread_cond_wait(&barrier->cond, &barrier->mutex);
+        }
+    }
+
+    pthread_mutex_unlock(&barrier->mutex);
+}
+```
+
+### 相位屏障
+
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int required_threads;
+    int waiting_threads;
+    int current_phase;
+    int total_phases;
+} phase_barrier_t;
+
+void phase_barrier_init(phase_barrier_t *barrier, int required_threads, int total_phases) {
+    pthread_mutex_init(&barrier->mutex, NULL);
+    pthread_cond_init(&barrier->cond, NULL);
+    barrier->required_threads = required_threads;
+    barrier->waiting_threads = 0;
+    barrier->current_phase = 0;
+    barrier->total_phases = total_phases;
+}
+
+int phase_barrier_wait(phase_barrier_t *barrier) {
+    pthread_mutex_lock(&barrier->mutex);
+
+    int phase = barrier->current_phase;
+    barrier->waiting_threads++;
+
+    if (barrier->waiting_threads >= barrier->required_threads) {
+        // 所有线程到达，进入下一阶段
+        barrier->current_phase++;
+        barrier->waiting_threads = 0;
+        pthread_cond_broadcast(&barrier->cond);
+    } else {
+        // 等待当前阶段结束
+        while (phase == barrier->current_phase) {
+            pthread_cond_wait(&barrier->cond, &barrier->mutex);
+        }
+    }
+
+    pthread_mutex_unlock(&barrier->mutex);
+
+    return phase;  // 返回完成的阶段
+}
+```
+
+### 屏障同步的应用
+
+**并行矩阵乘法**
+```c
+#include <pthread.h>
+#include <stdlib.h>
+
+#define MATRIX_SIZE 1000
+#define NUM_THREADS 4
+
+typedef struct {
+    double *A, *B, *C;
+    int start_row, end_row;
+    int size;
+    phase_barrier_t *barrier;
+    int phase;
+} matrix_data_t;
+
+void* matrix_multiply_thread(void *arg) {
+    matrix_data_t *data = (matrix_data_t *)arg;
+    int phase;
+
+    // 第一阶段：准备数据
+    for (int i = data->start_row; i < data->end_row; i++) {
+        for (int j = 0; j < data->size; j++) {
+            data->C[i * data->size + j] = 0.0;
+        }
+    }
+
+    // 等待所有线程完成数据准备
+    phase = phase_barrier_wait(data->barrier);
+    data->phase = phase;
+
+    // 第二阶段：计算矩阵乘法
+    for (int i = data->start_row; i < data->end_row; i++) {
+        for (int j = 0; j < data->size; j++) {
+            for (int k = 0; k < data->size; k++) {
+                data->C[i * data->size + j] +=
+                    data->A[i * data->size + k] * data->B[k * data->size + j];
+            }
+        }
+    }
+
+    // 等待所有线程完成计算
+    phase = phase_barrier_wait(data->barrier);
+    data->phase = phase;
+
+    // 第三阶段：结果后处理
+    for (int i = data->start_row; i < data->end_row; i++) {
+        for (int j = 0; j < data->size; j++) {
+            data->C[i * data->size + j] *= 2.0;  // 示例后处理
+        }
+    }
+
+    return NULL;
+}
+
+int main() {
+    double *A = malloc(MATRIX_SIZE * MATRIX_SIZE * sizeof(double));
+    double *B = malloc(MATRIX_SIZE * MATRIX_SIZE * sizeof(double));
+    double *C = malloc(MATRIX_SIZE * MATRIX_SIZE * sizeof(double));
+
+    phase_barrier_t barrier;
+    phase_barrier_init(&barrier, NUM_THREADS, 3);
+
+    pthread_t threads[NUM_THREADS];
+    matrix_data_t thread_data[NUM_THREADS];
+
+    // 初始化矩阵数据
+    for (int i = 0; i < MATRIX_SIZE * MATRIX_SIZE; i++) {
+        A[i] = (double)rand() / RAND_MAX;
+        B[i] = (double)rand() / RAND_MAX;
+    }
+
+    // 创建线程
+    int rows_per_thread = MATRIX_SIZE / NUM_THREADS;
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_data[i].A = A;
+        thread_data[i].B = B;
+        thread_data[i].C = C;
+        thread_data[i].start_row = i * rows_per_thread;
+        thread_data[i].end_row = (i == NUM_THREADS - 1) ? MATRIX_SIZE : (i + 1) * rows_per_thread;
+        thread_data[i].size = MATRIX_SIZE;
+        thread_data[i].barrier = &barrier;
+
+        pthread_create(&threads[i], NULL, matrix_multiply_thread, &thread_data[i]);
+    }
+
+    // 等待所有线程完成
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    printf("Matrix multiplication completed\n");
+
+    free(A);
+    free(B);
+    free(C);
+
+    return 0;
+}
+```
+
+## 高级同步模式
+
+### 读写模式同步
+
+```c
+#include <stdatomic.h>
+
+typedef struct {
+    atomic_int state;  // 0: 可读, 1: 准备写, 2: 正在写
+    void *data;
+    size_t size;
+} read_write_pattern_t;
+
+void read_write_pattern_init(read_write_pattern_t *pattern, void *data, size_t size) {
+    atomic_init(&pattern->state, 0);
+    pattern->data = data;
+    pattern->size = size;
+}
+
+void read_data(read_write_pattern_t *pattern, void *buffer, size_t size) {
+    int expected = 0;
+
+    // 尝试获取读权限
+    while (!atomic_compare_exchange_weak(&pattern->state, &expected, 0)) {
+        if (expected == 1 || expected == 2) {
+            // 等待写操作完成
+            expected = 0;
+            continue;
+        }
+        expected = 0;
+    }
+
+    // 执行读操作
+    memcpy(buffer, pattern->data, size);
+}
+
+void write_data(read_write_pattern_t *pattern, void *data, size_t size) {
+    int expected = 0;
+
+    // 准备写操作
+    while (!atomic_compare_exchange_weak(&pattern->state, &expected, 1)) {
+        if (expected == 1 || expected == 2) {
+            // 等待其他写操作完成
+            expected = 0;
+            continue;
+        }
+        expected = 0;
+    }
+
+    // 确保所有读操作完成
+    // 在实际应用中可能需要更复杂的同步机制
+
+    // 执行写操作
+    atomic_store(&pattern->state, 2);
+    memcpy(pattern->data, data, size);
+    atomic_store(&pattern->state, 0);
+}
+```
+
+### 生产者-消费者多模式同步
+
+```c
+typedef struct {
+    int *buffer;
+    int size;
+    int head, tail;
+    int count;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+    pthread_cond_t low_watermark;
+    pthread_cond_t high_watermark;
+    int low_threshold;
+    int high_threshold;
+} multi_pattern_buffer_t;
+
+void multi_pattern_buffer_init(multi_pattern_buffer_t *buffer, int size,
+                              int low_threshold, int high_threshold) {
+    buffer->buffer = malloc(size * sizeof(int));
+    buffer->size = size;
+    buffer->head = 0;
+    buffer->tail = 0;
+    buffer->count = 0;
+    buffer->low_threshold = low_threshold;
+    buffer->high_threshold = high_threshold;
+
+    pthread_mutex_init(&buffer->mutex, NULL);
+    pthread_cond_init(&buffer->not_empty, NULL);
+    pthread_cond_init(&buffer->not_full, NULL);
+    pthread_cond_init(&buffer->low_watermark, NULL);
+    pthread_cond_init(&buffer->high_watermark, NULL);
+}
+
+void multi_pattern_produce(multi_pattern_buffer_t *buffer, int item) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count >= buffer->size) {
+        pthread_cond_wait(&buffer->not_full, &buffer->mutex);
+    }
+
+    int was_below_high = (buffer->count < buffer->high_threshold);
+
+    buffer->buffer[buffer->tail] = item;
+    buffer->tail = (buffer->tail + 1) % buffer->size;
+    buffer->count++;
+
+    // 检查是否达到高水位
+    if (was_below_high && buffer->count >= buffer->high_threshold) {
+        pthread_cond_broadcast(&buffer->high_watermark);
+    }
+
+    pthread_cond_signal(&buffer->not_empty);
+    pthread_mutex_unlock(&buffer->mutex);
+}
+
+int multi_pattern_consume(multi_pattern_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count <= 0) {
+        pthread_cond_wait(&buffer->not_empty, &buffer->mutex);
+    }
+
+    int was_above_low = (buffer->count > buffer->low_threshold);
+
+    int item = buffer->buffer[buffer->head];
+    buffer->head = (buffer->head + 1) % buffer->size;
+    buffer->count--;
+
+    // 检查是否降到低水位
+    if (was_above_low && buffer->count <= buffer->low_threshold) {
+        pthread_cond_broadcast(&buffer->low_watermark);
+    }
+
+    pthread_cond_signal(&buffer->not_full);
+    pthread_mutex_unlock(&buffer->mutex);
+
+    return item;
+}
+
+void wait_for_high_watermark(multi_pattern_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count < buffer->high_threshold) {
+        pthread_cond_wait(&buffer->high_watermark, &buffer->mutex);
+    }
+
+    pthread_mutex_unlock(&buffer->mutex);
+}
+
+void wait_for_low_watermark(multi_pattern_buffer_t *buffer) {
+    pthread_mutex_lock(&buffer->mutex);
+
+    while (buffer->count > buffer->low_threshold) {
+        pthread_cond_wait(&buffer->low_watermark, &buffer->mutex);
+    }
+
+    pthread_mutex_unlock(&buffer->mutex);
+}
+```
+
+## 实验项目：高级同步机制实现
+
+### 实验目标
+
+实现一个包含条件变量、读写锁和屏障同步的高级同步机制库，并通过实际应用验证其正确性和性能。
+
+### 实验代码框架
+
+```c
+// advanced_sync.h
+#ifndef ADVANCED_SYNC_H
+#define ADVANCED_SYNC_H
+
+#include <pthread.h>
+
+// 条件变量（带超时和广播支持）
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int waiters;
+    int broadcast;
+} advanced_cond_t;
+
+// 读写锁（支持升级和优先级）
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t read_cond;
+    pthread_cond_t write_cond;
+    int readers;
+    int writers;
+    int waiting_readers;
+    int waiting_writers;
+    int upgrading_reader;
+    int write_priority;
+} advanced_rwlock_t;
+
+// 相位屏障
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int required_threads;
+    int waiting_threads;
+    int current_phase;
+    int total_phases;
+} phase_barrier_t;
+
+// 函数声明
+void advanced_cond_init(advanced_cond_t *cond);
+void advanced_cond_destroy(advanced_cond_t *cond);
+void advanced_cond_wait(advanced_cond_t *cond, pthread_mutex_t *mutex);
+int advanced_cond_timedwait(advanced_cond_t *cond, pthread_mutex_t *mutex,
+                           unsigned int timeout_ms);
+void advanced_cond_signal(advanced_cond_t *cond);
+void advanced_cond_broadcast(advanced_cond_t *cond);
+
+void advanced_rwlock_init(advanced_rwlock_t *lock, int write_priority);
+void advanced_rwlock_destroy(advanced_rwlock_t *lock);
+void advanced_rwlock_read_lock(advanced_rwlock_t *lock);
+void advanced_rwlock_read_unlock(advanced_rwlock_t *lock);
+void advanced_rwlock_write_lock(advanced_rwlock_t *lock);
+void advanced_rwlock_write_unlock(advanced_rwlock_t *lock);
+int advanced_rwlock_upgrade(advanced_rwlock_t *lock);
+void advanced_rwlock_downgrade(advanced_rwlock_t *lock);
+
+void phase_barrier_init(phase_barrier_t *barrier, int required_threads, int total_phases);
+void phase_barrier_destroy(phase_barrier_t *barrier);
+int phase_barrier_wait(phase_barrier_t *barrier);
+
+#endif // ADVANCED_SYNC_H
+```
+
+### 测试应用：并行数据处理
+
+```c
+// parallel_processing.c
+#include "advanced_sync.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+#define NUM_THREADS 8
+#define DATA_SIZE 1000000
+#define NUM_PHASES 3
+
+typedef struct {
+    int *input_data;
+    int *output_data;
+    int start_idx;
+    int end_idx;
+    phase_barrier_t *barrier;
+    advanced_rwlock_t *data_lock;
+    int thread_id;
+    int phase_results[NUM_PHASES];
+} processing_thread_data_t;
+
+void data_preprocessing(processing_thread_data_t *data) {
+    printf("Thread %d: Phase 1 - Data preprocessing\n", data->thread_id);
+
+    for (int i = data->start_idx; i < data->end_idx; i++) {
+        // 数据预处理
+        data->input_data[i] = data->input_data[i] * 2;
+    }
+
+    data->phase_results[0] = data->end_idx - data->start_idx;
+}
+
+void data_analysis(processing_thread_data_t *data) {
+    printf("Thread %d: Phase 2 - Data analysis\n", data->thread_id);
+
+    advanced_rwlock_read_lock(data->data_lock);
+
+    int sum = 0;
+    for (int i = data->start_idx; i < data->end_idx; i++) {
+        sum += data->input_data[i];
+    }
+
+    advanced_rwlock_read_unlock(data->data_lock);
+
+    data->phase_results[1] = sum;
+}
+
+void data_aggregation(processing_thread_data_t *data) {
+    printf("Thread %d: Phase 3 - Data aggregation\n", data->thread_id);
+
+    // 模拟需要写入共享数据
+    advanced_rwlock_write_lock(data->data_lock);
+
+    for (int i = data->start_idx; i < data->end_idx; i++) {
+        data->output_data[i] = data->input_data[i] / 2;
+    }
+
+    advanced_rwlock_write_unlock(data->data_lock);
+
+    data->phase_results[2] = data->end_idx - data->start_idx;
+}
+
+void* processing_thread(void *arg) {
+    processing_thread_data_t *data = (processing_thread_data_t *)arg;
+    int phase;
+
+    // 阶段1：数据预处理
+    data_preprocessing(data);
+    phase = phase_barrier_wait(data->barrier);
+    printf("Thread %d: Completed phase %d\n", data->thread_id, phase);
+
+    // 阶段2：数据分析
+    data_analysis(data);
+    phase = phase_barrier_wait(data->barrier);
+    printf("Thread %d: Completed phase %d\n", data->thread_id, phase);
+
+    // 阶段3：数据聚合
+    data_aggregation(data);
+    phase = phase_barrier_wait(data->barrier);
+    printf("Thread %d: Completed phase %d\n", data->thread_id, phase);
+
+    return NULL;
+}
+
+int main() {
+    pthread_t threads[NUM_THREADS];
+    processing_thread_data_t thread_data[NUM_THREADS];
+
+    // 初始化数据
+    int *input_data = malloc(DATA_SIZE * sizeof(int));
+    int *output_data = malloc(DATA_SIZE * sizeof(int));
+
+    for (int i = 0; i < DATA_SIZE; i++) {
+        input_data[i] = i % 100;
+    }
+
+    // 初始化同步机制
+    phase_barrier_t barrier;
+    advanced_rwlock_t data_lock;
+
+    phase_barrier_init(&barrier, NUM_THREADS, NUM_PHASES);
+    advanced_rwlock_init(&data_lock, 1);  // 写者优先
+
+    // 创建线程
+    int chunk_size = DATA_SIZE / NUM_THREADS;
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_data[i].input_data = input_data;
+        thread_data[i].output_data = output_data;
+        thread_data[i].start_idx = i * chunk_size;
+        thread_data[i].end_idx = (i == NUM_THREADS - 1) ? DATA_SIZE : (i + 1) * chunk_size;
+        thread_data[i].barrier = &barrier;
+        thread_data[i].data_lock = &data_lock;
+        thread_data[i].thread_id = i;
+
+        pthread_create(&threads[i], NULL, processing_thread, &thread_data[i]);
+    }
+
+    // 等待所有线程完成
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    // 输出结果
+    printf("\nProcessing results:\n");
+    for (int i = 0; i < NUM_THREADS; i++) {
+        printf("Thread %d: Phase1=%d items, Phase2=%d sum, Phase3=%d items\n",
+               i, thread_data[i].phase_results[0],
+               thread_data[i].phase_results[1],
+               thread_data[i].phase_results[2]);
+    }
+
+    // 清理资源
+    phase_barrier_destroy(&barrier);
+    advanced_rwlock_destroy(&data_lock);
+    free(input_data);
+    free(output_data);
+
+    return 0;
+}
+```
+
+### 实验扩展
+
+1. **性能监控**：添加同步机制的性能监控和统计功能
+2. **死锁检测**：实现死锁检测和预防机制
+3. **公平性保证**：确保所有线程公平地获得同步资源
+4. **自适应算法**：根据系统负载自动调整同步策略
+
+## 课后练习
+
+1. **思考题**：分析条件变量和信号量的区别，讨论在什么场景下选择哪种同步机制。
+
+2. **编程题**：实现一个支持超时和取消的屏障同步机制。
+
+3. **设计题**：设计一个适合AI模型训练的多阶段同步机制，考虑GPU和CPU之间的数据同步。
+
+## 下一讲预告
+
+第12讲：并发Bug分析 - 常见并发错误类型、死锁检测与避免、数据竞争分析。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第11讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect11.md](https://jyywiki.cn/OS/2025/lect11.md)*

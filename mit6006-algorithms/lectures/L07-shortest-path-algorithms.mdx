@@ -1,0 +1,1726 @@
+---
+title: "L07 - 最短路径算法"
+description: "深入理解Dijkstra、Bellman-Ford、Floyd-Warshall等最短路径算法"
+---
+
+import { useState, useEffect } from 'react';
+import { CodeBlock } from '@/src/components/algorithm';
+import { AlgorithmVisualizer } from '@/src/components/algorithm';
+import { ArrayVisualizer } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L07 - 最短路径算法
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🎯 **掌握核心算法**：精通Dijkstra、Bellman-Ford、Floyd-Warshall算法
+- ⚡ **分析适用场景**：根据图的特点选择最优算法
+- 🛠️ **实现优化策略**：应用优先队列和双向搜索优化
+- 🌐 **解决实际问题**：处理路由、导航等最短路径应用
+
+## 🎯 最短路径问题概述
+
+### 问题的分类与定义
+
+**最短路径问题**：在加权图中找到两个顶点之间总权重最小的路径。
+
+| 问题类型 | 适用条件 | 时间复杂度 | 主要应用 |
+|----------|----------|------------|----------|
+| **单源最短路径** | 非负权重 | O((V+E)log V) | GPS导航 |
+| **单源最短路径** | 允许负权重 | O(VE) | 金融分析 |
+| **所有顶点对最短路径** | 无限制 | O(V³) | 网络路由 |
+| **单目标最短路径** | 非负权重 | O((V+E)log V) | 物流配送 |
+
+### 重要概念
+
+```python
+def shortest_path_concepts():
+    """
+    最短路径算法的重要概念
+    """
+    concepts = {
+        "松弛操作": "更新到顶点的最短距离估计",
+        "优先队列": "高效选择下一个顶点的数据结构",
+        "负权重边": "权重为负的边，影响算法正确性",
+        "负权重环": "总权重为负的环，使最短路径无定义",
+        "最短路径树": "包含源点到所有顶点最短路径的树",
+        "前驱节点": "在最短路径中当前节点的前一个节点"
+    }
+
+    print("重要概念：")
+    for concept, definition in concepts.items():
+        print(f"• {concept}: {definition}")
+
+# 松弛操作的数学定义
+def relax(u, v, weight, dist, prev):
+    """
+    松弛操作：尝试通过u改进到v的最短距离
+    """
+    if dist[u] + weight < dist[v]:
+        dist[v] = dist[u] + weight
+        prev[v] = u
+        return True  # 发生了松弛
+    return False
+```
+
+## 🔧 Dijkstra算法
+
+### 核心思想与实现
+
+Dijkstra算法用于解决**非负权重图**的单源最短路径问题。
+
+**算法步骤**：
+1. 初始化距离数组，源点距离为0，其他为∞
+2. 使用优先队列选择距离最小的未访问顶点
+3. 对该顶点的所有邻居进行松弛操作
+4. 重复直到所有顶点都被访问
+
+```python
+import heapq
+from typing import List, Dict, Tuple, Set
+import math
+
+class DijkstraAlgorithm:
+    """
+    Dijkstra最短路径算法
+    时间复杂度: O((V + E) log V) 使用优先队列
+    空间复杂度: O(V)
+    局限性: 不能处理负权重边
+    """
+    def __init__(self, graph):
+        self.graph = graph
+        self.num_vertices = graph.num_vertices
+
+    def dijkstra(self, source):
+        """
+        标准Dijkstra算法实现
+        返回: (distances, predecessors)
+        """
+        # 初始化
+        distances = [math.inf] * self.num_vertices
+        predecessors = [-1] * self.num_vertices
+        distances[source] = 0
+
+        # 优先队列: (distance, vertex)
+        priority_queue = [(0, source)]
+        visited = set()
+
+        while priority_queue:
+            current_distance, current_vertex = heapq.heappop(priority_queue)
+
+            # 如果已经找到更短的路径，跳过
+            if current_vertex in visited:
+                continue
+
+            visited.add(current_vertex)
+
+            # 对所有邻居进行松弛操作
+            for neighbor, weight in self.graph.get_neighbors(current_vertex):
+                if neighbor not in visited:
+                    new_distance = current_distance + weight
+
+                    if new_distance < distances[neighbor]:
+                        distances[neighbor] = new_distance
+                        predecessors[neighbor] = current_vertex
+                        heapq.heappush(priority_queue, (new_distance, neighbor))
+
+        return distances, predecessors
+
+    def get_shortest_path(self, source, target):
+        """获取从source到target的最短路径"""
+        distances, predecessors = self.dijkstra(source)
+
+        if distances[target] == math.inf:
+            return []  # 没有路径
+
+        # 重建路径
+        path = []
+        current = target
+        while current != -1:
+            path.append(current)
+            current = predecessors[current]
+
+        return path[::-1]
+
+    def dijkstra_with_path_reconstruction(self, source):
+        """带路径重建的Dijkstra算法"""
+        distances = [math.inf] * self.num_vertices
+        predecessors = [-1] * self.num_vertices
+        distances[source] = 0
+
+        priority_queue = [(0, source, [-1])]  # (distance, vertex, path)
+
+        while priority_queue:
+            current_distance, current_vertex, path = heapq.heappop(priority_queue)
+
+            if current_distance > distances[current_vertex]:
+                continue
+
+            # 更新前驱
+            if len(path) > 1:
+                predecessors[current_vertex] = path[-2]
+
+            for neighbor, weight in self.graph.get_neighbors(current_vertex):
+                new_distance = current_distance + weight
+
+                if new_distance < distances[neighbor]:
+                    distances[neighbor] = new_distance
+                    new_path = path + [current_vertex]
+                    heapq.heappush(priority_queue, (new_distance, neighbor, new_path))
+
+        return distances, predecessors
+```
+
+### 优化版本的Dijkstra
+
+```python
+class OptimizedDijkstra:
+    """
+    优化的Dijkstra算法实现
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def dijkstra_with_fibonacci_heap(self, source):
+        """
+        使用斐波那契堆优化
+        理论时间复杂度: O(V log V + E)
+        """
+        # 斐波那契堆实现较为复杂，这里用概念性代码
+        distances = [math.inf] * self.graph.num_vertices
+        predecessors = [-1] * self.graph.num_vertices
+        distances[source] = 0
+
+        # 模拟斐波那契堆操作
+        heap = FibonacciHeap()
+        nodes = [heap.insert(math.inf, i) for i in range(self.graph.num_vertices)]
+        heap.decrease_key(nodes[source], 0)
+
+        while not heap.is_empty():
+            current_distance, current_vertex = heap.extract_min()
+
+            for neighbor, weight in self.graph.get_neighbors(current_vertex):
+                new_distance = current_distance + weight
+
+                if new_distance < distances[neighbor]:
+                    distances[neighbor] = new_distance
+                    predecessors[neighbor] = current_vertex
+                    heap.decrease_key(nodes[neighbor], new_distance)
+
+        return distances, predecessors
+
+    def bidirectional_dijkstra(self, source, target):
+        """
+        双向Dijkstra算法
+        时间复杂度: O(b^(d/2))，其中b是分支因子，d是距离
+        """
+        if source == target:
+            return [source], 0
+
+        # 正向搜索
+        forward_distances = [math.inf] * self.graph.num_vertices
+        forward_predecessors = [-1] * self.graph.num_vertices
+        forward_distances[source] = 0
+        forward_queue = [(0, source)]
+
+        # 反向搜索
+        backward_distances = [math.inf] * self.graph.num_vertices
+        backward_predecessors = [-1] * self.graph.num_vertices
+        backward_distances[target] = 0
+        backward_queue = [(0, target)]
+
+        best_distance = math.inf
+        meeting_vertex = -1
+
+        while forward_queue and backward_queue:
+            # 正向搜索一步
+            if len(forward_queue) <= len(backward_queue):
+                current_dist, current_vertex = heapq.heappop(forward_queue)
+
+                # 如果已经找到更好的路径，跳过
+                if current_dist > forward_distances[current_vertex]:
+                    continue
+
+                # 检查是否在反向搜索中访问过
+                if backward_distances[current_vertex] != math.inf:
+                    total_distance = forward_distances[current_vertex] + backward_distances[current_vertex]
+                    if total_distance < best_distance:
+                        best_distance = total_distance
+                        meeting_vertex = current_vertex
+
+                # 松弛正向边
+                for neighbor, weight in self.graph.get_neighbors(current_vertex):
+                    new_distance = current_dist + weight
+                    if new_distance < forward_distances[neighbor]:
+                        forward_distances[neighbor] = new_distance
+                        forward_predecessors[neighbor] = current_vertex
+                        heapq.heappush(forward_queue, (new_distance, neighbor))
+
+            # 反向搜索一步
+            else:
+                current_dist, current_vertex = heapq.heappop(backward_queue)
+
+                if current_dist > backward_distances[current_vertex]:
+                    continue
+
+                # 检查是否在正向搜索中访问过
+                if forward_distances[current_vertex] != math.inf:
+                    total_distance = forward_distances[current_vertex] + backward_distances[current_vertex]
+                    if total_distance < best_distance:
+                        best_distance = total_distance
+                        meeting_vertex = current_vertex
+
+                # 松弛反向边（需要转置图）
+                for neighbor, weight in self.graph.get_neighbors(current_vertex):
+                    new_distance = current_dist + weight
+                    if new_distance < backward_distances[neighbor]:
+                        backward_distances[neighbor] = new_distance
+                        backward_predecessors[neighbor] = current_vertex
+                        heapq.heappush(backward_queue, (new_distance, neighbor))
+
+        # 重建最短路径
+        if meeting_vertex == -1:
+            return [], math.inf  # 没有路径
+
+        # 构建路径
+        forward_path = []
+        current = meeting_vertex
+        while current != -1:
+            forward_path.append(current)
+            current = forward_predecessors[current]
+
+        backward_path = []
+        current = meeting_vertex
+        while current != -1:
+            backward_path.append(current)
+            current = backward_predecessors[current]
+
+        full_path = forward_path[::-1] + backward_path[1:]
+
+        return full_path, best_distance
+
+class FibonacciHeap:
+    """斐波那契堆的简化实现"""
+    def __init__(self):
+        self.min_node = None
+        self.size = 0
+
+    def insert(self, key, value):
+        """插入节点"""
+        node = FibonacciNode(key, value)
+        if self.min_node is None:
+            self.min_node = node
+        else:
+            # 合并到根列表
+            node.right = self.min_node
+            node.left = self.min_node.left
+            self.min_node.left.right = node
+            self.min_node.left = node
+
+            if key < self.min_node.key:
+                self.min_node = node
+
+        self.size += 1
+        return node
+
+    def extract_min(self):
+        """提取最小节点"""
+        if self.min_node is None:
+            return None
+
+        min_node = self.min_node
+        if min_node.child:
+            # 将子节点合并到根列表
+            child = min_node.child
+            while child:
+                next_child = child.right
+                # 将child插入到根列表
+                child.left = self.min_node.left
+                child.right = self.min_node
+                self.min_node.left.right = child
+                self.min_node.left = child
+                child = next_child
+
+        # 从根列表中移除min_node
+        min_node.left.right = min_node.right
+        min_node.right.left = min_node.left
+
+        if min_node == min_node.right:
+            self.min_node = None
+        else:
+            self.min_node = min_node.right
+            self._consolidate()
+
+        self.size -= 1
+        return min_node.key, min_node.value
+
+    def decrease_key(self, node, new_key):
+        """减少节点的key"""
+        if new_key > node.key:
+            return False
+
+        node.key = new_key
+        parent = node.parent
+
+        if parent and new_key < parent.key:
+            self._cut(node, parent)
+            self._cascading_cut(parent)
+
+        if new_key < self.min_node.key:
+            self.min_node = node
+
+        return True
+
+    def _cut(self, node, parent):
+        """剪切节点"""
+        # 从父节点的子列表中移除
+        if node.right == node:
+            parent.child = None
+        else:
+            node.left.right = node.right
+            node.right.left = node.left
+            if parent.child == node:
+                parent.child = node.right
+
+        parent.degree -= 1
+        # 添加到根列表
+        node.left = self.min_node.left
+        node.right = self.min_node
+        self.min_node.left.right = node
+        self.min_node.left = node
+        node.parent = None
+        node.marked = False
+
+    def _cascading_cut(self, node):
+        """级联剪切"""
+        parent = node.parent
+        if parent:
+            if not node.marked:
+                node.marked = True
+            else:
+                self._cut(node, parent)
+                self._cascading_cut(parent)
+
+    def _consolidate(self):
+        """合并相同度的树"""
+        # 实现较为复杂，这里省略
+        pass
+
+    def is_empty(self):
+        return self.size == 0
+
+class FibonacciNode:
+    """斐波那契堆节点"""
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+        self.degree = 0
+        self.parent = None
+        self.child = None
+        self.left = self
+        self.right = self
+        self.marked = False
+```
+
+<ExerciseBlock
+  title="Dijkstra算法分析"
+  question:"Dijkstra算法为什么不能处理负权重边？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "因为负权重边会导致无限循环",
+      correct: false,
+      explanation: "问题不是无限循环，而是算法的正确性"
+    },
+    {
+      id: "b",
+      text: "因为一旦顶点被标记为已访问，就不再更新其距离",
+      correct: true,
+      explanation: "正确！Dijkstra的贪心策略假设当前找到的距离是最短的，但负权重可能提供更短路径"
+    },
+    {
+      id: "c",
+      text: "因为负权重边会使优先队列失效",
+      correct: false,
+      explanation: "优先队列仍然可以工作"
+    },
+    {
+      id: "d",
+      text: "因为负权重边会产生负无穷的距离",
+      correct: false,
+      explanation: "负权重不一定会产生负无穷"
+    }
+  ]}
+  hint="考虑Dijkstra算法的贪心选择策略"
+/>
+```
+
+## 🔧 Bellman-Ford算法
+
+### 核心思想与实现
+
+Bellman-Ford算法可以处理**负权重边**，并能检测负权重环。
+
+**算法步骤**：
+1. 初始化距离数组
+2. 对所有边进行V-1次松弛操作
+3. 第V次松弛检查负权重环
+
+```python
+class BellmanFordAlgorithm:
+    """
+    Bellman-Ford最短路径算法
+    时间复杂度: O(VE)
+    空间复杂度: O(V)
+    优点: 可以处理负权重边，检测负权重环
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def bellman_ford(self, source):
+        """
+        标准Bellman-Ford算法
+        返回: (distances, predecessors, has_negative_cycle)
+        """
+        num_vertices = self.graph.num_vertices
+        distances = [math.inf] * num_vertices
+        predecessors = [-1] * num_vertices
+        distances[source] = 0
+
+        # 获取所有边
+        edges = []
+        for vertex in range(num_vertices):
+            for neighbor, weight in self.graph.get_neighbors(vertex):
+                edges.append((vertex, neighbor, weight))
+
+        # 松弛操作重复V-1次
+        for i in range(num_vertices - 1):
+            updated = False
+            for u, v, weight in edges:
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    distances[v] = distances[u] + weight
+                    predecessors[v] = u
+                    updated = True
+
+            # 如果没有更新，可以提前终止
+            if not updated:
+                break
+
+        # 检查负权重环
+        has_negative_cycle = False
+        for u, v, weight in edges:
+            if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                has_negative_cycle = True
+                break
+
+        return distances, predecessors, has_negative_cycle
+
+    def bellman_ford_with_path_reconstruction(self, source, target):
+        """带路径重建的Bellman-Ford"""
+        distances, predecessors, has_negative_cycle = self.bellman_ford(source)
+
+        if has_negative_cycle:
+            return None, "图中存在负权重环"
+        if distances[target] == math.inf:
+            return None, "没有路径从源点到目标点"
+
+        # 重建路径
+        path = []
+        current = target
+        while current != -1:
+            path.append(current)
+            current = predecessors[current]
+
+        return path[::-1], distances[target]
+
+    def find_negative_cycle(self):
+        """找到负权重环"""
+        num_vertices = self.graph.num_vertices
+        distances = [math.inf] * num_vertices
+        predecessors = [-1] * num_vertices
+
+        # 从每个顶点开始
+        for start in range(num_vertices):
+            distances = [math.inf] * num_vertices
+            predecessors = [-1] * num_vertices
+            distances[start] = 0
+
+            edges = []
+            for vertex in range(num_vertices):
+                for neighbor, weight in self.graph.get_neighbors(vertex):
+                    edges.append((vertex, neighbor, weight))
+
+            # V-1次松弛
+            for i in range(num_vertices - 1):
+                for u, v, weight in edges:
+                    if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                        distances[v] = distances[u] + weight
+                        predecessors[v] = u
+
+            # 第V次松弛找负环
+            negative_cycle_edge = None
+            for u, v, weight in edges:
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    negative_cycle_edge = (u, v)
+                    break
+
+            if negative_cycle_edge:
+                # 找到负环中的顶点
+                u, v = negative_cycle_edge
+                cycle_vertices = set()
+                current = v
+
+                # 回溯找到环
+                while current not in cycle_vertices:
+                    cycle_vertices.add(current)
+                    current = predecessors[current]
+
+                # 构建环
+                cycle_start = current
+                cycle = [cycle_start]
+                current = predecessors[cycle_start]
+                while current != cycle_start:
+                    cycle.append(current)
+                    current = predecessors[current]
+                cycle.append(cycle_start)
+
+                return cycle[::-1]
+
+        return None
+
+    def bellman_ford_optimized(self, source):
+        """
+        优化的Bellman-Ford算法
+        使用队列只处理距离发生变化的顶点
+        """
+        num_vertices = self.graph.num_vertices
+        distances = [math.inf] * num_vertices
+        predecessors = [-1] * num_vertices
+        distances[source] = 0
+
+        from collections import deque
+        queue = deque([source])
+        in_queue = [False] * num_vertices
+        in_queue[source] = True
+        queue_count = [0] * num_vertices
+        queue_count[source] = 1
+
+        while queue:
+            u = queue.popleft()
+            in_queue[u] = False
+
+            for v, weight in self.graph.get_neighbors(u):
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    distances[v] = distances[u] + weight
+                    predecessors[v] = u
+
+                    if not in_queue[v]:
+                        queue.append(v)
+                        in_queue[v] = True
+                        queue_count[v] += 1
+
+                        # 如果某个顶点被入队超过V次，存在负环
+                        if queue_count[v] > num_vertices:
+                            return distances, predecessors, True
+
+        # 检查负环
+        for u in range(num_vertices):
+            for v, weight in self.graph.get_neighbors(u):
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    return distances, predecessors, True
+
+        return distances, predecessors, False
+```
+
+### SPFA算法 (Shortest Path Faster Algorithm)
+
+```python
+class SPFAAlgorithm:
+    """
+    SPFA算法 - Bellman-Ford的队列优化版本
+    平均时间复杂度: O(E)，最坏O(VE)
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def spfa(self, source):
+        """标准SPFA算法"""
+        num_vertices = self.graph.num_vertices
+        distances = [math.inf] * num_vertices
+        predecessors = [-1] * num_vertices
+        in_queue = [False] * num_vertices
+        queue_count = [0] * num_vertices
+
+        distances[source] = 0
+        queue = deque([source])
+        in_queue[source] = True
+        queue_count[source] = 1
+
+        while queue:
+            u = queue.popleft()
+            in_queue[u] = False
+
+            for v, weight in self.graph.get_neighbors(u):
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    distances[v] = distances[u] + weight
+                    predecessors[v] = u
+
+                    if not in_queue[v]:
+                        queue.append(v)
+                        in_queue[v] = True
+                        queue_count[v] += 1
+
+                        # 检测负环
+                        if queue_count[v] > num_vertices:
+                            return distances, predecessors, True
+
+        # 检查是否还存在可松弛的边
+        for u in range(num_vertices):
+            for v, weight in self.graph.get_neighbors(u):
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    return distances, predecessors, True
+
+        return distances, predecessors, False
+
+    def spfa_with_early_termination(self, source, target=None):
+        """带提前终止的SPFA"""
+        num_vertices = self.graph.num_vertices
+        distances = [math.inf] * num_vertices
+        predecessors = [-1] * num_vertices
+        in_queue = [False] * num_vertices
+
+        distances[source] = 0
+        queue = deque([source])
+        in_queue[source] = True
+
+        while queue:
+            u = queue.popleft()
+            in_queue[u] = False
+
+            # 如果已经找到目标且是最短的，可以提前终止
+            if target is not None and u == target:
+                break
+
+            for v, weight in self.graph.get_neighbors(u):
+                if distances[u] != math.inf and distances[u] + weight < distances[v]:
+                    distances[v] = distances[u] + weight
+                    predecessors[v] = u
+
+                    if not in_queue[v]:
+                        queue.append(v)
+                        in_queue[v] = True
+
+        return distances, predecessors
+```
+
+<ExerciseBlock
+  title="Bellman-Ford应用"
+  question:"在什么情况下应该选择Bellman-Ford而不是Dijkstra算法？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "当图很大时",
+      correct: false,
+      explanation: "Bellman-Ford的时间复杂度更高"
+    },
+    {
+      id: "b",
+      text: "当存在负权重边时",
+      correct: true,
+      explanation: "正确！Bellman-Ford可以处理负权重边"
+    },
+    {
+      id: "c",
+      text: "当需要最短路径时",
+      correct: false,
+      explanation: "两种算法都可以找最短路径"
+    },
+    {
+      id: "d",
+      text: "当图很稠密时",
+      correct: false,
+      explanation: "稠密图通常更适合Dijkstra"
+    }
+  ]}
+  hint="考虑两种算法的处理能力差异"
+/>
+```
+
+## 🔧 Floyd-Warshall算法
+
+### 核心思想与实现
+
+Floyd-Warshall算法解决**所有顶点对**的最短路径问题。
+
+**算法思想**：动态规划，考虑是否经过中间顶点k来优化i到j的路径。
+
+```python
+class FloydWarshallAlgorithm:
+    """
+    Floyd-Warshall所有顶点对最短路径算法
+    时间复杂度: O(V³)
+    空间复杂度: O(V²)
+    优点: 可以处理负权重（无负环），代码简洁
+    """
+    def __init__(self, graph):
+        self.graph = graph
+        self.num_vertices = graph.num_vertices
+
+    def floyd_warshall(self):
+        """
+        标准Floyd-Warshall算法
+        返回: (distance_matrix, predecessor_matrix)
+        """
+        # 初始化距离矩阵和前驱矩阵
+        dist = [[math.inf] * self.num_vertices for _ in range(self.num_vertices)]
+        prev = [[-1] * self.num_vertices for _ in range(self.num_vertices)]
+
+        # 对角线设为0
+        for i in range(self.num_vertices):
+            dist[i][i] = 0
+
+        # 填充初始距离
+        for u in range(self.num_vertices):
+            for v, weight in self.graph.get_neighbors(u):
+                dist[u][v] = weight
+                prev[u][v] = u
+
+        # 动态规划
+        for k in range(self.num_vertices):
+            for i in range(self.num_vertices):
+                for j in range(self.num_vertices):
+                    if dist[i][k] + dist[k][j] < dist[i][j]:
+                        dist[i][j] = dist[i][k] + dist[k][j]
+                        prev[i][j] = prev[k][j]
+
+        return dist, prev
+
+    def floyd_warshall_with_negative_cycle_detection(self):
+        """带负环检测的Floyd-Warshall"""
+        dist, prev = self.floyd_warshall()
+
+        # 检查负环：如果dist[i][i] < 0，则存在负环
+        negative_cycles = []
+        for i in range(self.num_vertices):
+            if dist[i][i] < 0:
+                negative_cycles.append(i)
+
+        return dist, prev, negative_cycles
+
+    def reconstruct_path(self, prev, source, target):
+        """重建从source到target的路径"""
+        if prev[source][target] == -1:
+            if source == target:
+                return [source]
+            else:
+                return []  # 没有路径
+
+        path = [target]
+        current = target
+        while current != source:
+            current = prev[source][current]
+            path.append(current)
+
+        return path[::-1]
+
+    def floyd_warshall_optimized(self):
+        """空间优化的Floyd-Warshall"""
+        # 使用单个矩阵，逐层更新
+        dist = [[math.inf] * self.num_vertices for _ in range(self.num_vertices)]
+
+        for i in range(self.num_vertices):
+            dist[i][i] = 0
+
+        for u in range(self.num_vertices):
+            for v, weight in self.graph.get_neighbors(u):
+                dist[u][v] = weight
+
+        # 注意：这种优化无法重建路径
+        for k in range(self.num_vertices):
+            for i in range(self.num_vertices):
+                for j in range(self.num_vertices):
+                    if dist[i][k] + dist[k][j] < dist[i][j]:
+                        dist[i][j] = dist[i][k] + dist[k][j]
+
+        return dist
+
+    def transitive_closure(self):
+        """
+        计算传递闭包
+        判断任意两个顶点是否可达
+        """
+        reach = [[False] * self.num_vertices for _ in range(self.num_vertices)]
+
+        # 初始化：每个顶点到自身可达
+        for i in range(self.num_vertices):
+            reach[i][i] = True
+
+        # 有边直接可达
+        for u in range(self.num_vertices):
+            for v, _ in self.graph.get_neighbors(u):
+                reach[u][v] = True
+
+        # Warshall算法
+        for k in range(self.num_vertices):
+            for i in range(self.num_vertices):
+                for j in range(self.num_vertices):
+                    reach[i][j] = reach[i][j] or (reach[i][k] and reach[k][j])
+
+        return reach
+```
+
+## 🎯 实际应用场景
+
+### 1. GPS导航系统
+
+```python
+class GPSNavigation:
+    """
+    GPS导航系统
+    使用Dijkstra算法计算最短路径
+    """
+    def __init__(self):
+        self.graph = AdjacencyList(directed=True)  # 有向图
+        self.locations = {}  # 地理位置信息
+        self.traffic_data = {}  # 实时交通数据
+
+    def add_location(self, location_id, name, coordinates):
+        """添加地点"""
+        self.locations[location_id] = {
+            "name": name,
+            "coordinates": coordinates
+        }
+
+    def add_road(self, from_id, to_id, distance, road_type="normal"):
+        """添加道路"""
+        # 根据道路类型和交通情况调整权重
+        base_weight = distance
+        traffic_factor = self.traffic_data.get((from_id, to_id), 1.0)
+
+        # 不同道路类型的时间权重
+        road_factors = {
+            "highway": 0.8,
+            "normal": 1.0,
+            "local": 1.2,
+            "congested": 2.0
+        }
+
+        weight = base_weight * traffic_factor * road_factors.get(road_type, 1.0)
+        self.graph.add_edge(from_id, to_id, weight)
+
+    def update_traffic(self, from_id, to_id, congestion_level):
+        """更新交通状况"""
+        # congestion_level: 0-1, 0为畅通，1为极度拥堵
+        self.traffic_data[(from_id, to_id)] = 1.0 + congestion_level * 2.0
+
+    def find_fastest_route(self, start_id, end_id):
+        """找到最快路线"""
+        dijkstra = DijkstraAlgorithm(self.graph)
+        distances, predecessors = dijkstra.dijkstra(start_id)
+
+        if distances[end_id] == math.inf:
+            return None, "无法到达目的地"
+
+        # 重建路径
+        path = []
+        current = end_id
+        while current != -1:
+            path.append(current)
+            current = predecessors[current]
+
+        path = path[::-1]
+
+        # 计算总距离和时间
+        total_distance = distances[end_id]
+        estimated_time = total_distance / 60  # 假设60km/h平均速度
+
+        return {
+            "path": path,
+            "total_distance": total_distance,
+            "estimated_time": estimated_time,
+            "route_description": self._describe_route(path)
+        }
+
+    def _describe_route(self, path):
+        """生成路线描述"""
+        if len(path) < 2:
+            return "起点即终点"
+
+        description = []
+        for i in range(len(path) - 1):
+            from_loc = self.locations[path[i]]["name"]
+            to_loc = self.locations[path[i + 1]]["name"]
+            description.append(f"从{from_loc}前往{to_loc}")
+
+        return " → ".join(description)
+
+    def find_alternative_routes(self, start_id, end_id, num_alternatives=3):
+        """找到多条备选路线"""
+        # 使用A*算法或删除最短路径中的边来找备选路线
+        main_route = self.find_fastest_route(start_id, end_id)
+        if main_route[0] is None:
+            return []
+
+        alternatives = []
+        # 实现K最短路径算法
+        # 这里简化实现
+        return alternatives
+
+    def find_nearest_service(self, current_location, service_type):
+        """找到最近的服务设施"""
+        service_locations = self._get_service_locations(service_type)
+        if not service_locations:
+            return None
+
+        # 计算到所有服务设施的距离
+        dijkstra = DijkstraAlgorithm(self.graph)
+        distances, _ = dijkstra.dijkstra(current_location)
+
+        # 找到最近的服务设施
+        nearest_service = min(service_locations,
+                             key=lambda loc: distances[loc])
+
+        return {
+            "service_id": nearest_service,
+            "distance": distances[nearest_service],
+            "route": self.find_fastest_route(current_location, nearest_service)
+        }
+
+    def _get_service_locations(self, service_type):
+        """获取特定类型的服务设施位置"""
+        # 实际应用中从数据库获取
+        services = {
+            "gas_station": [101, 205, 308],
+            "hospital": [102, 207, 310],
+            "restaurant": [103, 206, 309]
+        }
+        return services.get(service_type, [])
+```
+
+### 2. 网络路由协议
+
+```python
+class NetworkRouter:
+    """
+    网络路由器实现
+    使用Floyd-Warshall算法计算路由表
+    """
+    def __init__(self, router_id):
+        self.router_id = router_id
+        self.network_graph = AdjacencyList(directed=True)
+        self.routing_table = {}
+        self.neighbors = set()
+
+    def add_link(self, destination, cost):
+        """添加网络链接"""
+        self.network_graph.add_edge(self.router_id, destination, cost)
+        self.neighbors.add(destination)
+
+    def remove_link(self, destination):
+        """移除网络链接"""
+        self.network_graph.remove_edge(self.router_id, destination)
+        self.neighbors.discard(destination)
+
+    def update_routing_table(self, all_routers):
+        """更新路由表"""
+        floyd = FloydWarshallAlgorithm(self.network_graph)
+        distances, predecessors = floyd.floyd_warshall()
+
+        self.routing_table = {}
+        for destination in all_routers:
+            if destination != self.router_id:
+                if distances[self.router_id][destination] != math.inf:
+                    self.routing_table[destination] = {
+                        "next_hop": self._get_next_hop(predecessors, self.router_id, destination),
+                        "cost": distances[self.router_id][destination]
+                    }
+
+    def _get_next_hop(self, predecessors, source, target):
+        """获取下一跳路由器"""
+        if predecessors[source][target] == -1:
+            return None
+
+        # 重建路径，找到第一跳
+        path = [target]
+        current = target
+        while current != source:
+            current = predecessors[source][current]
+            path.append(current)
+
+        if len(path) >= 2:
+            return path[-2]  # 第一跳
+        return None
+
+    def route_packet(self, destination):
+        """路由数据包"""
+        if destination == self.router_id:
+            return "本地交付"
+
+        if destination in self.routing_table:
+            next_hop = self.routing_table[destination]["next_hop"]
+            if next_hop:
+                return f"转发到路由器 {next_hop}"
+            else:
+                return "无法路由"
+        else:
+            return "未知目的地"
+
+    def distance_vector_routing(self, all_routers):
+        """
+        距离向量路由算法（RIP协议）
+        """
+        # 初始化距离向量
+        distance_vector = {router: math.inf for router in all_routers}
+        distance_vector[self.router_id] = 0
+
+        # Bellman-Ford方程
+        for _ in range(len(all_routers) - 1):
+            updated = False
+            for neighbor in self.neighbors:
+                # 从邻居接收距离向量
+                neighbor_vector = self._receive_distance_vector(neighbor)
+
+                # 更新自己的距离向量
+                for router in all_routers:
+                    new_distance = self._get_link_cost(neighbor) + neighbor_vector[router]
+                    if new_distance < distance_vector[router]:
+                        distance_vector[router] = new_distance
+                        updated = True
+
+            if not updated:
+                break
+
+        return distance_vector
+
+    def _receive_distance_vector(self, neighbor):
+        """接收邻居的距离向量"""
+        # 实际网络协议中通过数据包接收
+        return self._simulate_neighbor_vector(neighbor)
+
+    def _get_link_cost(self, neighbor):
+        """获取到邻居的链路成本"""
+        for n, cost in self.network_graph.get_neighbors(self.router_id):
+            if n == neighbor:
+                return cost
+        return math.inf
+
+    def _simulate_neighbor_vector(self, neighbor):
+        """模拟邻居的距离向量"""
+        # 简化实现
+        vector = {}
+        for router in range(10):  # 假设有10个路由器
+            vector[router] = abs(router - neighbor)  # 简单的距离模拟
+        return vector
+```
+
+### 3. 金融风险分析
+
+```python
+class FinancialRiskAnalyzer:
+    """
+    金融风险分析系统
+    使用Bellman-Ford算法检测套利机会
+    """
+    def __init__(self):
+        self.currency_graph = AdjacencyList(directed=True)
+        self.currencies = {}
+
+    def add_currency(self, currency_id, name):
+        """添加货币"""
+        self.currencies[currency_id] = name
+
+    def add_exchange_rate(self, from_currency, to_currency, rate):
+        """
+        添加汇率
+        rate: 1单位from_currency可以兑换的to_currency数量
+        """
+        # 转换为对数权重，便于检测套利
+        weight = -math.log(rate)
+        self.currency_graph.add_edge(from_currency, to_currency, weight)
+
+    def detect_arbitrage(self):
+        """
+        检测套利机会
+        如果存在负权重环，则存在套利机会
+        """
+        bellman = BellmanFordAlgorithm(self.currency_graph)
+
+        # 从每个货币开始检测
+        for currency_id in self.currencies:
+            distances, predecessors, has_negative_cycle = bellman.bellman_ford(currency_id)
+
+            if has_negative_cycle:
+                # 找到具体的套利路径
+                arbitrage_cycle = bellman.find_negative_cycle()
+                if arbitrage_cycle:
+                    return {
+                        "has_arbitrage": True,
+                        "cycle": arbitrage_cycle,
+                        "cycle_names": [self.currencies[c] for c in arbitrage_cycle],
+                        "profit": self._calculate_arbitrage_profit(arbitrage_cycle)
+                    }
+
+        return {"has_arbitrage": False}
+
+    def _calculate_arbitrage_profit(self, cycle):
+        """计算套利利润"""
+        if len(cycle) < 2:
+            return 0
+
+        # 计算环的汇率乘积
+        product = 1.0
+        for i in range(len(cycle) - 1):
+            from_curr = cycle[i]
+            to_curr = cycle[i + 1]
+
+            # 获取汇率
+            for neighbor, weight in self.currency_graph.get_neighbors(from_curr):
+                if neighbor == to_curr:
+                    rate = math.exp(-weight)
+                    product *= rate
+                    break
+
+        # 计算利润百分比
+        profit_percentage = (product - 1.0) * 100
+        return profit_percentage
+
+    def find_best_conversion_path(self, from_currency, to_currency, amount=1):
+        """找到最佳兑换路径"""
+        dijkstra = DijkstraAlgorithm(self.currency_graph)
+        distances, predecessors = dijkstra.dijkstra(from_currency)
+
+        if distances[to_currency] == math.inf:
+            return None, "无法兑换"
+
+        # 重建路径
+        path = []
+        current = to_currency
+        while current != -1:
+            path.append(current)
+            current = predecessors[current]
+
+        path = path[::-1]
+
+        # 计算最终金额
+        final_amount = amount * math.exp(-distances[to_currency])
+
+        return {
+            "path": path,
+            "path_names": [self.currencies[c] for c in path],
+            "final_amount": final_amount,
+            "exchange_rate": final_amount / amount
+        }
+
+    def currency_network_analysis(self):
+        """分析货币网络"""
+        floyd = FloydWarshallAlgorithm(self.currency_graph)
+        distances, predecessors = floyd.floyd_warshall()
+
+        analysis = {
+            "most_connected_currency": self._find_most_connected(),
+            "highest_volatility_pairs": self._find_high_volatility_pairs(distances),
+            "conversion_efficiency": self._calculate_conversion_efficiency(distances)
+        }
+
+        return analysis
+
+    def _find_most_connected(self):
+        """找到连接最多的货币"""
+        connections = {}
+        for currency_id in self.currencies:
+            connections[currency_id] = len(self.currency_graph.get_neighbors(currency_id))
+
+        return max(connections.items(), key=lambda x: x[1])
+
+    def _find_high_volatility_pairs(self, distances):
+        """找到高波动性的货币对"""
+        volatile_pairs = []
+        for i in self.currencies:
+            for j in self.currencies:
+                if i != j and distances[i][j] != math.inf:
+                    volatility = abs(distances[i][j] + distances[j][i])
+                    if volatility > 0.1:  # 阈值
+                        volatile_pairs.append((i, j, volatility))
+
+        return sorted(volatile_pairs, key=lambda x: x[2], reverse=True)[:5]
+
+    def _calculate_conversion_efficiency(self, distances):
+        """计算兑换效率"""
+        total_pairs = 0
+        efficient_pairs = 0
+
+        for i in self.currencies:
+            for j in self.currencies:
+                if i != j and distances[i][j] != math.inf:
+                    total_pairs += 1
+                    # 如果兑换率合理（损失小于1%）
+                    if distances[i][j] < 0.01:
+                        efficient_pairs += 1
+
+        return efficient_pairs / total_pairs if total_pairs > 0 else 0
+```
+
+<ExerciseBlock
+  title="算法选择"
+  question:"在一个需要计算所有城市间最短路径的航空网络中，应该使用什么算法？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "Dijkstra算法",
+      correct: false,
+      explanation: "Dijkstra只能计算单源最短路径"
+    },
+    {
+      id: "b",
+      text: "Bellman-Ford算法",
+      correct: false,
+      explanation: "Bellman-Ford也是单源算法"
+    },
+    {
+      id: "c",
+      text: "Floyd-Warshall算法",
+      correct: true,
+      explanation: "正确！Floyd-Warshall专门解决所有顶点对最短路径问题"
+    },
+    {
+      id: "d",
+      text: "A*算法",
+      correct: false,
+      explanation: "A*适用于单目标搜索"
+    }
+  ]}
+  hint="考虑需要计算的路径数量"
+/>
+```
+
+## 📊 性能分析与优化
+
+### 算法性能对比
+
+```python
+def shortest_path_performance_comparison():
+    """
+    最短路径算法性能对比
+    """
+    comparison = {
+        "Dijkstra": {
+            "time_complexity": "O((V+E)log V)",
+            "space_complexity": "O(V)",
+            "best_for": "非负权重，稀疏图",
+            "limitations": "不能处理负权重"
+        },
+        "Bellman-Ford": {
+            "time_complexity": "O(VE)",
+            "space_complexity": "O(V)",
+            "best_for": "负权重，检测负环",
+            "limitations": "较慢，不适合大规模图"
+        },
+        "Floyd-Warshall": {
+            "time_complexity": "O(V³)",
+            "space_complexity": "O(V²)",
+            "best_for": "所有顶点对，稠密图",
+            "limitations": "空间消耗大"
+        },
+        "SPFA": {
+            "time_complexity": "平均O(E)，最坏O(VE)",
+            "space_complexity": "O(V)",
+            "best_for": "负权重，平均性能好",
+            "limitations": "最坏情况很慢"
+        }
+    }
+
+    return comparison
+
+# 性能测试数据示例
+performance_data = [
+    {"n": 100, "time": 0.01, "algorithm": "Dijkstra"},
+    {"n": 1000, "time": 0.15, "algorithm": "Dijkstra"},
+    {"n": 10000, "time": 2.3, "algorithm": "Dijkstra"},
+    {"n": 100000, "time": 35.6, "algorithm": "Dijkstra"}
+]
+```
+
+<ComplexityAnalyzer
+  title="Dijkstra算法性能分析"
+  algorithm="Dijkstra最短路径"
+  theoreticalComplexity="O((V+E)log V)"
+  data={performance_data}
+  color="rgb(239, 68, 68)"
+/>
+
+### 实际优化技巧
+
+```python
+class ShortestPathOptimizations:
+    """
+    最短路径算法优化技巧
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def dijkstra_with_goal_direction(self, source, target):
+        """带目标导向的Dijkstra算法"""
+        distances = {source: 0}
+        predecessors = {}
+        priority_queue = [(0, source)]
+
+        while priority_queue:
+            current_distance, current = heapq.heappop(priority_queue)
+
+            if current == target:
+                break
+
+            if current_distance > distances.get(current, math.inf):
+                continue
+
+            # 优先探索朝向目标的边
+            neighbors = self.graph.get_neighbors(current)
+            neighbors.sort(key=lambda x: self._heuristic_distance(x[0], target))
+
+            for neighbor, weight in neighbors:
+                new_distance = current_distance + weight
+
+                if new_distance < distances.get(neighbor, math.inf):
+                    distances[neighbor] = new_distance
+                    predecessors[neighbor] = current
+                    heapq.heappush(priority_queue, (new_distance, neighbor))
+
+        return distances, predecessors
+
+    def _heuristic_distance(self, node1, node2):
+        """启发式距离估计"""
+        # 实际应用中可以根据具体问题定义
+        return abs(node1 - node2)
+
+    def multi_source_dijkstra(self, sources):
+        """多源Dijkstra算法"""
+        import heapq
+
+        distances = {source: 0 for source in sources}
+        predecessors = {}
+        priority_queue = [(0, source) for source in sources]
+
+        while priority_queue:
+            current_distance, current = heapq.heappop(priority_queue)
+
+            if current_distance > distances.get(current, math.inf):
+                continue
+
+            for neighbor, weight in self.graph.get_neighbors(current):
+                new_distance = current_distance + weight
+
+                if new_distance < distances.get(neighbor, math.inf):
+                    distances[neighbor] = new_distance
+                    predecessors[neighbor] = current
+                    heapq.heappush(priority_queue, (new_distance, neighbor))
+
+        return distances, predecessors
+
+    def incremental_shortest_path(self, source, dynamic_edges):
+        """
+        增量最短路径算法
+        适用于边权重动态变化的情况
+        """
+        distances = {source: 0}
+        predecessors = {}
+        affected_vertices = set([source])
+
+        while affected_vertices:
+            current = affected_vertices.pop()
+            current_distance = distances[current]
+
+            for neighbor, weight in self.graph.get_neighbors(current):
+                # 检查是否是动态边
+                if (current, neighbor) in dynamic_edges:
+                    current_weight = dynamic_edges[(current, neighbor)]
+                else:
+                    current_weight = weight
+
+                new_distance = current_distance + current_weight
+
+                if new_distance < distances.get(neighbor, math.inf):
+                    distances[neighbor] = new_distance
+                    predecessors[neighbor] = current
+                    affected_vertices.add(neighbor)
+
+        return distances, predecessors
+
+    def parallel_dijkstra(self, source):
+        """
+        并行Dijkstra算法
+        适用于多核处理器
+        """
+        # 概念性实现
+        from concurrent.futures import ThreadPoolExecutor
+
+        distances = {source: 0}
+        predecessors = {}
+
+        def process_vertex(vertex):
+            """处理单个顶点的邻居"""
+            updates = []
+            for neighbor, weight in self.graph.get_neighbors(vertex):
+                new_distance = distances[vertex] + weight
+                if new_distance < distances.get(neighbor, math.inf):
+                    updates.append((neighbor, new_distance, vertex))
+            return updates
+
+        current_level = {source}
+        while current_level:
+            # 并行处理当前层的所有顶点
+            with ThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_vertex, vertex) for vertex in current_level]
+                all_updates = []
+
+                for future in futures:
+                    all_updates.extend(future.result())
+
+            # 应用更新
+            next_level = set()
+            for neighbor, new_distance, predecessor in all_updates:
+                if new_distance < distances.get(neighbor, math.inf):
+                    distances[neighbor] = new_distance
+                    predecessors[neighbor] = predecessor
+                    next_level.add(neighbor)
+
+            current_level = next_level
+
+        return distances, predecessors
+```
+
+<ExerciseBlock
+  title="性能优化"
+  question:"在包含10万个顶点和100万条边的社交网络中，要找到两个用户之间的最短路径，哪种优化策略最有效？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "使用标准Dijkstra算法",
+      correct: false,
+      explanation: "对大规模图效率太低"
+    },
+    {
+      id: "b",
+      text: "使用双向Dijkstra搜索",
+      correct: true,
+      explanation: "正确！双向搜索可以大幅减少搜索空间"
+    },
+    {
+      id: "c",
+      text: "使用Floyd-Warshall算法",
+      correct: false,
+      explanation: "空间复杂度太高，不适合大规模图"
+    },
+    {
+      id: "d",
+      text: "使用Bellman-Ford算法",
+      correct: false,
+      explanation: "时间复杂度太高"
+    }
+  ]}
+  hint="考虑搜索空间的减少和内存效率"
+/>
+```
+
+## 📝 总结与最佳实践
+
+### 关键要点
+
+1. **算法选择指南**：
+   - 非负权重：Dijkstra（优先队列）
+   - 负权重检测：Bellman-Ford
+   - 所有顶点对：Floyd-Warshall
+   - 动态图：增量算法
+
+2. **优化策略**：
+   - 双向搜索减少搜索空间
+   - 启发式函数提高效率
+   - 并行化利用多核
+   - 增量处理动态变化
+
+3. **实际应用考虑**：
+   - 内存限制vs计算时间
+   - 实时性要求
+   - 数据规模特征
+   - 负权重处理
+
+### 实际应用建议
+
+```python
+def shortest_path_algorithm_recommendation(graph_characteristics):
+    """
+    根据图特征推荐最短路径算法
+    """
+    recommendations = {}
+
+    if graph_characteristics["has_negative_weights"]:
+        if graph_characteristics["detect_cycles"]:
+            recommendations["algorithm"] = "Bellman-Ford"
+            recommendations["reason"] = "需要检测负权重环"
+        else:
+            recommendations["algorithm"] = "SPFA"
+            recommendations["reason"] = "负权重，平均性能好"
+    else:
+        if graph_characteristics["num_vertices"] < 1000:
+            recommendations["algorithm"] = "Floyd-Warshall"
+            recommendations["reason"] = "小规模图，需要所有顶点对"
+        elif graph_characteristics["single_source"]:
+            if graph_characteristics["real_time"]:
+                recommendations["algorithm"] = "双向Dijkstra"
+                recommendations["reason"] = "实时性要求高"
+            else:
+                recommendations["algorithm"] = "Dijkstra with priority queue"
+                recommendations["reason"] = "标准单源最短路径"
+        else:
+            recommendations["algorithm"] = "多次运行Dijkstra"
+            recommendations["reason"] = "多源但不需要所有顶点对"
+
+    return recommendations
+```
+
+### 错误处理和边界情况
+
+```python
+class ShortestPathErrorHandling:
+    """最短路径算法的错误处理"""
+    def __init__(self, graph):
+        self.graph = graph
+
+    def validate_graph(self):
+        """验证图的有效性"""
+        errors = []
+
+        # 检查顶点编号
+        for vertex in range(self.graph.num_vertices):
+            neighbors = self.graph.get_neighbors(vertex)
+            for neighbor, _ in neighbors:
+                if neighbor < 0 or neighbor >= self.graph.num_vertices:
+                    errors.append(f"无效的邻居顶点: {neighbor}")
+
+        return errors
+
+    def handle_negative_weights(self, algorithm):
+        """处理负权重"""
+        if algorithm == "dijkstra":
+            # 检查是否有负权重
+            has_negative = False
+            for vertex in range(self.graph.num_vertices):
+                for neighbor, weight in self.graph.get_neighbors(vertex):
+                    if weight < 0:
+                        has_negative = True
+                        break
+
+            if has_negative:
+                raise ValueError("Dijkstra算法不能处理负权重")
+
+        return True
+
+    def handle_disconnected_graph(self, source, target):
+        """处理不连通图"""
+        # 先检查连通性
+        bfs = BFSTraversal(self.graph)
+        connected = bfs.bfs_shortest_path(source, target)
+
+        if not connected:
+            return {"error": "源点和目标点不连通"}
+
+        return None
+
+    def memory_efficient_floyd_warshall(self):
+        """内存高效的Floyd-Warshall实现"""
+        num_vertices = self.graph.num_vertices
+
+        # 分块处理，避免一次性存储整个矩阵
+        block_size = 1000  # 根据可用内存调整
+        dist = [[math.inf] * num_vertices for _ in range(min(block_size, num_vertices))]
+
+        for start_block in range(0, num_vertices, block_size):
+            end_block = min(start_block + block_size, num_vertices)
+
+            # 初始化当前块
+            for i in range(start_block, end_block):
+                for j in range(num_vertices):
+                    if i == j:
+                        dist[i - start_block][j] = 0
+                    else:
+                        dist[i - start_block][j] = math.inf
+
+            # 填充初始距离
+            for i in range(start_block, end_block):
+                for j, weight in self.graph.get_neighbors(i):
+                    dist[i - start_block][j] = weight
+
+            # 处理当前块
+            for k in range(num_vertices):
+                for i in range(start_block, end_block):
+                    for j in range(num_vertices):
+                        if dist[i - start_block][k] + self._get_distance(k, j) < dist[i - start_block][j]:
+                            dist[i - start_block][j] = dist[i - start_block][k] + self._get_distance(k, j)
+
+        return dist
+
+    def _get_distance(self, i, j):
+        """获取两个顶点间的距离"""
+        if i == j:
+            return 0
+        for neighbor, weight in self.graph.get_neighbors(i):
+            if neighbor == j:
+                return weight
+        return math.inf
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question:"在包含负权重但无负环的图中，哪种算法最适合找单源最短路径？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "Dijkstra算法",
+      correct: false,
+      explanation: "Dijkstra不能处理负权重"
+    },
+    {
+      id: "b",
+      text: "Bellman-Ford算法",
+      correct: true,
+      explanation: "正确！Bellman-Ford可以处理负权重（无负环）"
+    },
+    {
+      id: "c",
+      text: "Floyd-Warshall算法",
+      correct: false,
+      explanation: "Floyd-Warshall用于所有顶点对，过于重量级"
+    },
+    {
+      id: "d",
+      text: "BFS算法",
+      correct: false,
+      explanation: "BFS只适用于无权图"
+    }
+  ]}
+  hint="考虑算法对负权重的处理能力"
+/>
+```
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：实现Dijkstra、Bellman-Ford、Floyd-Warshall算法
+2. **进阶练习**：实现双向搜索和SPFA优化算法
+3. **实战练习**：构建GPS导航系统或网络路由模拟器
+4. **项目练习**：设计金融套利检测系统
+
+**记住**：最短路径算法是图论中的核心问题，在现实世界有广泛应用！🛣️

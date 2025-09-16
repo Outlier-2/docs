@@ -1,0 +1,2026 @@
+---
+title: Advanced Topics I - NewSQL & HTAP
+desc: This lecture covers NewSQL databases and Hybrid Transactional/Analytical Processing (HTAP) systems, including their architecture, performance characteristics, and implementation challenges.
+---
+
+# 第24讲：高级主题 I - NewSQL 与 HTAP 系统
+
+## 课程概述
+
+本节课我们将探讨现代数据库系统的重要发展方向：NewSQL 数据库和混合事务/分析处理（HTAP）系统。这些技术试图在保持传统关系数据库 ACID 特性的同时，提供 NoSQL 系统的可扩展性和高性能。
+
+## 学习目标
+
+- 理解 NewSQL 数据库的设计理念和核心特性
+- 掌握 HTAP 系统的架构模式和实现技术
+- 学习内存计算和列式存储在 HTAP 中的应用
+- 了解时序数据库和多模数据库的发展趋势
+
+## 1. NewSQL 数据库
+
+### 1.1 NewSQL 的设计理念
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <chrono>
+
+namespace newsql_db {
+
+/**
+ * NewSQL 数据库特性枚举
+ */
+enum class NewSQLFeature {
+    DISTRIBUTED_TRANSACTIONS,    // 分布式事务
+    SQL_COMPATIBILITY,          // SQL 兼容性
+    ACID_COMPLIANCE,            // ACID 合规性
+    HORIZONTAL_SCALABILITY,     // 水平扩展
+    IN_MEMORY_COMPUTING,        // 内存计算
+    COLUMNAR_STORAGE,           // 列式存储
+    MVCC,                      // 多版本并发控制
+    AUTOMATIC_SHARDING          // 自动分片
+};
+
+/**
+ * 隔离级别（NewSQL 扩展）
+ */
+enum class NewSQLIsolationLevel {
+    READ_UNCOMMITTED,
+    READ_COMMITTED,
+    REPEATABLE_READ,
+    SERIALIZABLE,
+    SNAPSHOT_ISOLATION,         // 快照隔离
+    SERIALIZABLE_SNAPSHOT_ISOLATION,  // 可序列化快照隔离
+    LINEARIZABILITY            // 线性一致性
+};
+
+/**
+ * NewSQL 节点类型
+ */
+enum class NewSQLNodeType {
+    COORDINATOR,                // 协调节点
+    TRANSACTION_NODE,           // 事务节点
+    STORAGE_NODE,              // 存储节点
+    ANALYTICS_NODE,             // 分析节点
+    HYBRID_NODE                // 混合节点
+};
+
+/**
+ * 分布式事务管理器
+ */
+class DistributedTransactionManager {
+private:
+    struct TransactionContext {
+        uint64_t transaction_id;
+        NewSQLIsolationLevel isolation_level;
+        std::vector<std::string> involved_nodes;
+        std::chrono::system_clock::time_point start_time;
+        std::atomic<bool> is_active{true};
+        std::atomic<bool> is_committed{false};
+        std::vector<std::string> read_set;
+        std::vector<std::string> write_set;
+        std::mutex context_mutex;
+
+        TransactionContext(uint64_t tid, NewSQLIsolationLevel level)
+            : transaction_id(tid), isolation_level(level),
+              start_time(std::chrono::system_clock::now()) {}
+    };
+
+    std::unordered_map<uint64_t, std::unique_ptr<TransactionContext>> active_transactions;
+    std::mutex manager_mutex;
+    std::atomic<uint64_t> next_transaction_id{1};
+    std::unordered_map<std::string, std::vector<uint64_t>> node_transactions;
+
+public:
+    /**
+     * 开始新事务
+     * @param isolation_level 隔离级别
+     * @return 事务ID
+     */
+    uint64_t beginTransaction(NewSQLIsolationLevel isolation_level = NewSQLIsolationLevel::SNAPSHOT_ISOLATION) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        uint64_t transaction_id = next_transaction_id++;
+        auto context = std::make_unique<TransactionContext>(transaction_id, isolation_level);
+        active_transactions[transaction_id] = std::move(context);
+
+        return transaction_id;
+    }
+
+    /**
+     * 提交事务
+     * @param transaction_id 事务ID
+     * @return 是否成功提交
+     */
+    bool commitTransaction(uint64_t transaction_id) {
+        auto context = getTransactionContext(transaction_id);
+        if (!context) {
+            return false;
+        }
+
+        // 根据隔离级别执行相应的提交协议
+        switch (context->isolation_level) {
+            case NewSQLIsolationLevel::SNAPSHOT_ISOLATION:
+                return commitSnapshotIsolation(context);
+            case NewSQLIsolationLevel::SERIALIZABLE_SNAPSHOT_ISOLATION:
+                return commitSerializableSnapshotIsolation(context);
+            case NewSQLIsolationLevel::LINEARIZABILITY:
+                return commitLinearizable(context);
+            default:
+                return commitStandardIsolation(context);
+        }
+    }
+
+    /**
+     * 回滚事务
+     * @param transaction_id 事务ID
+     * @return 是否成功回滚
+     */
+    bool rollbackTransaction(uint64_t transaction_id) {
+        auto context = getTransactionContext(transaction_id);
+        if (!context) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+        context->is_active = false;
+        context->is_committed = false;
+
+        // 释放所有资源
+        releaseTransactionResources(transaction_id);
+
+        return true;
+    }
+
+    /**
+     * 记录读操作
+     * @param transaction_id 事务ID
+     * @param key 读取的键
+     * @param node_id 节点ID
+     * @return 是否成功记录
+     */
+    bool recordRead(uint64_t transaction_id, const std::string& key, const std::string& node_id) {
+        auto context = getTransactionContext(transaction_id);
+        if (!context || !context->is_active) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+        context->read_set.push_back(key);
+
+        // 记录节点参与事务
+        if (std::find(context->involved_nodes.begin(), context->involved_nodes.end(), node_id) == context->involved_nodes.end()) {
+            context->involved_nodes.push_back(node_id);
+        }
+
+        return true;
+    }
+
+    /**
+     * 记录写操作
+     * @param transaction_id 事务ID
+     * @param key 写入的键
+     * @param value 写入的值
+     * @param node_id 节点ID
+     * @return 是否成功记录
+     */
+    bool recordWrite(uint64_t transaction_id, const std::string& key, const std::string& value, const std::string& node_id) {
+        auto context = getTransactionContext(transaction_id);
+        if (!context || !context->is_active) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+        context->write_set.push_back(key);
+
+        // 记录节点参与事务
+        if (std::find(context->involved_nodes.begin(), context->involved_nodes.end(), node_id) == context->involved_nodes.end()) {
+            context->involved_nodes.push_back(node_id);
+        }
+
+        return true;
+    }
+
+    /**
+     * 检查写写冲突
+     * @param transaction_id 事务ID
+     * @param key 键
+     * @return 是否存在冲突
+     */
+    bool checkWriteWriteConflict(uint64_t transaction_id, const std::string& key) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        for (const auto& tx_pair : active_transactions) {
+            const auto& other_tx = tx_pair.second;
+            if (tx_pair.first != transaction_id && other_tx->is_active) {
+                std::lock_guard<std::mutex> tx_lock(other_tx->context_mutex);
+                if (std::find(other_tx->write_set.begin(), other_tx->write_set.end(), key) != other_tx->write_set.end()) {
+                    return true;  // 存在写写冲突
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 获取事务统计信息
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, uint64_t> getTransactionStats() {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["active_transactions"] = active_transactions.size();
+        stats["total_transactions"] = next_transaction_id.load() - 1;
+
+        uint64_t committed_count = 0;
+        uint64_t aborted_count = 0;
+
+        for (const auto& tx_pair : active_transactions) {
+            if (tx_pair.second->is_committed) {
+                committed_count++;
+            } else if (!tx_pair.second->is_active) {
+                aborted_count++;
+            }
+        }
+
+        stats["committed_transactions"] = committed_count;
+        stats["aborted_transactions"] = aborted_count;
+
+        return stats;
+    }
+
+private:
+    /**
+     * 获取事务上下文
+     */
+    TransactionContext* getTransactionContext(uint64_t transaction_id) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+        auto it = active_transactions.find(transaction_id);
+        return it != active_transactions.end() ? it->second.get() : nullptr;
+    }
+
+    /**
+     * 快照隔离提交
+     */
+    bool commitSnapshotIsolation(TransactionContext* context) {
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+
+        // 检查写写冲突
+        for (const auto& key : context->write_set) {
+            if (checkWriteWriteConflict(context->transaction_id, key)) {
+                return false;  // 存在冲突，提交失败
+            }
+        }
+
+        // 执行两阶段提交
+        if (executeTwoPhaseCommit(context)) {
+            context->is_active = false;
+            context->is_committed = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 可序列化快照隔离提交
+     */
+    bool commitSerializableSnapshotIsolation(TransactionContext* context) {
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+
+        // 更严格的冲突检测
+        if (checkSerializableConflicts(context)) {
+            return false;
+        }
+
+        // 执行两阶段提交
+        if (executeTwoPhaseCommit(context)) {
+            context->is_active = false;
+            context->is_committed = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 线性一致性提交
+     */
+    bool commitLinearizable(TransactionContext* context) {
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+
+        // 使用 Paxos 或 Raft 协议确保线性一致性
+        if (executeConsensusProtocol(context)) {
+            context->is_active = false;
+            context->is_committed = true;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 标准隔离级别提交
+     */
+    bool commitStandardIsolation(TransactionContext* context) {
+        std::lock_guard<std::mutex> lock(context->context_mutex);
+        context->is_active = false;
+        context->is_committed = true;
+        return true;
+    }
+
+    /**
+     * 执行两阶段提交
+     */
+    bool executeTwoPhaseCommit(TransactionContext* context) {
+        // 第一阶段：准备阶段
+        std::vector<std::string> prepared_nodes;
+        for (const auto& node_id : context->involved_nodes) {
+            if (sendPrepareRequest(context->transaction_id, node_id)) {
+                prepared_nodes.push_back(node_id);
+            } else {
+                // 有节点准备失败，回滚所有已准备的节点
+                for (const auto& prepared_node : prepared_nodes) {
+                    sendRollbackRequest(context->transaction_id, prepared_node);
+                }
+                return false;
+            }
+        }
+
+        // 第二阶段：提交阶段
+        bool all_committed = true;
+        for (const auto& node_id : prepared_nodes) {
+            if (!sendCommitRequest(context->transaction_id, node_id)) {
+                all_committed = false;
+            }
+        }
+
+        return all_committed;
+    }
+
+    /**
+     * 执行共识协议
+     */
+    bool executeConsensusProtocol(TransactionContext* context) {
+        // 简化实现：模拟 Paxos 协议
+        return executeTwoPhaseCommit(context);  // 实际应该使用 Paxos/Raft
+    }
+
+    /**
+     * 检查可序列化冲突
+     */
+    bool checkSerializableConflicts(TransactionContext* context) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        // 检查读写冲突和写写冲突
+        for (const auto& key : context->read_set) {
+            for (const auto& tx_pair : active_transactions) {
+                const auto& other_tx = tx_pair.second;
+                if (tx_pair.first != context->transaction_id && other_tx->is_active) {
+                    std::lock_guard<std::mutex> tx_lock(other_tx->context_mutex);
+                    if (std::find(other_tx->write_set.begin(), other_tx->write_set.end(), key) != other_tx->write_set.end()) {
+                        return true;  // 存在读写冲突
+                    }
+                }
+            }
+        }
+
+        return checkWriteWriteConflict(context->transaction_id, "");
+    }
+
+    /**
+     * 发送准备请求
+     */
+    bool sendPrepareRequest(uint64_t transaction_id, const std::string& node_id) {
+        // 模拟网络请求
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 50));
+        return rand() % 100 < 95;  // 95% 成功率
+    }
+
+    /**
+     * 发送提交请求
+     */
+    bool sendCommitRequest(uint64_t transaction_id, const std::string& node_id) {
+        // 模拟网络请求
+        std::this_thread::sleep_for(std::chrono::milliseconds(5 + rand() % 20));
+        return rand() % 100 < 98;  // 98% 成功率
+    }
+
+    /**
+     * 发送回滚请求
+     */
+    bool sendRollbackRequest(uint64_t transaction_id, const std::string& node_id) {
+        // 模拟网络请求
+        std::this_thread::sleep_for(std::chrono::milliseconds(5 + rand() % 15));
+        return true;
+    }
+
+    /**
+     * 释放事务资源
+     */
+    void releaseTransactionResources(uint64_t transaction_id) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+        active_transactions.erase(transaction_id);
+    }
+};
+
+/**
+ * NewSQL 存储引擎接口
+ */
+class NewSQLStorageEngine {
+public:
+    virtual ~NewSQLStorageEngine() = default;
+
+    /**
+     * 写入数据
+     * @param key 键
+     * @param value 值
+     * @param transaction_id 事务ID
+     * @return 是否成功写入
+     */
+    virtual bool write(const std::string& key, const std::string& value, uint64_t transaction_id) = 0;
+
+    /**
+     * 读取数据
+     * @param key 键
+     * @param transaction_id 事务ID
+     * @return 读取的值
+     */
+    virtual std::string read(const std::string& key, uint64_t transaction_id) = 0;
+
+    /**
+     * 删除数据
+     * @param key 键
+     * @param transaction_id 事务ID
+     * @return 是否成功删除
+     */
+    virtual bool remove(const std::string& key, uint64_t transaction_id) = 0;
+
+    /**
+     * 创建索引
+     * @param index_name 索引名
+     * @param columns 列名列表
+     * @return 是否成功创建
+     */
+    virtual bool createIndex(const std::string& index_name, const std::vector<std::string>& columns) = 0;
+
+    /**
+     * 扫描数据
+     * @param start_key 起始键
+     * @param end_key 结束键
+     * @param transaction_id 事务ID
+     * @return 键值对列表
+     */
+    virtual std::vector<std::pair<std::string, std::string>> scan(
+        const std::string& start_key, const std::string& end_key, uint64_t transaction_id) = 0;
+
+    /**
+     * 获取存储统计信息
+     * @return 统计信息
+     */
+    virtual std::unordered_map<std::string, uint64_t> getStorageStats() = 0;
+};
+
+}
+
+// 命名空间继续
+namespace newsql_db {
+
+/**
+ * 内存存储引擎实现
+ */
+class InMemoryStorageEngine : public NewSQLStorageEngine {
+private:
+    struct VersionedValue {
+        std::string value;
+        uint64_t version;
+        uint64_t create_transaction_id;
+        uint64_t expire_transaction_id;  // 0 表示未过期
+        bool is_deleted;
+
+        VersionedValue(const std::string& val, uint64_t ver, uint64_t tx_id)
+            : value(val), version(ver), create_transaction_id(tx_id),
+              expire_transaction_id(0), is_deleted(false) {}
+    };
+
+    std::unordered_map<std::string, std::vector<VersionedValue>> data_store;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, uint64_t>>> indexes;
+    std::mutex storage_mutex;
+    std::atomic<uint64_t> next_version{1};
+
+public:
+    bool write(const std::string& key, const std::string& value, uint64_t transaction_id) override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        uint64_t version = next_version++;
+        auto& versions = data_store[key];
+
+        // 标记旧版本过期
+        for (auto& versioned_value : versions) {
+            if (versioned_value.expire_transaction_id == 0) {
+                versioned_value.expire_transaction_id = transaction_id;
+            }
+        }
+
+        // 添加新版本
+        versions.emplace_back(value, version, transaction_id);
+
+        // 更新索引
+        updateIndexes(key, value, version, transaction_id);
+
+        return true;
+    }
+
+    std::string read(const std::string& key, uint64_t transaction_id) override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        auto it = data_store.find(key);
+        if (it == data_store.end()) {
+            return "";
+        }
+
+        // 查找最新可见版本
+        for (auto version_it = it->second.rbegin(); version_it != it->second.rend(); ++version_it) {
+            if (isVersionVisible(*version_it, transaction_id)) {
+                return version_it->is_deleted ? "" : version_it->value;
+            }
+        }
+
+        return "";
+    }
+
+    bool remove(const std::string& key, uint64_t transaction_id) override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        auto it = data_store.find(key);
+        if (it == data_store.end()) {
+            return false;
+        }
+
+        uint64_t version = next_version++;
+
+        // 标记旧版本过期
+        for (auto& versioned_value : it->second) {
+            if (versioned_value.expire_transaction_id == 0) {
+                versioned_value.expire_transaction_id = transaction_id;
+            }
+        }
+
+        // 添加删除标记
+        it->second.emplace_back("", version, transaction_id);
+        it->second.back().is_deleted = true;
+
+        return true;
+    }
+
+    bool createIndex(const std::string& index_name, const std::vector<std::string>& columns) override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        if (indexes.find(index_name) != indexes.end()) {
+            return false;  // 索引已存在
+        }
+
+        indexes[index_name] = std::vector<std::pair<std::string, uint64_t>>();
+        return true;
+    }
+
+    std::vector<std::pair<std::string, std::string>> scan(
+        const std::string& start_key, const std::string& end_key, uint64_t transaction_id) override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        std::vector<std::pair<std::string, std::string>> result;
+
+        auto start_it = data_store.lower_bound(start_key);
+        auto end_it = data_store.upper_bound(end_key);
+
+        for (auto it = start_it; it != end_it; ++it) {
+            for (auto version_it = it->second.rbegin(); version_it != it->second.rend(); ++version_it) {
+                if (isVersionVisible(*version_it, transaction_id) && !version_it->is_deleted) {
+                    result.emplace_back(it->first, version_it->value);
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    std::unordered_map<std::string, uint64_t> getStorageStats() override {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["total_keys"] = data_store.size();
+        stats["total_versions"] = 0;
+        stats["index_count"] = indexes.size();
+
+        uint64_t total_size = 0;
+        for (const auto& pair : data_store) {
+            stats["total_versions"] += pair.second.size();
+            for (const auto& version : pair.second) {
+                total_size += version.value.size();
+            }
+        }
+
+        stats["total_size_bytes"] = total_size;
+
+        return stats;
+    }
+
+private:
+    /**
+     * 检查版本是否可见
+     */
+    bool isVersionVisible(const VersionedValue& version, uint64_t transaction_id) {
+        // 简化实现：总是可见
+        // 实际系统中需要考虑事务隔离级别和可见性规则
+        return true;
+    }
+
+    /**
+     * 更新索引
+     */
+    void updateIndexes(const std::string& key, const std::string& value, uint64_t version, uint64_t transaction_id) {
+        // 简化实现：不实际更新索引
+        // 实际系统中需要根据索引定义更新相应的索引结构
+    }
+};
+
+/**
+ * NewSQL 数据库集群
+ */
+class NewSQLCluster {
+private:
+    std::unordered_map<std::string, std::shared_ptr<NewSQLStorageEngine>> storage_engines;
+    std::shared_ptr<DistributedTransactionManager> transaction_manager;
+    std::unordered_map<std::string, NewSQLNodeType> node_types;
+    std::unordered_map<std::string, std::vector<NewSQLFeature>> node_features;
+    std::mutex cluster_mutex;
+
+public:
+    NewSQLCluster() {
+        transaction_manager = std::make_shared<DistributedTransactionManager>();
+    }
+
+    /**
+     * 添加节点到集群
+     * @param node_id 节点ID
+     * @param node_type 节点类型
+     * @param features 节点特性
+     * @return 是否成功添加
+     */
+    bool addNode(const std::string& node_id, NewSQLNodeType node_type,
+                const std::vector<NewSQLFeature>& features) {
+        std::lock_guard<std::mutex> lock(cluster_mutex);
+
+        // 创建存储引擎
+        auto storage_engine = std::make_shared<InMemoryStorageEngine>();
+        storage_engines[node_id] = storage_engine;
+
+        node_types[node_id] = node_type;
+        node_features[node_id] = features;
+
+        std::cout << "Added NewSQL node " << node_id << " with type "
+                  << static_cast<int>(node_type) << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 执行分布式查询
+     * @param query SQL查询
+     * @param coordinator_id 协调节点ID
+     * @return 查询结果
+     */
+    std::vector<std::unordered_map<std::string, std::string>> executeQuery(
+        const std::string& query, const std::string& coordinator_id) {
+        std::cout << "Executing NewSQL query: " << query << " on coordinator " << coordinator_id << std::endl;
+
+        // 简化实现：解析查询并执行
+        if (query.find("SELECT") != std::string::npos) {
+            return executeSelectQuery(query, coordinator_id);
+        } else if (query.find("INSERT") != std::string::npos) {
+            return executeInsertQuery(query, coordinator_id);
+        } else if (query.find("UPDATE") != std::string::npos) {
+            return executeUpdateQuery(query, coordinator_id);
+        } else if (query.find("DELETE") != std::string::npos) {
+            return executeDeleteQuery(query, coordinator_id);
+        }
+
+        return {};
+    }
+
+    /**
+     * 获取集群状态
+     * @return 集群状态信息
+     */
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> getClusterStatus() {
+        std::lock_guard<std::mutex> lock(cluster_mutex);
+
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> status;
+
+        for (const auto& node_pair : node_types) {
+            const std::string& node_id = node_pair.first;
+            NewSQLNodeType node_type = node_pair.second;
+
+            status[node_id]["type"] = std::to_string(static_cast<int>(node_type));
+            status[node_id]["storage_engine"] = "in_memory";
+
+            // 添加特性信息
+            std::string features_str;
+            for (const auto& feature : node_features[node_id]) {
+                if (!features_str.empty()) {
+                    features_str += ",";
+                }
+                features_str += std::to_string(static_cast<int>(feature));
+            }
+            status[node_id]["features"] = features_str;
+        }
+
+        // 添加事务统计
+        auto tx_stats = transaction_manager->getTransactionStats();
+        for (const auto& stat_pair : tx_stats) {
+            status["cluster"][stat_pair.first] = std::to_string(stat_pair.second);
+        }
+
+        return status;
+    }
+
+private:
+    /**
+     * 执行SELECT查询
+     */
+    std::vector<std::unordered_map<std::string, std::string>> executeSelectQuery(
+        const std::string& query, const std::string& coordinator_id) {
+        // 开始事务
+        uint64_t transaction_id = transaction_manager->beginTransaction();
+
+        std::vector<std::unordered_map<std::string, std::string>> result;
+
+        // 简化实现：扫描所有数据
+        for (const auto& engine_pair : storage_engines) {
+            const std::string& node_id = engine_pair.first;
+            auto engine = engine_pair.second;
+
+            auto scan_result = engine->scan("", "", transaction_id);
+            for (const auto& pair : scan_result) {
+                std::unordered_map<std::string, std::string> row;
+                row["key"] = pair.first;
+                row["value"] = pair.second;
+                row["node"] = node_id;
+                result.push_back(row);
+
+                // 记录读操作
+                transaction_manager->recordRead(transaction_id, pair.first, node_id);
+            }
+        }
+
+        // 提交事务
+        transaction_manager->commitTransaction(transaction_id);
+
+        std::cout << "SELECT query returned " << result.size() << " rows" << std::endl;
+        return result;
+    }
+
+    /**
+     * 执行INSERT查询
+     */
+    std::vector<std::unordered_map<std::string, std::string>> executeInsertQuery(
+        const std::string& query, const std::string& coordinator_id) {
+        // 开始事务
+        uint64_t transaction_id = transaction_manager->beginTransaction();
+
+        // 简化实现：解析插入语句
+        size_t key_pos = query.find("VALUES ('") + 9;
+        size_t key_end = query.find("', '");
+        std::string key = query.substr(key_pos, key_end - key_pos);
+
+        size_t value_pos = key_end + 3;
+        size_t value_end = query.find("')", value_pos);
+        std::string value = query.substr(value_pos, value_end - value_pos);
+
+        // 选择存储节点（简化实现：使用第一个节点）
+        if (!storage_engines.empty()) {
+            auto engine = storage_engines.begin()->second;
+            std::string node_id = storage_engines.begin()->first;
+
+            // 执行插入
+            if (engine->write(key, value, transaction_id)) {
+                // 记录写操作
+                transaction_manager->recordWrite(transaction_id, key, value, node_id);
+            }
+        }
+
+        // 提交事务
+        transaction_manager->commitTransaction(transaction_id);
+
+        return {{"result", "insert successful"}};
+    }
+
+    /**
+     * 执行UPDATE查询
+     */
+    std::vector<std::unordered_map<std::string, std::string>> executeUpdateQuery(
+        const std::string& query, const std::string& coordinator_id) {
+        // 开始事务
+        uint64_t transaction_id = transaction_manager->beginTransaction();
+
+        // 简化实现：解析更新语句
+        // 这里应该解析具体的更新逻辑
+
+        // 提交事务
+        transaction_manager->commitTransaction(transaction_id);
+
+        return {{"result", "update successful"}};
+    }
+
+    /**
+     * 执行DELETE查询
+     */
+    std::vector<std::unordered_map<std::string, std::string>> executeDeleteQuery(
+        const std::string& query, const std::string& coordinator_id) {
+        // 开始事务
+        uint64_t transaction_id = transaction_manager->beginTransaction();
+
+        // 简化实现：解析删除语句
+        // 这里应该解析具体的删除逻辑
+
+        // 提交事务
+        transaction_manager->commitTransaction(transaction_id);
+
+        return {{"result", "delete successful"}};
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace newsql_db;
+
+    // 创建 NewSQL 集群
+    NewSQLCluster cluster;
+
+    // 添加节点
+    cluster.addNode("coordinator1", NewSQLNodeType::COORDINATOR,
+                    {NewSQLFeature::DISTRIBUTED_TRANSACTIONS, NewSQLFeature::SQL_COMPATIBILITY});
+    cluster.addNode("tx_node1", NewSQLNodeType::TRANSACTION_NODE,
+                    {NewSQLFeature::ACID_COMPLIANCE, NewSQLFeature::MVCC});
+    cluster.addNode("storage1", NewSQLNodeType::STORAGE_NODE,
+                    {NewSQLFeature::IN_MEMORY_COMPUTING, NewSQLFeature::AUTOMATIC_SHARDING});
+    cluster.addNode("analytics1", NewSQLNodeType::ANALYTICS_NODE,
+                    {NewSQLFeature::COLUMNAR_STORAGE});
+
+    // 执行查询
+    std::cout << "\n=== NewSQL Query Execution ===" << std::endl;
+
+    // 插入数据
+    auto insert_result = cluster.executeQuery("INSERT INTO test_table VALUES ('key1', 'value1')", "coordinator1");
+    std::cout << "Insert result: ";
+    for (const auto& row : insert_result) {
+        for (const auto& pair : row) {
+            std::cout << pair.first << "=" << pair.second << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    // 查询数据
+    auto select_result = cluster.executeQuery("SELECT * FROM test_table", "coordinator1");
+    std::cout << "\nSelect result (" << select_result.size() << " rows):" << std::endl;
+    for (const auto& row : select_result) {
+        for (const auto& pair : row) {
+            std::cout << pair.first << "=" << pair.second << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    // 显示集群状态
+    std::cout << "\n=== NewSQL Cluster Status ===" << std::endl;
+    auto cluster_status = cluster.getClusterStatus();
+    for (const auto& node_pair : cluster_status) {
+        std::cout << "Node " << node_pair.first << ":" << std::endl;
+        for (const auto& attr_pair : node_pair.second) {
+            std::cout << "  " << attr_pair.first << ": " << attr_pair.second << std::endl;
+        }
+    }
+
+    return 0;
+}
+```
+
+## 2. HTAP 系统架构
+
+### 2.1 混合事务/分析处理
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <chrono>
+
+namespace htap_db {
+
+/**
+ * HTAP 系统组件类型
+ */
+enum class HTAPComponentType {
+    TRANSACTION_ENGINE,    // 事务处理引擎
+    ANALYTICS_ENGINE,      // 分析处理引擎
+    STORAGE_LAYER,         // 存储层
+    MEMORY_MANAGER,        // 内存管理器
+    QUERY_OPTIMIZER,       // 查询优化器
+    WORKLOAD_SCHEDULER     // 工作负载调度器
+};
+
+/**
+ * 工作负载类型
+ */
+enum class WorkloadType {
+    TRANSACTIONAL,         // 事务型工作负载
+    ANALYTICAL,            // 分析型工作负载
+    MIXED                  // 混合工作负载
+};
+
+/**
+ * 查询优先级
+ */
+enum class QueryPriority {
+    HIGH,                  // 高优先级
+    MEDIUM,                // 中优先级
+    LOW                    // 低优先级
+};
+
+/**
+ * HTAP 查询请求
+ */
+struct HTAPQuery {
+    std::string query_id;
+    std::string query_text;
+    WorkloadType workload_type;
+    QueryPriority priority;
+    std::chrono::system_clock::time_point submit_time;
+    std::chrono::system_clock::time_point start_time;
+    std::chrono::system_clock::time_point end_time;
+    std::unordered_map<std::string, std::string> parameters;
+    bool is_completed;
+    std::string result;
+
+    HTAPQuery(const std::string& id, const std::string& text, WorkloadType type)
+        : query_id(id), query_text(text), workload_type(type),
+          priority(QueryPriority::MEDIUM), is_completed(false) {}
+};
+
+/**
+ * 内存区域类型
+ */
+enum class MemoryRegionType {
+    ROW_STORE,             // 行存储
+    COLUMN_STORE,          // 列存储
+    INDEX_CACHE,           // 索引缓存
+    QUERY_CACHE,           // 查询缓存
+    TEMPORARY              // 临时数据
+};
+
+/**
+ * 内存区域信息
+ */
+struct MemoryRegion {
+    std::string region_id;
+    MemoryRegionType type;
+    size_t size_bytes;
+    size_t used_bytes;
+    double usage_threshold;
+    std::vector<std::string> associated_tables;
+    std::chrono::system_clock::time_point last_access;
+
+    MemoryRegion(const std::string& id, MemoryRegionType t, size_t size)
+        : region_id(id), type(t), size_bytes(size), used_bytes(0),
+          usage_threshold(0.8), last_access(std::chrono::system_clock::now()) {}
+
+    double getUsageRatio() const {
+        return size_bytes > 0 ? static_cast<double>(used_bytes) / size_bytes : 0.0;
+    }
+
+    bool isOverloaded() const {
+        return getUsageRatio() > usage_threshold;
+    }
+
+    void updateAccess() {
+        last_access = std::chrono::system_clock::now();
+    }
+};
+
+/**
+ * HTAP 内存管理器
+ */
+class HTAPMemoryManager {
+private:
+    std::unordered_map<std::string, std::shared_ptr<MemoryRegion>> memory_regions;
+    std::unordered_map<std::string, std::vector<std::string>> table_to_regions;
+    size_t total_memory_bytes;
+    size_t available_memory_bytes;
+    std::mutex memory_mutex;
+    std::atomic<bool> management_running{true};
+    std::thread management_thread;
+
+public:
+    HTAPMemoryManager(size_t total_memory) : total_memory_bytes(total_memory), available_memory_bytes(total_memory) {}
+
+    ~HTAPMemoryManager() {
+        management_running = false;
+        if (management_thread.joinable()) {
+            management_thread.join();
+        }
+    }
+
+    /**
+     * 创建内存区域
+     * @param region_id 区域ID
+     * @param type 区域类型
+     * @param size_bytes 区域大小
+     * @return 是否成功创建
+     */
+    bool createMemoryRegion(const std::string& region_id, MemoryRegionType type, size_t size_bytes) {
+        std::lock_guard<std::mutex> lock(memory_mutex);
+
+        if (memory_regions.find(region_id) != memory_regions.end()) {
+            return false;  // 区域已存在
+        }
+
+        if (size_bytes > available_memory_bytes) {
+            return false;  // 内存不足
+        }
+
+        auto region = std::make_shared<MemoryRegion>(region_id, type, size_bytes);
+        memory_regions[region_id] = region;
+        available_memory_bytes -= size_bytes;
+
+        std::cout << "Created memory region " << region_id << " with type "
+                  << static_cast<int>(type) << " and size " << size_bytes << " bytes" << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 分配内存
+     * @param region_id 区域ID
+     * @param table_name 表名
+     * @param size_bytes 需要的大小
+     * @return 是否成功分配
+     */
+    bool allocateMemory(const std::string& region_id, const std::string& table_name, size_t size_bytes) {
+        std::lock_guard<std::mutex> lock(memory_mutex);
+
+        auto region_it = memory_regions.find(region_id);
+        if (region_it == memory_regions.end()) {
+            return false;
+        }
+
+        auto& region = region_it->second;
+        if (region->used_bytes + size_bytes > region->size_bytes) {
+            // 尝试内存回收
+            if (!reclaimMemory(region_id, size_bytes)) {
+                return false;  // 内存不足
+            }
+        }
+
+        region->used_bytes += size_bytes;
+        region->updateAccess();
+
+        // 更新表到区域的映射
+        if (std::find(region->associated_tables.begin(), region->associated_tables.end(), table_name) == region->associated_tables.end()) {
+            region->associated_tables.push_back(table_name);
+        }
+
+        table_to_regions[table_name].push_back(region_id);
+
+        return true;
+    }
+
+    /**
+     * 释放内存
+     * @param region_id 区域ID
+     * @param table_name 表名
+     * @param size_bytes 释放的大小
+     * @return 是否成功释放
+     */
+    bool releaseMemory(const std::string& region_id, const std::string& table_name, size_t size_bytes) {
+        std::lock_guard<std::mutex> lock(memory_mutex);
+
+        auto region_it = memory_regions.find(region_id);
+        if (region_it == memory_regions.end()) {
+            return false;
+        }
+
+        auto& region = region_it->second;
+        if (region->used_bytes >= size_bytes) {
+            region->used_bytes -= size_bytes;
+            region->updateAccess();
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 获取内存使用统计
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, double> getMemoryStats() {
+        std::lock_guard<std::mutex> lock(memory_mutex);
+
+        std::unordered_map<std::string, double> stats;
+        stats["total_memory_gb"] = total_memory_bytes / (1024.0 * 1024.0 * 1024.0);
+        stats["available_memory_gb"] = available_memory_bytes / (1024.0 * 1024.0 * 1024.0);
+        stats["memory_usage_ratio"] = (total_memory_bytes - available_memory_bytes) / static_cast<double>(total_memory_bytes);
+
+        double total_usage = 0.0;
+        for (const auto& region_pair : memory_regions) {
+            total_usage += region_pair.second->getUsageRatio();
+        }
+
+        stats["average_region_usage"] = memory_regions.empty() ? 0.0 : total_usage / memory_regions.size();
+
+        return stats;
+    }
+
+    /**
+     * 启动内存管理线程
+     */
+    void startMemoryManagement() {
+        management_thread = std::thread(&HTAPMemoryManager::memoryManagementWorker, this);
+        std::cout << "HTAP memory management started" << std::endl;
+    }
+
+private:
+    /**
+     * 内存回收
+     */
+    bool reclaimMemory(const std::string& region_id, size_t required_size) {
+        auto& region = memory_regions[region_id];
+
+        // 简单的LRU策略：移除最久未访问的数据
+        // 实际系统中需要更复杂的回收策略
+
+        std::cout << "Attempting to reclaim " << required_size
+                  << " bytes from region " << region_id << std::endl;
+
+        // 模拟回收过程
+        size_t reclaimed = 0;
+        while (reclaimed < required_size && region->used_bytes > 0) {
+            // 假设每次回收一部分数据
+            size_t chunk_size = std::min(required_size - reclaimed, region->used_bytes / 10);
+            region->used_bytes -= chunk_size;
+            reclaimed += chunk_size;
+        }
+
+        return reclaimed >= required_size;
+    }
+
+    /**
+     * 内存管理工作线程
+     */
+    void memoryManagementWorker() {
+        while (management_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            std::lock_guard<std::mutex> lock(memory_mutex);
+
+            // 检查内存区域使用情况
+            for (auto& region_pair : memory_regions) {
+                auto& region = region_pair.second;
+
+                if (region->isOverloaded()) {
+                    std::cout << "Region " << region->region_id
+                              << " is overloaded (usage: " << region->getUsageRatio() << ")"
+                              << std::endl;
+
+                    // 尝试扩容或调整
+                    adjustMemoryRegion(region->region_id);
+                }
+            }
+
+            // 内存压缩和整理
+            if (shouldCompactMemory()) {
+                compactMemory();
+            }
+        }
+    }
+
+    /**
+     * 调整内存区域
+     */
+    void adjustMemoryRegion(const std::string& region_id) {
+        auto& region = memory_regions[region_id];
+
+        // 简化实现：记录需要调整，但不实际调整
+        std::cout << "Memory region " << region_id << " needs adjustment" << std::endl;
+    }
+
+    /**
+     * 检查是否需要内存压缩
+     */
+    bool shouldCompactMemory() {
+        // 简化实现：定期压缩
+        static int counter = 0;
+        return (++counter % 20) == 0;  // 每100秒压缩一次
+    }
+
+    /**
+     * 压缩内存
+     */
+    void compactMemory() {
+        std::cout << "Performing memory compaction" << std::endl;
+        // 简化实现：不实际压缩
+    }
+};
+
+/**
+ * HTAP 查询调度器
+ */
+class HTAPQueryScheduler {
+private:
+    std::queue<std::shared_ptr<HTAPQuery>> high_priority_queue;
+    std::queue<std::shared_ptr<HTAPQuery>> medium_priority_queue;
+    std::queue<std::shared_ptr<HTAPQuery>> low_priority_queue;
+    std::unordered_map<std::string, std::shared_ptr<HTAPQuery>> active_queries;
+    std::mutex scheduler_mutex;
+    std::atomic<bool> scheduling_running{true};
+    std::thread scheduling_thread;
+    std::shared_ptr<HTAPMemoryManager> memory_manager;
+
+public:
+    HTAPQueryScheduler(std::shared_ptr<HTAPMemoryManager> mem_mgr)
+        : memory_manager(mem_mgr) {}
+
+    ~HTAPQueryScheduler() {
+        scheduling_running = false;
+        if (scheduling_thread.joinable()) {
+            scheduling_thread.join();
+        }
+    }
+
+    /**
+     * 提交查询
+     * @param query 查询对象
+     * @return 是否成功提交
+     */
+    bool submitQuery(std::shared_ptr<HTAPQuery> query) {
+        std::lock_guard<std::mutex> lock(scheduler_mutex);
+
+        query->submit_time = std::chrono::system_clock::now();
+
+        // 根据优先级放入相应队列
+        switch (query->priority) {
+            case QueryPriority::HIGH:
+                high_priority_queue.push(query);
+                break;
+            case QueryPriority::MEDIUM:
+                medium_priority_queue.push(query);
+                break;
+            case QueryPriority::LOW:
+                low_priority_queue.push(query);
+                break;
+        }
+
+        std::cout << "Query " << query->query_id << " submitted with priority "
+                  << static_cast<int>(query->priority) << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 启动查询调度
+     */
+    void startScheduling() {
+        scheduling_thread = std::thread(&HTAPQueryScheduler::schedulingWorker, this);
+        std::cout << "HTAP query scheduling started" << std::endl;
+    }
+
+    /**
+     * 获取查询统计
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, uint64_t> getQueryStats() {
+        std::lock_guard<std::mutex> lock(scheduler_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["high_priority_queue_size"] = high_priority_queue.size();
+        stats["medium_priority_queue_size"] = medium_priority_queue.size();
+        stats["low_priority_queue_size"] = low_priority_queue.size();
+        stats["active_queries"] = active_queries.size();
+
+        uint64_t completed_count = 0;
+        uint64_t total_execution_time = 0;
+
+        for (const auto& query_pair : active_queries) {
+            if (query_pair.second->is_completed) {
+                completed_count++;
+                auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    query_pair.second->end_time - query_pair.second->start_time);
+                total_execution_time += duration.count();
+            }
+        }
+
+        stats["completed_queries"] = completed_count;
+        stats["avg_execution_time_ms"] = completed_count > 0 ? total_execution_time / completed_count : 0;
+
+        return stats;
+    }
+
+private:
+    /**
+     * 调度工作线程
+     */
+    void schedulingWorker() {
+        while (scheduling_running) {
+            std::shared_ptr<HTAPQuery> query = getNextQuery();
+
+            if (query) {
+                executeQuery(query);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+    }
+
+    /**
+     * 获取下一个要执行的查询
+     */
+    std::shared_ptr<HTAPQuery> getNextQuery() {
+        std::lock_guard<std::mutex> lock(scheduler_mutex);
+
+        // 按优先级顺序获取查询
+        if (!high_priority_queue.empty()) {
+            auto query = high_priority_queue.front();
+            high_priority_queue.pop();
+            return query;
+        }
+
+        if (!medium_priority_queue.empty()) {
+            auto query = medium_priority_queue.front();
+            medium_priority_queue.pop();
+            return query;
+        }
+
+        if (!low_priority_queue.empty()) {
+            auto query = low_priority_queue.front();
+            low_priority_queue.pop();
+            return query;
+        }
+
+        return nullptr;
+    }
+
+    /**
+     * 执行查询
+     */
+    void executeQuery(std::shared_ptr<HTAPQuery> query) {
+        query->start_time = std::chrono::system_clock::now();
+        active_queries[query->query_id] = query;
+
+        std::cout << "Executing query " << query->query_id << " ("
+                  << (query->workload_type == WorkloadType::TRANSACTIONAL ? "Transactional" : "Analytical")
+                  << ")" << std::endl;
+
+        // 根据工作负载类型选择执行策略
+        switch (query->workload_type) {
+            case WorkloadType::TRANSACTIONAL:
+                executeTransactionalQuery(query);
+                break;
+            case WorkloadType::ANALYTICAL:
+                executeAnalyticalQuery(query);
+                break;
+            case WorkloadType::MIXED:
+                executeMixedQuery(query);
+                break;
+        }
+
+        query->end_time = std::chrono::system_clock::now();
+        query->is_completed = true;
+
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            query->end_time - query->start_time);
+        std::cout << "Query " << query->query_id << " completed in "
+                  << duration.count() << " ms" << std::endl;
+    }
+
+    /**
+     * 执行事务型查询
+     */
+    void executeTransactionalQuery(std::shared_ptr<HTAPQuery> query) {
+        // 事务型查询优化：低延迟，高并发
+        // 使用行存储，快速索引访问
+
+        // 模拟执行
+        std::this_thread::sleep_for(std::chrono::milliseconds(1 + rand() % 10));
+
+        query->result = "Transactional query result";
+    }
+
+    /**
+     * 执行分析型查询
+     */
+    void executeAnalyticalQuery(std::shared_ptr<HTAPQuery> query) {
+        // 分析型查询优化：高吞吐，批处理
+        // 使用列存储，向量化执行
+
+        // 分配内存
+        if (memory_manager) {
+            memory_manager->allocateMemory("column_store", query->query_id, 1024 * 1024);  // 1MB
+        }
+
+        // 模拟执行
+        std::this_thread::sleep_for(std::chrono::milliseconds(50 + rand() % 200));
+
+        query->result = "Analytical query result with aggregated data";
+
+        // 释放内存
+        if (memory_manager) {
+            memory_manager->releaseMemory("column_store", query->query_id, 1024 * 1024);
+        }
+    }
+
+    /**
+     * 执行混合查询
+     */
+    void executeMixedQuery(std::shared_ptr<HTAPQuery> query) {
+        // 混合查询：需要同时考虑事务和分析需求
+        // 使用混合存储策略
+
+        // 模拟执行
+        std::this_thread::sleep_for(std::chrono::milliseconds(20 + rand() % 100));
+
+        query->result = "Mixed query result with real-time analytics";
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace htap_db;
+
+    // 创建 HTAP 内存管理器 (16GB 总内存)
+    auto memory_manager = std::make_shared<HTAPMemoryManager>(16 * 1024 * 1024 * 1024);
+
+    // 创建内存区域
+    memory_manager->createMemoryRegion("row_store", MemoryRegionType::ROW_STORE, 4 * 1024 * 1024 * 1024);
+    memory_manager->createMemoryRegion("column_store", MemoryRegionType::COLUMN_STORE, 8 * 1024 * 1024 * 1024);
+    memory_manager->createMemoryRegion("index_cache", MemoryRegionType::INDEX_CACHE, 2 * 1024 * 1024 * 1024);
+    memory_manager->createMemoryRegion("query_cache", MemoryRegionType::QUERY_CACHE, 1 * 1024 * 1024 * 1024);
+    memory_manager->createMemoryRegion("temp_data", MemoryRegionType::TEMPORARY, 1 * 1024 * 1024 * 1024);
+
+    // 启动内存管理
+    memory_manager->startMemoryManagement();
+
+    // 创建 HTAP 查询调度器
+    HTAPQueryScheduler scheduler(memory_manager);
+
+    // 启动查询调度
+    scheduler.startScheduling();
+
+    // 提交各种类型的查询
+    std::cout << "\n=== HTAP Query Execution ===" << std::endl;
+
+    // 事务型查询
+    for (int i = 0; i < 10; ++i) {
+        auto query = std::make_shared<HTAPQuery>("tx_" + std::to_string(i),
+                                                "UPDATE accounts SET balance = balance + 100 WHERE id = " + std::to_string(i),
+                                                WorkloadType::TRANSACTIONAL);
+        query->priority = QueryPriority::HIGH;
+        scheduler.submitQuery(query);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // 分析型查询
+    for (int i = 0; i < 5; ++i) {
+        auto query = std::make_shared<HTAPQuery>("analytics_" + std::to_string(i),
+                                                "SELECT AVG(balance), COUNT(*) FROM accounts GROUP BY region",
+                                                WorkloadType::ANALYTICAL);
+        query->priority = QueryPriority::MEDIUM;
+        scheduler.submitQuery(query);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // 混合查询
+    for (int i = 0; i < 3; ++i) {
+        auto query = std::make_shared<HTAPQuery>("mixed_" + std::to_string(i),
+                                                "SELECT customer_id, SUM(amount) FROM transactions WHERE date > '2023-01-01' GROUP BY customer_id HAVING SUM(amount) > 1000",
+                                                WorkloadType::MIXED);
+        query->priority = QueryPriority::LOW;
+        scheduler.submitQuery(query);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    }
+
+    // 等待查询执行
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+
+    // 显示统计信息
+    std::cout << "\n=== HTAP System Statistics ===" << std::endl;
+
+    auto memory_stats = memory_manager->getMemoryStats();
+    std::cout << "Memory Statistics:" << std::endl;
+    for (const auto& stat : memory_stats) {
+        std::cout << "  " << stat.first << ": " << stat.second << std::endl;
+    }
+
+    auto query_stats = scheduler.getQueryStats();
+    std::cout << "\nQuery Statistics:" << std::endl;
+    for (const auto& stat : query_stats) {
+        std::cout << "  " << stat.first << ": " << stat.second << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 3. 时序数据库与多模数据库
+
+### 3.1 时序数据存储与查询
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <chrono>
+#include <cmath>
+#include <algorithm>
+
+namespace ts_db {
+
+/**
+ * 时间序列数据点
+ */
+struct TimeSeriesPoint {
+    std::chrono::system_clock::time_point timestamp;
+    double value;
+    std::unordered_map<std::string, std::string> tags;
+
+    TimeSeriesPoint(std::chrono::system_clock::time_point ts, double val)
+        : timestamp(ts), value(val) {}
+
+    void addTag(const std::string& key, const std::string& value) {
+        tags[key] = value;
+    }
+
+    std::string getTag(const std::string& key) const {
+        auto it = tags.find(key);
+        return it != tags.end() ? it->second : "";
+    }
+};
+
+/**
+ * 时间序列聚合函数
+ */
+enum class AggregationFunction {
+    SUM,                    // 求和
+    AVG,                    // 平均值
+    MIN,                    // 最小值
+    MAX,                    // 最大值
+    COUNT,                  // 计数
+    STDDEV,                 // 标准差
+    PERCENTILE_50,          // 50分位数
+    PERCENTILE_95,          // 95分位数
+    PERCENTILE_99           // 99分位数
+};
+
+/**
+ * 查询时间范围
+ */
+struct TimeRange {
+    std::chrono::system_clock::time_point start;
+    std::chrono::system_clock::time_point end;
+
+    TimeRange(std::chrono::system_clock::time_point s, std::chrono::system_clock::time_point e)
+        : start(s), end(e) {}
+
+    bool contains(std::chrono::system_clock::time_point ts) const {
+        return ts >= start && ts <= end;
+    }
+
+    std::chrono::system_clock::duration duration() const {
+        return end - start;
+    }
+};
+
+/**
+ * 时间序列数据存储
+ */
+class TimeSeriesStorage {
+private:
+    struct Chunk {
+        std::chrono::system_clock::time_point start_time;
+        std::chrono::system_clock::time_point end_time;
+        std::vector<TimeSeriesPoint> points;
+        size_t size_bytes;
+        bool is_compressed;
+
+        Chunk(std::chrono::system_clock::time_point start)
+            : start_time(start), end_time(start), size_bytes(0), is_compressed(false) {}
+
+        void addPoint(const TimeSeriesPoint& point) {
+            points.push_back(point);
+            end_time = point.timestamp;
+            size_bytes += sizeof(double) + point.tags.size() * 20;  // 简化计算
+        }
+
+        bool containsTime(std::chrono::system_clock::time_point ts) const {
+            return ts >= start_time && ts <= end_time;
+        }
+    };
+
+    std::string metric_name;
+    std::vector<std::unique_ptr<Chunk>> chunks;
+    size_t max_points_per_chunk;
+    std::chrono::system_clock::duration max_time_per_chunk;
+    std::mutex storage_mutex;
+
+public:
+    TimeSeriesStorage(const std::string& name, size_t max_points = 10000)
+        : metric_name(name), max_points_per_chunk(max_points),
+          max_time_per_chunk(std::chrono::hours(1)) {}
+
+    /**
+     * 添加数据点
+     * @param point 数据点
+     * @return 是否成功添加
+     */
+    bool addPoint(const TimeSeriesPoint& point) {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        // 获取或创建合适的chunk
+        Chunk* target_chunk = getOrCreateChunk(point.timestamp);
+
+        if (target_chunk) {
+            target_chunk->addPoint(point);
+
+            // 检查是否需要压缩
+            if (target_chunk->points.size() >= max_points_per_chunk) {
+                compressChunk(target_chunk);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * 查询数据
+     * @param time_range 时间范围
+     * @param tags_filter 标签过滤器
+     * @return 数据点列表
+     */
+    std::vector<TimeSeriesPoint> queryData(const TimeRange& time_range,
+                                         const std::unordered_map<std::string, std::string>& tags_filter = {}) {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        std::vector<TimeSeriesPoint> result;
+
+        // 查找相关的chunks
+        for (const auto& chunk : chunks) {
+            if (time_range.start <= chunk->end_time && time_range.end >= chunk->start_time) {
+                // chunk与查询范围有重叠，检查其中的点
+                for (const auto& point : chunk->points) {
+                    if (time_range.contains(point.timestamp)) {
+                        if (matchesTags(point.tags, tags_filter)) {
+                            result.push_back(point);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 按时间排序
+        std::sort(result.begin(), result.end(),
+                 [](const TimeSeriesPoint& a, const TimeSeriesPoint& b) {
+                     return a.timestamp < b.timestamp;
+                 });
+
+        return result;
+    }
+
+    /**
+     * 聚合查询
+     * @param time_range 时间范围
+     * @param agg_func 聚合函数
+     * @param interval 时间间隔
+     * @param tags_filter 标签过滤器
+     * @return 聚合结果
+     */
+    std::vector<TimeSeriesPoint> aggregateQuery(const TimeRange& time_range,
+                                               AggregationFunction agg_func,
+                                               std::chrono::system_clock::duration interval,
+                                               const std::unordered_map<std::string, std::string>& tags_filter = {}) {
+        auto raw_data = queryData(time_range, tags_filter);
+        if (raw_data.empty()) {
+            return {};
+        }
+
+        std::vector<TimeSeriesPoint> result;
+
+        // 按时间间隔分组
+        auto current_time = time_range.start;
+        while (current_time < time_range.end) {
+            auto interval_end = current_time + interval;
+
+            // 收集当前间隔内的数据点
+            std::vector<double> interval_values;
+            for (const auto& point : raw_data) {
+                if (point.timestamp >= current_time && point.timestamp < interval_end) {
+                    interval_values.push_back(point.value);
+                }
+            }
+
+            // 计算聚合值
+            double aggregated_value = calculateAggregation(interval_values, agg_func);
+
+            // 创建聚合数据点
+            TimeSeriesPoint agg_point(current_time + interval / 2, aggregated_value);  // 使用间隔中点作为时间戳
+            result.push_back(agg_point);
+
+            current_time = interval_end;
+        }
+
+        return result;
+    }
+
+    /**
+     * 下采样查询
+     * @param time_range 时间范围
+     * @param target_interval 目标间隔
+     * @param agg_func 聚合函数
+     * @return 下采样结果
+     */
+    std::vector<TimeSeriesPoint> downsample(const TimeRange& time_range,
+                                           std::chrono::system_clock::duration target_interval,
+                                           AggregationFunction agg_func = AggregationFunction::AVG) {
+        return aggregateQuery(time_range, agg_func, target_interval);
+    }
+
+    /**
+     * 获取存储统计信息
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, uint64_t> getStorageStats() {
+        std::lock_guard<std::mutex> lock(storage_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["total_chunks"] = chunks.size();
+        stats["total_points"] = 0;
+        stats["total_size_bytes"] = 0;
+        stats["compressed_chunks"] = 0;
+
+        for (const auto& chunk : chunks) {
+            stats["total_points"] += chunk->points.size();
+            stats["total_size_bytes"] += chunk->size_bytes;
+            if (chunk->is_compressed) {
+                stats["compressed_chunks"]++;
+            }
+        }
+
+        return stats;
+    }
+
+private:
+    /**
+     * 获取或创建chunk
+     */
+    Chunk* getOrCreateChunk(std::chrono::system_clock::time_point timestamp) {
+        // 查找合适的现有chunk
+        for (auto& chunk : chunks) {
+            if (chunk->containsTime(timestamp) &&
+                chunk->points.size() < max_points_per_chunk &&
+                (timestamp - chunk->start_time) < max_time_per_chunk) {
+                return chunk.get();
+            }
+        }
+
+        // 创建新chunk
+        auto new_chunk = std::make_unique<Chunk>(timestamp);
+        Chunk* result = new_chunk.get();
+        chunks.push_back(std::move(new_chunk));
+
+        return result;
+    }
+
+    /**
+     * 压缩chunk
+     */
+    void compressChunk(Chunk* chunk) {
+        if (chunk->is_compressed) {
+            return;
+        }
+
+        // 简化的压缩实现
+        // 实际系统中可以使用更复杂的压缩算法，如Gorilla压缩
+
+        // 简单的delta压缩
+        if (chunk->points.size() > 1) {
+            double prev_value = chunk->points[0].value;
+            for (size_t i = 1; i < chunk->points.size(); ++i) {
+                double delta = chunk->points[i].value - prev_value;
+                // 在实际系统中，这里会存储delta而不是原始值
+                prev_value = chunk->points[i].value;
+            }
+        }
+
+        chunk->is_compressed = true;
+        chunk->size_bytes = static_cast<size_t>(chunk->size_bytes * 0.6);  // 假设压缩率40%
+
+        std::cout << "Compressed chunk with " << chunk->points.size() << " points" << std::endl;
+    }
+
+    /**
+     * 检查标签匹配
+     */
+    bool matchesTags(const std::unordered_map<std::string, std::string>& point_tags,
+                    const std::unordered_map<std::string, std::string>& filter_tags) {
+        if (filter_tags.empty()) {
+            return true;
+        }
+
+        for (const auto& filter_pair : filter_tags) {
+            auto it = point_tags.find(filter_pair.first);
+            if (it == point_tags.end() || it->second != filter_pair.second) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * 计算聚合值
+     */
+    double calculateAggregation(const std::vector<double>& values, AggregationFunction func) {
+        if (values.empty()) {
+            return 0.0;
+        }
+
+        switch (func) {
+            case AggregationFunction::SUM:
+                return std::accumulate(values.begin(), values.end(), 0.0);
+            case AggregationFunction::AVG:
+                return std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+            case AggregationFunction::MIN:
+                return *std::min_element(values.begin(), values.end());
+            case AggregationFunction::MAX:
+                return *std::max_element(values.begin(), values.end());
+            case AggregationFunction::COUNT:
+                return static_cast<double>(values.size());
+            case AggregationFunction::STDDEV: {
+                double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+                double variance = 0.0;
+                for (double val : values) {
+                    variance += (val - mean) * (val - mean);
+                }
+                return std::sqrt(variance / values.size());
+            }
+            case AggregationFunction::PERCENTILE_50:
+                return calculatePercentile(values, 0.5);
+            case AggregationFunction::PERCENTILE_95:
+                return calculatePercentile(values, 0.95);
+            case AggregationFunction::PERCENTILE_99:
+                return calculatePercentile(values, 0.99);
+            default:
+                return 0.0;
+        }
+    }
+
+    /**
+     * 计算分位数
+     */
+    double calculatePercentile(const std::vector<double>& values, double percentile) {
+        if (values.empty()) {
+            return 0.0;
+        }
+
+        std::vector<double> sorted_values = values;
+        std::sort(sorted_values.begin(), sorted_values.end());
+
+        size_t index = static_cast<size_t>(percentile * (sorted_values.size() - 1));
+        return sorted_values[index];
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace ts_db;
+
+    // 创建时间序列存储
+    TimeSeriesStorage cpu_usage("cpu_usage", 1000);
+
+    // 生成测试数据
+    auto now = std::chrono::system_clock::now();
+    std::vector<std::string> hosts = {"host1", "host2", "host3"};
+    std::vector<std::string> regions = {"us-west", "us-east", "eu-west"};
+
+    for (int i = 0; i < 5000; ++i) {
+        auto timestamp = now + std::chrono::seconds(i);
+        double value = 30.0 + 20.0 * std::sin(i * 0.1) + (rand() % 100) / 10.0;  // 模拟CPU使用率
+
+        TimeSeriesPoint point(timestamp, value);
+        point.addTag("host", hosts[i % hosts.size()]);
+        point.addTag("region", regions[i % regions.size()]);
+        point.addTag("metric", "cpu_usage_percent");
+
+        cpu_usage.addPoint(point);
+    }
+
+    // 查询数据
+    std::cout << "\n=== Time Series Query Examples ===" << std::endl;
+
+    // 原始数据查询
+    TimeRange query_range(now + std::chrono::minutes(10), now + std::chrono::minutes(20));
+    auto raw_data = cpu_usage.queryData(query_range);
+
+    std::cout << "Raw data query returned " << raw_data.size() << " points" << std::endl;
+    if (!raw_data.empty()) {
+        std::cout << "First point: " << std::chrono::system_clock::to_time_t(raw_data[0].timestamp)
+                  << ", value: " << raw_data[0].value << std::endl;
+    }
+
+    // 标签过滤查询
+    std::unordered_map<std::string, std::string> tag_filter = {{"host", "host1"}};
+    auto filtered_data = cpu_usage.queryData(query_range, tag_filter);
+    std::cout << "Filtered query (host=host1) returned " << filtered_data.size() << " points" << std::endl;
+
+    // 聚合查询
+    auto aggregated_data = cpu_usage.aggregateQuery(
+        query_range, AggregationFunction::AVG, std::chrono::minutes(1));
+    std::cout << "1-minute average query returned " << aggregated_data.size() << " aggregated points" << std::endl;
+
+    if (!aggregated_data.empty()) {
+        std::cout << "Average values: ";
+        for (size_t i = 0; i < std::min(aggregated_data.size(), size_t(5)); ++i) {
+            std::cout << aggregated_data[i].value << " ";
+        }
+        std::cout << "..." << std::endl;
+    }
+
+    // 下采样查询
+    auto downsampled_data = cpu_usage.downsample(
+        TimeRange(now, now + std::chrono::hours(1)),
+        std::chrono::minutes(5), AggregationFunction::MAX);
+    std::cout << "5-minute max downsample returned " << downsampled_data.size() << " points" << std::endl;
+
+    // 显示存储统计
+    auto stats = cpu_usage.getStorageStats();
+    std::cout << "\n=== Time Series Storage Statistics ===" << std::endl;
+    for (const auto& stat : stats) {
+        std::cout << stat.first << ": " << stat.second << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 4. 实践练习
+
+### 练习1：实现完整的 HTAP 系统
+
+基于本节课的代码框架，实现一个完整的 HTAP 系统，包括事务处理引擎、分析处理引擎和智能查询路由。
+
+### 练习2：时序数据库性能优化
+
+实现时序数据库的高级功能，包括自动降采样、连续查询、告警触发和复杂的时间窗口分析。
+
+### 练习3：多模数据库实现
+
+设计并实现一个支持文档、图、时序和关系数据的多模数据库，统一查询接口和数据转换机制。
+
+### 练习4：HTAP 系统的负载隔离
+
+实现 HTAP 系统中的负载隔离技术，确保事务型和分析型工作负载相互不会影响性能。
+
+## 总结
+
+本节课我们深入学习了现代数据库系统的高级主题，包括：
+
+1. **NewSQL 数据库**：结合了传统关系数据库的 ACID 特性和 NoSQL 系统的可扩展性
+2. **HTAP 系统**：支持混合事务/分析处理的统一平台架构
+3. **内存计算技术**：高效的数据存储、压缩和查询处理
+4. **时序数据库**：专门处理时间序列数据的存储、查询和聚合技术
+5. **多模数据库**：支持多种数据模型的统一数据库系统
+
+这些技术代表了数据库系统的最新发展方向，它们试图解决传统数据库在扩展性、性能和功能多样性方面的限制。通过理解这些新技术，我们可以更好地设计和选择适合特定应用场景的数据库解决方案。
+
+在下一节课中，我们将继续学习数据库系统的高级主题，包括机器学习集成、区块链数据库和量子数据库等前沿技术。

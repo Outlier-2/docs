@@ -1,0 +1,525 @@
+---
+title: "第1讲：计算系统基础"
+description: "计算系统的层次结构、信息表示和数字系统基础"
+---
+
+# 第1讲：计算系统基础
+
+## 概述
+
+本讲介绍计算系统的基本概念，包括系统的层次结构、信息表示方法和数字系统的基础知识。作为计算机组成原理的入门，我们将建立理解现代计算机系统的基本框架。
+
+## 计算系统的层次结构
+
+### 抽象层次
+
+现代计算机系统采用分层设计，每一层为上层提供服务，同时使用下层提供的功能：
+
+```
+应用程序层 (Application Layer)
+    ↓
+系统软件层 (System Software Layer)
+    ↓
+指令集架构层 (ISA Layer)
+    ↓
+微架构层 (Microarchitecture Layer)
+    ↓
+逻辑设计层 (Logic Design Layer)
+    ↓
+电路层 (Circuit Layer)
+    ↓
+物理层 (Physical Layer)
+```
+
+### 各层功能详解
+
+**应用程序层**
+- 用户直接交互的软件
+- 例如：浏览器、办公软件、游戏
+- 通过系统调用访问底层服务
+
+**系统软件层**
+- 操作系统、编译器、解释器
+- 管理硬件资源，提供抽象接口
+- 例如：Linux、Windows、macOS
+
+**指令集架构层**
+- 处理器可见的编程接口
+- 定义指令格式、寄存器、内存访问
+- 例如：x86、ARM、RISC-V
+
+**微架构层**
+- ISA的具体实现
+- 流水线、缓存、分支预测等
+- 例如：Intel Core、Apple M系列
+
+**逻辑设计层**
+- 数据通路和控制单元
+- 使用逻辑门和触发器构建
+- 例如：ALU、寄存器文件
+
+**电路层**
+- CMOS电路实现
+- 逻辑门、传输门、存储单元
+- 例如：与非门、或非门、D触发器
+
+**物理层**
+- 半导体器件物理
+- 晶体管、导线、电容
+- 例如：MOSFET、互连线
+
+## 信息表示
+
+### 数字系统基础
+
+计算机使用二进制系统，所有信息都表示为0和1的组合。
+
+#### 位置记数法
+
+```python
+def binary_to_decimal(binary_str):
+    """将二进制字符串转换为十进制"""
+    decimal = 0
+    for i, bit in enumerate(reversed(binary_str)):
+        if bit == '1':
+            decimal += 2**i
+    return decimal
+
+def decimal_to_binary(decimal, bits=8):
+    """将十进制数转换为二进制字符串"""
+    if decimal == 0:
+        return '0' * bits
+    binary = ''
+    for i in range(bits-1, -1, -1):
+        if decimal >= 2**i:
+            binary += '1'
+            decimal -= 2**i
+        else:
+            binary += '0'
+    return binary
+
+# 示例使用
+print(binary_to_decimal('1010'))  # 输出: 10
+print(decimal_to_binary(10, 8))   # 输出: 00001010
+```
+
+#### 不同进制表示
+
+```python
+def convert_base(number, from_base, to_base):
+    """进制转换函数"""
+    # 先转换为十进制
+    decimal = 0
+    for digit in str(number):
+        decimal = decimal * from_base + int(digit)
+
+    # 从十进制转换到目标进制
+    if to_base == 1:
+        return '1' * decimal
+    elif to_base > 1:
+        result = ''
+        while decimal > 0:
+            result = str(decimal % to_base) + result
+            decimal = decimal // to_base
+        return result if result else '0'
+    return '0'
+
+# 示例：二进制转十六进制
+print(convert_base(1010, 2, 16))  # 输出: A
+```
+
+### 整数表示
+
+#### 无符号整数
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// 无符号整数操作
+void unsigned_int_demo() {
+    uint8_t num = 255;  // 8位无符号整数，范围：0-255
+
+    printf("8位无符号整数范围: 0 - %u\n", (uint8_t)~0);
+    printf("当前值: %u\n", num);
+
+    // 溢出示例
+    num++;
+    printf("溢出后: %u\n", num);  // 输出: 0
+}
+```
+
+#### 有符号整数（补码表示）
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// 补码表示和操作
+void signed_int_demo() {
+    int8_t num = -127;  // 8位有符号整数
+
+    printf("8位有符号整数范围: %d - %d\n", INT8_MIN, INT8_MAX);
+    printf("当前值: %d\n", num);
+
+    // 补码计算演示
+    int8_t a = 10, b = -5;
+    printf("%d + %d = %d\n", a, b, a + b);
+
+    // 溢出示例
+    int8_t x = 127, y = 1;
+    printf("%d + %d = %d\n", x, y, x + y);  // 溢出
+}
+```
+
+### 浮点数表示
+
+#### IEEE 754标准
+
+```python
+def float_to_ieee754(number):
+    """将浮点数转换为IEEE 754格式"""
+    import struct
+
+    # 单精度浮点数（32位）
+    packed = struct.pack('!f', number)
+    bits = ''.join(f'{byte:08b}' for byte in packed)
+
+    # 解析各部分
+    sign = bits[0]
+    exponent = bits[1:9]
+    mantissa = bits[9:]
+
+    return {
+        'sign': sign,
+        'exponent': exponent,
+        'mantissa': mantissa,
+        'binary': bits,
+        'hex': hex(struct.unpack('!I', packed)[0])
+    }
+
+# 示例
+print(float_to_ieee754(3.14))
+print(float_to_ieee754(-0.5))
+print(float_to_ieee754(1.0))
+```
+
+### 字符编码
+
+#### ASCII和Unicode
+
+```c
+#include <stdio.h>
+#include <wchar.h>
+#include <locale.h>
+
+void character_encoding_demo() {
+    // ASCII编码
+    char ascii_char = 'A';
+    printf("ASCII 'A': %d (0x%X)\n", ascii_char, ascii_char);
+
+    // Unicode UTF-8
+    setlocale(LC_ALL, "");
+    wchar_t unicode_char = L'中';
+    printf("Unicode '中': U+%04X\n", unicode_char);
+
+    // 字符串处理
+    const char* utf8_str = "Hello 世界";
+    printf("UTF-8字符串: %s\n", utf8_str);
+}
+```
+
+## 数据类型和大小
+
+### 基本数据类型
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+#include <limits.h>
+
+void data_types_demo() {
+    // 整数类型
+    printf("整数类型大小:\n");
+    printf("char: %zu bits\n", sizeof(char) * 8);
+    printf("short: %zu bits\n", sizeof(short) * 8);
+    printf("int: %zu bits\n", sizeof(int) * 8);
+    printf("long: %zu bits\n", sizeof(long) * 8);
+    printf("long long: %zu bits\n", sizeof(long long) * 8);
+
+    // 浮点类型
+    printf("\n浮点类型大小:\n");
+    printf("float: %zu bits\n", sizeof(float) * 8);
+    printf("double: %zu bits\n", sizeof(double) * 8);
+    printf("long double: %zu bits\n", sizeof(long double) * 8);
+
+    // 固定宽度类型
+    printf("\n固定宽度类型:\n");
+    printf("int8_t: %zu bits\n", sizeof(int8_t) * 8);
+    printf("int16_t: %zu bits\n", sizeof(int16_t) * 8);
+    printf("int32_t: %zu bits\n", sizeof(int32_t) * 8);
+    printf("int64_t: %zu bits\n", sizeof(int64_t) * 8);
+}
+```
+
+### 字节序（Endianness）
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+void endianness_demo() {
+    uint32_t num = 0x12345678;
+    uint8_t *bytes = (uint8_t *)&num;
+
+    printf("数值: 0x%08X\n", num);
+    printf("字节顺序:\n");
+
+    if (bytes[0] == 0x78) {
+        printf("小端序 (Little Endian)\n");
+        printf("字节0: 0x%02X, 字节1: 0x%02X, 字节2: 0x%02X, 字节3: 0x%02X\n",
+               bytes[0], bytes[1], bytes[2], bytes[3]);
+    } else if (bytes[0] == 0x12) {
+        printf("大端序 (Big Endian)\n");
+        printf("字节0: 0x%02X, 字节1: 0x%02X, 字节2: 0x%02X, 字节3: 0x%02X\n",
+               bytes[0], bytes[1], bytes[2], bytes[3]);
+    }
+}
+```
+
+## 计算机性能度量
+
+### 基本性能指标
+
+```python
+def performance_metrics(clock_speed, cpi, instruction_count):
+    """
+    计算计算机性能指标
+
+    Args:
+        clock_speed: 时钟频率 (Hz)
+        cpi: 每条指令的平均时钟周期数
+        instruction_count: 指令数量
+
+    Returns:
+        执行时间 (秒)
+    """
+    execution_time = (instruction_count * cpi) / clock_speed
+    return execution_time
+
+# 示例计算
+clock_ghz = 3.2e9  # 3.2 GHz
+cpi = 1.5
+instructions = 1e9  # 10亿条指令
+
+time_seconds = performance_metrics(clock_ghz, cpi, instructions)
+print(f"执行时间: {time_seconds:.4f} 秒")
+print(f"吞吐量: {instructions/time_seconds/1e6:.2f} MIPS")
+```
+
+### Amdahl定律
+
+```python
+def amdahl_speedup(serial_fraction, processors):
+    """
+    计算Amdahl定律下的加速比
+
+    Args:
+        serial_fraction: 串行部分比例 (0-1)
+        processors: 处理器数量
+
+    Returns:
+        理论加速比
+    """
+    parallel_fraction = 1 - serial_fraction
+    speedup = 1 / (serial_fraction + parallel_fraction / processors)
+    return speedup
+
+# 示例：90%并行化的程序
+serial_part = 0.1
+for n in [2, 4, 8, 16, 32, 64]:
+    speedup = amdahl_speedup(serial_part, n)
+    print(f"{n:2d} 处理器: 加速比 = {speedup:.2f}x")
+```
+
+## 实验项目：信息表示工具
+
+### 项目概述
+
+创建一个信息表示工具，能够：
+1. 在不同进制间转换
+2. 分析浮点数表示
+3. 演示字节序影响
+4. 计算性能指标
+
+### C实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <math.h>
+#include <inttypes.h>
+
+// 进制转换
+void base_conversion_demo() {
+    int decimal = 42;
+
+    printf("十进制 %d 的各种表示:\n", decimal);
+    printf("二进制: ");
+    for (int i = 31; i >= 0; i--) {
+        printf("%d", (decimal >> i) & 1);
+        if (i % 4 == 0) printf(" ");
+    }
+    printf("\n");
+
+    printf("八进制: %o\n", decimal);
+    printf("十六进制: %X\n", decimal);
+    printf("BCD码: ");
+    // BCD编码实现
+    int temp = decimal;
+    for (int i = 0; i < 8; i++) {
+        int digit = (temp / (int)pow(10, 7-i)) % 10;
+        printf("%04d ", digit);
+    }
+    printf("\n");
+}
+
+// 浮点数分析
+void float_analysis_demo() {
+    float f = 3.1415926;
+    uint32_t *bits = (uint32_t *)&f;
+
+    printf("浮点数 %f 的IEEE 754分析:\n", f);
+    printf("符号位: %d\n", (*bits >> 31) & 1);
+    printf("指数: %d (实际值: %d)\n", (*bits >> 23) & 0xFF,
+           ((*bits >> 23) & 0xFF) - 127);
+    printf("尾数: 0x%06X\n", *bits & 0x7FFFFF);
+
+    // 反向验证
+    float reconstructed = 1.0;
+    int exponent = ((*bits >> 23) & 0xFF) - 127;
+    uint32_t mantissa = *bits & 0x7FFFFF;
+
+    if (exponent != -127) {  // 非非规格化数
+        reconstructed = (1.0 + mantissa / (float)(1 << 23)) * pow(2, exponent);
+    }
+
+    if ((*bits >> 31) & 1) reconstructed = -reconstructed;
+
+    printf("重构值: %f\n", reconstructed);
+}
+
+// 性能计算器
+void performance_calculator() {
+    double clock_speed_ghz;
+    double cpi;
+    double instruction_count_billion;
+
+    printf("性能计算器\n");
+    printf("输入时钟频率 (GHz): ");
+    scanf("%lf", &clock_speed_ghz);
+    printf("输入CPI: ");
+    scanf("%lf", &cpi);
+    printf("输入指令数量 (十亿): ");
+    scanf("%lf", &instruction_count_billion);
+
+    double clock_speed_hz = clock_speed_ghz * 1e9;
+    double instructions = instruction_count_billion * 1e9;
+
+    double execution_time = (instructions * cpi) / clock_speed_hz;
+    double mips = instructions / (execution_time * 1e6);
+    double throughput = instructions / execution_time;
+
+    printf("\n计算结果:\n");
+    printf("执行时间: %.6f 秒\n", execution_time);
+    printf("MIPS: %.2f\n", mips);
+    printf("吞吐量: %.2e 指令/秒\n", throughput);
+}
+
+int main() {
+    printf("计算机组成原理 - 信息表示工具\n");
+    printf("================================\n\n");
+
+    while (1) {
+        printf("\n选择操作:\n");
+        printf("1. 进制转换演示\n");
+        printf("2. 浮点数分析\n");
+        printf("3. 性能计算器\n");
+        printf("4. 退出\n");
+        printf("选择: ");
+
+        int choice;
+        scanf("%d", &choice);
+
+        switch (choice) {
+            case 1:
+                base_conversion_demo();
+                break;
+            case 2:
+                float_analysis_demo();
+                break;
+            case 3:
+                performance_calculator();
+                break;
+            case 4:
+                return 0;
+            default:
+                printf("无效选择!\n");
+        }
+    }
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **层次结构理解**：解释为什么计算机系统需要分层设计？每层的抽象有什么好处？
+
+2. **进制转换**：
+   - 将二进制数 10110110 转换为十进制、八进制和十六进制
+   - 将十进制数 255.625 转换为二进制和十六进制
+
+3. **补码计算**：
+   - 计算 8 位补码表示中 -45 的二进制表示
+   - 计算 127 + (-1) 的结果（考虑溢出）
+
+4. **浮点数分析**：
+   - 分析浮点数 0.1 的 IEEE 754 表示
+   - 为什么 0.1 + 0.2 ≠ 0.3 在计算机中？
+
+### 编程练习
+
+1. **进制转换器**：编写一个程序，支持任意进制间的转换（2-36进制）
+
+2. **浮点数可视化**：创建一个工具，可视化浮点数的二进制表示
+
+3. **性能分析**：实现一个程序，计算不同算法的性能指标
+
+4. **字节序检测**：编写程序检测当前系统的字节序
+
+### 实验挑战
+
+1. **精确计算**：实现高精度计算库，支持大数运算
+
+2. **性能优化**：对给定的算法进行性能优化，分析优化效果
+
+3. **交叉平台**：创建在不同平台上运行的信息表示工具
+
+## 扩展阅读
+
+- **教材章节**：*Digital Design and Computer Architecture* 第1章
+- **在线资源**：
+  - [IEEE 754标准文档](https://ieeexplore.ieee.org/document/4610935)
+  - [二进制计算器在线工具](https://www.binaryconvert.com/)
+- **推荐视频**：
+  - [How Computers Calculate - the ALU (YouTube)](https://www.youtube.com/watch?v=1I5ZMmrOfnA)
+  - [Binary - How to Make a Computer (YouTube)](https://www.youtube.com/watch?v=Xpk67YzOn5w)
+
+---
+
+*下一讲将深入探讨数字电路基础，包括CMOS电路、布尔代数和逻辑门设计。*

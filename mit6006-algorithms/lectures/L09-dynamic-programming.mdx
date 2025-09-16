@@ -1,0 +1,3579 @@
+---
+title: "L09 - 动态规划"
+description: "深入学习动态规划算法，掌握最优子结构、重叠子问题、状态转移等核心概念，解决复杂优化问题"
+date: "2024-01-09"
+category: "算法"
+difficulty: "高级"
+tags: ["动态规划", "最优子结构", "状态转移", "背包问题", "字符串处理"]
+duration: "4小时"
+prerequisites: ["L03-基础数据结构", "L04-树与二叉搜索"]
+next: ["L10-字符串算法"]
+math: true
+interactive: true
+---
+
+import { CodeBlock } from '@/src/components/algorithm/CodeBlock';
+import { AlgorithmVisualizer } from '@/src/components/algorithm/AlgorithmVisualizer';
+import { ArrayVisualizer } from '@/src/components/algorithm/ArrayVisualizer';
+import { ComplexityAnalyzer } from '@/src/components/algorithm/ComplexityAnalyzer';
+import { TreeVisualizer } from '@/src/components/algorithm/TreeVisualizer';
+import { ExerciseBlock } from '@/src/components/algorithm/ExerciseBlock';
+
+# L09 - 动态规划
+
+## 学习目标
+
+通过本课程，你将：
+
+- 🔍 **掌握动态规划的基本原理和思想**，理解最优子结构和重叠子问题概念
+- 🧮 **学会识别和解决动态规划问题**，掌握问题分析和建模技巧
+- ⚡ **理解状态转移方程的设计方法**，能够构建高效的DP解决方案
+- 🌐 **能够应用动态规划解决复杂优化问题**，涵盖多个应用领域
+
+## 动态规划基础
+
+### 核心概念
+
+**动态规划**是一种解决复杂问题的强大方法，通过将问题分解为子问题并存储子问题的解来避免重复计算。
+
+#### 核心要素
+
+<AlgorithmVisualizer
+  title="动态规划核心要素"
+  algorithm="dp-concepts"
+  steps={[
+    {
+      title: "最优子结构",
+      content: "问题的最优解包含子问题的最优解",
+      formula: "OPT(n) = min{OPT(i) + cost(i,n) | i ∈ [0,n-1]}"
+    },
+    {
+      title: "重叠子问题",
+      content: "递归求解时会重复计算相同的子问题",
+      formula: "T(n) = Σ T(i) * T(n-i-1) 导致指数复杂度"
+    },
+    {
+      title: "状态定义",
+      content: "描述问题当前状况的变量组合",
+      formula: "dp[i][j] = f(i,j) 其中i,j为状态变量"
+    },
+    {
+      title: "状态转移",
+      content: "从一个状态到另一个状态的转换规则",
+      formula: "dp[i][j] = min{dp[i-1][j], dp[i][j-1], dp[i-1][j-1] + cost}"
+    },
+    {
+      title: "边界条件",
+      content: "问题的初始或终止条件",
+      formula: "dp[0][j] = 0, dp[i][0] = 0 (初始化)"
+    }
+  ]}
+/>
+
+### 解决动态规划问题的五步法
+
+<AlgorithmVisualizer
+  title="动态规划解题步骤"
+  algorithm="dp-steps"
+  steps={[
+    {
+      title: "1. 定义状态",
+      content: "确定描述问题的状态变量",
+      details: [
+        "识别问题的关键参数",
+        "确定状态空间的维度",
+        "选择合适的状态表示"
+      ],
+      example: "dp[i] = 前i个元素的最优解"
+    },
+    {
+      title: "2. 状态转移方程",
+      content: "找出状态之间的关系",
+      details: [
+        "分析决策的可能性",
+        "建立递推关系",
+        "确保无后效性"
+      ],
+      example: "dp[i] = min{dp[i-1], dp[i-2] + cost}"
+    },
+    {
+      title: "3. 边界条件",
+      content: "确定初始状态和终止状态",
+      details: [
+        "设置基础情况",
+        "处理边界情况",
+        "确保完整性"
+      ],
+      example: "dp[0] = 0, dp[1] = cost[0]"
+    },
+    {
+      title: "4. 计算顺序",
+      content: "确定状态的计算顺序",
+      details: [
+        "识别依赖关系",
+        "选择计算方向",
+        "避免循环依赖"
+      ],
+      example: "从小到大计算: dp[1] → dp[2] → ... → dp[n]"
+    },
+    {
+      title: "5. 空间优化",
+      content: "尽可能减少空间复杂度",
+      details: [
+        "识别可复用的空间",
+        "使用滚动数组",
+        "应用压缩技巧"
+      ],
+      example: "dp[i][j] → dp[j] (空间从O(n²)→O(n))"
+    }
+  ]}
+/>
+
+## 基础动态规划问题
+
+### 1. 斐波那契数列
+
+<CodeBlock
+  title="斐波那契数列的多种解法"
+  code={`def fibonacci_recursive(n: int) -> int:
+    """递归斐波那契数列
+
+    时间复杂度: O(2^n) - 指数级
+    空间复杂度: O(n) - 调用栈深度
+
+    问题: 大量重复计算，效率极低
+    """
+    if n <= 1:
+        return n
+    return fibonacci_recursive(n-1) + fibonacci_recursive(n-2)
+
+def fibonacci_memoization(n: int, memo=None) -> int:
+    """记忆化递归斐波那契数列
+
+    时间复杂度: O(n) - 每个子问题只计算一次
+    空间复杂度: O(n) - 存储所有子问题的解
+
+    改进: 避免重复计算，显著提升性能
+    """
+    if memo is None:
+        memo = {}
+    if n in memo:
+        return memo[n]
+    if n <= 1:
+        return n
+
+    memo[n] = fibonacci_memoization(n-1, memo) + fibonacci_memoization(n-2, memo)
+    return memo[n]
+
+def fibonacci_iterative(n: int) -> int:
+    """迭代斐波那契数列
+
+    时间复杂度: O(n) - 线性时间
+    空间复杂度: O(1) - 常数空间
+
+    优化: 消除递归开销，空间最优
+    """
+    if n <= 1:
+        return n
+
+    a, b = 0, 1
+    for _ in range(2, n + 1):
+        a, b = b, a + b
+
+    return b
+
+def fibonacci_matrix(n: int) -> int:
+    """矩阵快速幂斐波那契数列
+
+    时间复杂度: O(log n) - 对数时间
+    空间复杂度: O(1) - 常数空间
+
+    数学原理: 利用矩阵乘法的结合律
+    """
+    def matrix_multiply(a, b):
+        """2x2矩阵乘法"""
+        return [
+            [a[0][0] * b[0][0] + a[0][1] * b[1][0],
+             a[0][0] * b[0][1] + a[0][1] * b[1][1]
+        ], [
+            a[1][0] * b[0][0] + a[1][1] * b[1][0],
+             a[1][0] * b[0][1] + a[1][1] * b[1][1]
+        ]
+
+    def matrix_pow(mat, power):
+        """矩阵快速幂"""
+        result = [[1, 0], [0, 1]]  # 单位矩阵
+        while power > 0:
+            if power % 2 == 1:
+                result = matrix_multiply(result, mat)
+            mat = matrix_multiply(mat, mat)
+            power //= 2
+        return result
+
+    if n <= 1:
+        return n
+
+    # 斐波那契变换矩阵
+    mat = [[1, 1], [1, 0]]
+    result = matrix_pow(mat, n - 1)
+    return result[0][0]
+
+def fibonacci_mathematical(n: int) -> int:
+    """数学公式法（Binet's Formula）
+
+    时间复杂度: O(1) - 常数时间
+    空间复杂度: O(1) - 常数空间
+
+    注意: 浮点数精度限制，适合n较小时使用
+    """
+    import math
+    sqrt5 = math.sqrt(5)
+    phi = (1 + sqrt5) / 2
+    psi = (1 - sqrt5) / 2
+
+    return int((phi**n - psi**n) / sqrt5)`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 爬楼梯问题
+
+<CodeBlock
+  title="爬楼梯问题的多种变体"
+  code={`def climb_stairs(n: int) -> int:
+    """爬楼梯问题：每次可以爬1或2个台阶
+
+    状态定义: dp[i] = 爬到第i阶的方法数
+    状态转移: dp[i] = dp[i-1] + dp[i-2]
+    边界条件: dp[0] = 1, dp[1] = 1
+
+    时间复杂度: O(n)
+    空间复杂度: O(n)
+    """
+    if n <= 2:
+        return n
+
+    dp = [0] * (n + 1)
+    dp[0] = 1  # 地面
+    dp[1] = 1
+    dp[2] = 2
+
+    for i in range(3, n + 1):
+        dp[i] = dp[i-1] + dp[i-2]
+
+    return dp[n]
+
+def climb_stairs_optimized(n: int) -> int:
+    """空间优化的爬楼梯问题
+
+    空间复杂度: O(1) - 只需要常数空间
+    """
+    if n <= 2:
+        return n
+
+    a, b = 1, 2  # dp[1], dp[2]
+    for _ in range(3, n + 1):
+        a, b = b, a + b
+
+    return b
+
+def climb_stairs_general(n: int, steps: list) -> int:
+    """通用爬楼梯问题：每次可以爬steps中的任意步数
+
+    状态转移: dp[i] = Σ dp[i-step] for step in steps if i >= step
+
+    时间复杂度: O(n * k) - k为步数种类数
+    空间复杂度: O(n)
+    """
+    if n < 0:
+        return 0
+    if n == 0:
+        return 1
+
+    dp = [0] * (n + 1)
+    dp[0] = 1
+
+    for i in range(1, n + 1):
+        for step in steps:
+            if i >= step:
+                dp[i] += dp[i - step]
+
+    return dp[n]
+
+def climb_stairs_with_min_cost(cost: list) -> tuple:
+    """带最小成本的爬楼梯问题
+
+    状态定义: dp[i] = 爬到第i阶的最小成本
+    状态转移: dp[i] = min(dp[i-1], dp[i-2]) + cost[i]
+
+    Args:
+        cost: 每个台阶的成本数组
+
+    Returns:
+        (最小成本, 路径)
+    """
+    n = len(cost)
+    if n == 0:
+        return 0, []
+    if n == 1:
+        return cost[0], [0]
+
+    dp = [0] * n
+    path = [[] for _ in range(n)]
+
+    dp[0] = cost[0]
+    path[0] = [0]
+    dp[1] = cost[1]
+    path[1] = [1]
+
+    for i in range(2, n):
+        if dp[i-1] < dp[i-2]:
+            dp[i] = dp[i-1] + cost[i]
+            path[i] = path[i-1] + [i]
+        else:
+            dp[i] = dp[i-2] + cost[i]
+            path[i] = path[i-2] + [i]
+
+    # 可以选择从倒数第一阶或倒数第二阶结束
+    if dp[n-1] < dp[n-2]:
+        return dp[n-1], path[n-1]
+    else:
+        return dp[n-2], path[n-2]
+
+def climb_stairs_with_constraints(n: int, max_steps: int = 3) -> int:
+    """带步数限制的爬楼梯问题
+
+    每次最多爬max_steps个台阶
+
+    时间复杂度: O(n * max_steps)
+    空间复杂度: O(n)
+    """
+    if n <= 1:
+        return 1
+
+    dp = [0] * (n + 1)
+    dp[0] = 1
+
+    for i in range(1, n + 1):
+        for step in range(1, min(max_steps + 1, i + 1)):
+            dp[i] += dp[i - step]
+
+    return dp[n]`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 背包问题系列
+
+### 1. 0-1背包问题
+
+<CodeBlock
+  title="0-1背包问题完整实现"
+  code={`def zero_one_knapsack(weights: list, values: list, capacity: int) -> int:
+    """0-1背包问题基础版
+
+    状态定义: dp[i][j] = 前i个物品，容量为j时的最大价值
+    状态转移: dp[i][j] = max(dp[i-1][j], dp[i-1][j-weights[i-1]] + values[i-1])
+
+    时间复杂度: O(n * capacity)
+    空间复杂度: O(n * capacity)
+
+    Args:
+        weights: 物品重量列表
+        values: 物品价值列表
+        capacity: 背包容量
+
+    Returns:
+        最大价值
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    # dp[i][j] = 前i个物品，容量为j时的最大价值
+    dp = [[0] * (capacity + 1) for _ in range(n + 1)]
+
+    for i in range(1, n + 1):
+        for j in range(1, capacity + 1):
+            if weights[i-1] <= j:
+                # 可以选择第i个物品
+                dp[i][j] = max(dp[i-1][j],                             # 不选
+                             dp[i-1][j - weights[i-1]] + values[i-1])  # 选
+            else:
+                # 不能选择第i个物品
+                dp[i][j] = dp[i-1][j]
+
+    return dp[n][capacity]
+
+def zero_one_knapsack_optimized(weights: list, values: list, capacity: int) -> int:
+    """空间优化的0-1背包问题
+
+    空间复杂度: O(capacity) - 使用一维数组
+
+    注意: 必须逆序遍历容量，避免重复计算
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    dp = [0] * (capacity + 1)
+
+    for i in range(n):
+        # 逆序遍历，确保每个物品只使用一次
+        for j in range(capacity, weights[i] - 1, -1):
+            dp[j] = max(dp[j], dp[j - weights[i]] + values[i])
+
+    return dp[capacity]
+
+def zero_one_knapsack_with_items(weights: list, values: list, capacity: int) -> tuple:
+    """返回物品选择的0-1背包问题
+
+    Returns:
+        (最大价值, 选择的物品索引列表)
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0, []
+
+    dp = [[0] * (capacity + 1) for _ in range(n + 1)]
+
+    # 填充DP表
+    for i in range(1, n + 1):
+        for j in range(1, capacity + 1):
+            if weights[i-1] <= j:
+                dp[i][j] = max(dp[i-1][j],
+                             dp[i-1][j - weights[i-1]] + values[i-1])
+            else:
+                dp[i][j] = dp[i-1][j]
+
+    # 重构选择的物品
+    selected_items = []
+    total_value = dp[n][capacity]
+    remaining_capacity = capacity
+
+    for i in range(n, 0, -1):
+        if dp[i][remaining_capacity] != dp[i-1][remaining_capacity]:
+            selected_items.append(i-1)
+            remaining_capacity -= weights[i-1]
+
+    selected_items.reverse()
+    return total_value, selected_items
+
+def zero_one_knapsack_branch_and_bound(weights: list, values: list, capacity: int) -> tuple:
+    """分支限界法解决0-1背包问题
+
+    适用于大规模问题，可能比DP更快
+
+    Returns:
+        (最大价值, 选择的物品索引列表)
+    """
+    import heapq
+
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0, []
+
+    # 计算价值密度并排序
+    items = list(zip(weights, values, range(n)))
+    items.sort(key=lambda x: x[1]/x[0], reverse=True)
+
+    def greedy_bound(current_weight, current_value, start_idx):
+        """计算贪心上界"""
+        bound = current_value
+        remaining_weight = capacity - current_weight
+
+        for i in range(start_idx, n):
+            weight, value, idx = items[i]
+            if weight <= remaining_weight:
+                bound += value
+                remaining_weight -= weight
+            else:
+                bound += value * remaining_weight / weight
+                break
+
+        return bound
+
+    # 优先队列 (负价值用于最大堆)
+    heap = []
+    heapq.heappush(heap, (-greedy_bound(0, 0, 0), 0, 0, 0, []))
+
+    best_value = 0
+    best_items = []
+
+    while heap:
+        _, level, current_weight, current_value, selected, _ = heapq.heappop(heap)
+
+        if current_value > best_value:
+            best_value = current_value
+            best_items = selected.copy()
+
+        if level == n:
+            continue
+
+        # 剪枝：如果当前上界小于已知最优解，跳过
+        bound = greedy_bound(current_weight, current_value, level)
+        if bound <= best_value:
+            continue
+
+        weight, value, idx = items[level]
+
+        # 不选择当前物品
+        heapq.heappush(heap, (-greedy_bound(current_weight, current_value, level + 1),
+                           level + 1, current_weight, current_value, selected.copy()))
+
+        # 选择当前物品
+        if current_weight + weight <= capacity:
+            new_selected = selected + [idx]
+            heapq.heappush(heap, (-greedy_bound(current_weight + weight, current_value + value, level + 1),
+                               level + 1, current_weight + weight, current_value + value, new_selected))
+
+    return best_value, best_items
+
+def zero_one_knapsack_multiple_constraints(weights: list, values: list, costs: list,
+                                        capacity: int, budget: int) -> tuple:
+    """多约束0-1背包问题
+
+    同时考虑重量约束和成本约束
+
+    状态定义: dp[i][j][k] = 前i个物品，重量j，成本k时的最大价值
+
+    时间复杂度: O(n * capacity * budget)
+    空间复杂度: O(n * capacity * budget)
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0 or budget == 0:
+        return 0, []
+
+    # 三维DP表
+    dp = [[[0] * (budget + 1) for _ in range(capacity + 1)] for _ in range(n + 1)]
+
+    for i in range(1, n + 1):
+        for j in range(capacity + 1):
+            for k in range(budget + 1):
+                if weights[i-1] <= j and costs[i-1] <= k:
+                    dp[i][j][k] = max(dp[i-1][j][k],
+                                    dp[i-1][j-weights[i-1]][k-costs[i-1]] + values[i-1])
+                else:
+                    dp[i][j][k] = dp[i-1][j][k]
+
+    # 重构解
+    selected_items = []
+    remaining_capacity = capacity
+    remaining_budget = budget
+
+    for i in range(n, 0, -1):
+        if (weights[i-1] <= remaining_capacity and
+            costs[i-1] <= remaining_budget and
+            dp[i][remaining_capacity][remaining_budget] !=
+            dp[i-1][remaining_capacity][remaining_budget]):
+
+            selected_items.append(i-1)
+            remaining_capacity -= weights[i-1]
+            remaining_budget -= costs[i-1]
+
+    selected_items.reverse()
+    return dp[n][capacity][budget], selected_items`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 完全背包问题
+
+<CodeBlock
+  title="完全背包问题及其变体"
+  code={`def unbounded_knapsack(weights: list, values: list, capacity: int) -> int:
+    """完全背包问题：物品可以重复选择
+
+    状态转移: dp[j] = max(dp[j], dp[j-weights[i]] + values[i])
+
+    时间复杂度: O(n * capacity)
+    空间复杂度: O(capacity)
+
+    注意: 正序遍历容量，允许重复选择
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    dp = [0] * (capacity + 1)
+
+    for i in range(n):
+        # 正序遍历，允许重复选择
+        for j in range(weights[i], capacity + 1):
+            dp[j] = max(dp[j], dp[j - weights[i]] + values[i])
+
+    return dp[capacity]
+
+def unbounded_knapsack_optimized(weights: list, values: list, capacity: int) -> int:
+    """优化的完全背包问题
+
+    通过分解物品数量优化
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    dp = [0] * (capacity + 1)
+
+    for i in range(n):
+        # 计算每个物品最多可以选择多少次
+        max_count = capacity // weights[i]
+
+        # 二进制分解
+        k = 1
+        while k <= max_count:
+            current_weight = k * weights[i]
+            current_value = k * values[i]
+
+            # 逆序处理，当作0-1背包
+            for j in range(capacity, current_weight - 1, -1):
+                dp[j] = max(dp[j], dp[j - current_weight] + current_value)
+
+            max_count -= k
+            k *= 2
+
+        if max_count > 0:
+            current_weight = max_count * weights[i]
+            current_value = max_count * values[i]
+            for j in range(capacity, current_weight - 1, -1):
+                dp[j] = max(dp[j], dp[j - current_weight] + current_value)
+
+    return dp[capacity]
+
+def unbounded_knapsack_with_counts(weights: list, values: list, capacity: int) -> tuple:
+    """返回物品数量的完全背包问题
+
+    Returns:
+        (最大价值, 物品选择计数)
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0, []
+
+    dp = [0] * (capacity + 1)
+    count = [0] * (capacity + 1)
+    item_used = [[] for _ in range(capacity + 1)]
+
+    for j in range(1, capacity + 1):
+        for i in range(n):
+            if weights[i] <= j:
+                if dp[j] < dp[j - weights[i]] + values[i]:
+                    dp[j] = dp[j - weights[i]] + values[i]
+                    item_used[j] = item_used[j - weights[i]] + [i]
+
+    # 统计物品使用次数
+    from collections import Counter
+    item_counts = Counter(item_used[capacity])
+
+    return dp[capacity], dict(item_counts)
+
+def unbounded_knapsack_min_coins(coins: list, amount: int) -> tuple:
+    """硬币找零问题：最少硬币数
+
+    特殊的完全背包问题：求最小值而非最大值
+
+    Returns:
+        (最少硬币数, 硬币组合)
+    """
+    if amount == 0:
+        return 0, []
+
+    # dp[i] = 组成金额i的最少硬币数
+    dp = [float('inf')] * (amount + 1)
+    dp[0] = 0
+
+    # 记录选择的硬币
+    coin_used = [[] for _ in range(amount + 1)]
+
+    for coin in coins:
+        for j in range(coin, amount + 1):
+            if dp[j] > dp[j - coin] + 1:
+                dp[j] = dp[j - coin] + 1
+                coin_used[j] = coin_used[j - coin] + [coin]
+
+    if dp[amount] == float('inf'):
+        return -1, []
+
+    return dp[amount], coin_used[amount]
+
+def unbounded_knapsack_max_combinations(coins: list, amount: int) -> int:
+    """硬币找零问题：组合总数
+
+    Returns:
+        组合总数
+    """
+    if amount == 0:
+        return 1
+
+    # dp[i] = 组成金额i的组合数
+    dp = [0] * (amount + 1)
+    dp[0] = 1
+
+    for coin in coins:
+        for j in range(coin, amount + 1):
+            dp[j] += dp[j - coin]
+
+    return dp[amount]
+
+def unbounded_knapsack_fractional(values: list, weights: list, capacity: int) -> tuple:
+    """分数背包问题（贪心算法）
+
+    物品可以分割，使用贪心而非DP
+
+    Returns:
+        (最大价值, 选择方案)
+    """
+    n = len(values)
+    if n == 0 or capacity == 0:
+        return 0, []
+
+    # 计算价值密度并排序
+    items = [(values[i] / weights[i], values[i], weights[i], i)
+             for i in range(n)]
+    items.sort(key=lambda x: x[0], reverse=True)
+
+    total_value = 0
+    remaining_capacity = capacity
+    selected_items = []
+
+    for density, value, weight, idx in items:
+        if weight <= remaining_capacity:
+            # 完整选择
+            total_value += value
+            remaining_capacity -= weight
+            selected_items.append((idx, 1.0))
+        else:
+            # 部分选择
+            fraction = remaining_capacity / weight
+            total_value += value * fraction
+            selected_items.append((idx, fraction))
+            break
+
+    return total_value, selected_items`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 3. 多重背包问题
+
+<CodeBlock
+  title="多重背包问题实现"
+  code={`def multiple_knapsack(weights: list, values: list, counts: list, capacity: int) -> int:
+    """多重背包问题：每个物品有数量限制
+
+    状态定义: dp[j] = 容量为j时的最大价值
+
+    时间复杂度: O(n * capacity * log(max_count))
+    空间复杂度: O(capacity)
+
+    Args:
+        weights: 物品重量列表
+        values: 物品价值列表
+        counts: 物品数量列表
+        capacity: 背包容量
+
+    Returns:
+        最大价值
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    dp = [0] * (capacity + 1)
+
+    for i in range(n):
+        # 将多重背包转换为0-1背包（二进制优化）
+        num = min(counts[i], capacity // weights[i])
+        k = 1
+
+        while k <= num:
+            # 分解为2的幂次
+            current_weight = k * weights[i]
+            current_value = k * values[i]
+
+            # 逆序处理
+            for j in range(capacity, current_weight - 1, -1):
+                dp[j] = max(dp[j], dp[j - current_weight] + current_value)
+
+            num -= k
+            k *= 2
+
+        # 处理剩余部分
+        if num > 0:
+            current_weight = num * weights[i]
+            current_value = num * values[i]
+            for j in range(capacity, current_weight - 1, -1):
+                dp[j] = max(dp[j], dp[j - current_weight] + current_value)
+
+    return dp[capacity]
+
+def multiple_knapsack_with_items(weights: list, values: list, counts: list,
+                                capacity: int) -> tuple:
+    """返回物品选择的多重背包问题
+
+    Returns:
+        (最大价值, 物品选择列表)
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0, []
+
+    # 展开物品列表
+    expanded_weights = []
+    expanded_values = []
+    item_mapping = []  # 记录原始物品索引
+
+    for i in range(n):
+        count = min(counts[i], capacity // weights[i])
+        # 二进制展开
+        k = 1
+        while k <= count:
+            expanded_weights.append(k * weights[i])
+            expanded_values.append(k * values[i])
+            item_mapping.append((i, k))
+            count -= k
+            k *= 2
+        if count > 0:
+            expanded_weights.append(count * weights[i])
+            expanded_values.append(count * values[i])
+            item_mapping.append((i, count))
+
+    # 使用0-1背包求解
+    m = len(expanded_weights)
+    dp = [0] * (capacity + 1)
+    selected_expanded = []
+
+    for i in range(m):
+        for j in range(capacity, expanded_weights[i] - 1, -1):
+            if dp[j] < dp[j - expanded_weights[i]] + expanded_values[i]:
+                dp[j] = dp[j - expanded_weights[i]] + expanded_values[i]
+
+    # 重构选择的物品
+    remaining_capacity = capacity
+    result_items = []
+
+    for i in range(m - 1, -1, -1):
+        if remaining_capacity >= expanded_weights[i]:
+            if dp[remaining_capacity] == dp[remaining_capacity - expanded_weights[i]] + expanded_values[i]:
+                result_items.append(item_mapping[i])
+                remaining_capacity -= expanded_weights[i]
+
+    # 合并相同物品
+    final_items = {}
+    for original_idx, count in result_items:
+        if original_idx in final_items:
+            final_items[original_idx] += count
+        else:
+            final_items[original_idx] = count
+
+    return dp[capacity], final_items
+
+def multiple_knapsack_monotonic_queue(weights: list, values: list, counts: list,
+                                    capacity: int) -> int:
+    """单调队列优化的多重背包问题
+
+    适用于物品价值较大的情况
+
+    时间复杂度: O(n * capacity)
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    dp = [0] * (capacity + 1)
+
+    for i in range(n):
+        weight = weights[i]
+        value = values[i]
+        count = counts[i]
+
+        # 对每个余数分别处理
+        for remainder in range(weight):
+            # 使用单调队列优化
+            from collections import deque
+            q = deque()
+
+            # 枚举倍数
+            max_multiple = (capacity - remainder) // weight
+            for k in range(max_multiple + 1):
+                current_j = remainder + k * weight
+                current_value = dp[current_j] - k * value
+
+                # 维护单调队列
+                while q and current_value >= q[-1][1]:
+                    q.pop()
+                q.append((k, current_value))
+
+                # 移除超出数量限制的元素
+                while q and q[0][0] < k - count:
+                    q.popleft()
+
+                # 更新DP值
+                if q:
+                    dp[current_j] = q[0][1] + k * value
+
+    return dp[capacity]
+
+def multiple_knapsack_hybrid(weights: list, values: list, counts: list,
+                            capacity: int) -> int:
+    """混合优化的多重背包问题
+
+    根据问题特征选择合适的优化策略
+    """
+    n = len(weights)
+    if n == 0 or capacity == 0:
+        return 0
+
+    # 根据物品数量和容量选择策略
+    total_items = sum(counts)
+
+    if total_items * capacity > 10**7:  # 大规模问题
+        return multiple_knapsack_monotonic_queue(weights, values, counts, capacity)
+    elif max(counts) > 100:  # 数量较多的物品
+        return multiple_knapsack(weights, values, counts, capacity)
+    else:  # 小规模问题
+        return multiple_knapsack_with_items(weights, values, counts, capacity)[0]`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 字符串动态规划
+
+### 1. 最长公共子序列 (LCS)
+
+<CodeBlock
+  title="最长公共子序列完整实现"
+  code={`def longest_common_subsequence(text1: str, text2: str) -> int:
+    """最长公共子序列长度
+
+    状态定义: dp[i][j] = text1前i个字符和text2前j个字符的LCS长度
+    状态转移:
+        if text1[i-1] == text2[j-1]: dp[i][j] = dp[i-1][j-1] + 1
+        else: dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(text1), len(text2)
+
+    # dp[i][j] = text1前i个字符和text2前j个字符的LCS长度
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if text1[i-1] == text2[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+
+    return dp[m][n]
+
+def longest_common_subsequence_with_sequence(text1: str, text2: str) -> tuple:
+    """返回最长公共子序列
+
+    Returns:
+        (LCS长度, LCS字符串)
+    """
+    m, n = len(text1), len(text2)
+
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+
+    # 填充DP表
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if text1[i-1] == text2[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+
+    # 重构LCS
+    lcs = []
+    i, j = m, n
+
+    while i > 0 and j > 0:
+        if text1[i-1] == text2[j-1]:
+            lcs.append(text1[i-1])
+            i -= 1
+            j -= 1
+        elif dp[i-1][j] > dp[i][j-1]:
+            i -= 1
+        else:
+            j -= 1
+
+    lcs.reverse()
+    return dp[m][n], ''.join(lcs)
+
+def longest_common_subsequence_optimized(text1: str, text2: str) -> int:
+    """空间优化的LCS
+
+    空间复杂度: O(min(m, n))
+    """
+    if len(text1) < len(text2):
+        text1, text2 = text2, text1
+
+    m, n = len(text1), len(text2)
+    prev = [0] * (n + 1)
+    curr = [0] * (n + 1)
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if text1[i-1] == text2[j-1]:
+                curr[j] = prev[j-1] + 1
+            else:
+                curr[j] = max(prev[j], curr[j-1])
+        prev, curr = curr, prev
+
+    return prev[n]
+
+def longest_common_subsequence_k_strings(strings: list) -> int:
+    """k个字符串的最长公共子序列
+
+    时间复杂度: O(k * n * m * p...) - 指数级复杂度
+    空间复杂度: O(n * m * p...)
+
+    适用于少量短字符串
+    """
+    if not strings:
+        return 0
+
+    k = len(strings)
+    lengths = [len(s) for s in strings]
+
+    # 创建k维DP数组
+    # dp[i1][i2]...[ik] = 各字符串前i1,i2,...,ik个字符的LCS长度
+    dp_shape = [length + 1 for length in lengths]
+
+    def get_dp_value(indices):
+        """获取指定索引的DP值"""
+        if any(idx == 0 for idx in indices):
+            return 0
+
+        # 检查所有字符是否相同
+        chars = [strings[i][indices[i]-1] for i in range(k)]
+        if len(set(chars)) == 1:
+            # 所有字符相同
+            prev_indices = [idx - 1 for idx in indices]
+            return get_dp_value(prev_indices) + 1
+        else:
+            # 字符不同，尝试减少各个字符串的长度
+            max_value = 0
+            for i in range(k):
+                if indices[i] > 0:
+                    temp_indices = indices.copy()
+                    temp_indices[i] -= 1
+                    max_value = max(max_value, get_dp_value(temp_indices))
+            return max_value
+
+    # 使用记忆化避免重复计算
+    memo = {}
+
+    def get_dp_value_memo(indices):
+        key = tuple(indices)
+        if key in memo:
+            return memo[key]
+
+        if any(idx == 0 for idx in indices):
+            memo[key] = 0
+            return 0
+
+        chars = [strings[i][indices[i]-1] for i in range(k)]
+        if len(set(chars)) == 1:
+            prev_indices = [idx - 1 for idx in indices]
+            result = get_dp_value_memo(prev_indices) + 1
+        else:
+            max_value = 0
+            for i in range(k):
+                if indices[i] > 0:
+                    temp_indices = indices.copy()
+                    temp_indices[i] -= 1
+                    max_value = max(max_value, get_dp_value_memo(temp_indices))
+            result = max_value
+
+        memo[key] = result
+        return result
+
+    initial_indices = lengths.copy()
+    return get_dp_value_memo(initial_indices)
+
+def longest_common_subsequence_parallel(text1: str, text2: str) -> int:
+    """并行化的LCS算法
+
+    利用对角线并行计算
+    """
+    m, n = len(text1), len(text2)
+
+    if m == 0 or n == 0:
+        return 0
+
+    # 使用对角线计算
+    total_diagonals = m + n - 1
+
+    def compute_diagonal(diag):
+        """计算对角线"""
+        results = {}
+
+        # 确定对角线的范围
+        if diag < m:
+            start_i = diag
+            start_j = 0
+        else:
+            start_i = m - 1
+            start_j = diag - m + 1
+
+        i, j = start_i, start_j
+
+        while i >= 0 and j < n:
+            if text1[i] == text2[j]:
+                if i > 0 and j > 0:
+                    prev_key = (i-1, j-1)
+                    if prev_key in results:
+                        results[(i, j)] = results[prev_key] + 1
+                    else:
+                        results[(i, j)] = 1
+                else:
+                    results[(i, j)] = 1
+            else:
+                up = results.get((i-1, j), 0) if i > 0 else 0
+                left = results.get((i, j-1), 0) if j > 0 else 0
+                results[(i, j)] = max(up, left)
+
+            i -= 1
+            j += 1
+
+        return results
+
+    # 顺序计算各对角线（实际并行环境可用多线程）
+    all_results = {}
+    for diag in range(total_diagonals):
+        diagonal_results = compute_diagonal(diag)
+        all_results.update(diagonal_results)
+
+    return all_results.get((m-1, n-1), 0)
+
+def longest_common_subsequence_with_gaps(text1: str, text2: str, max_gap: int) -> int:
+    """允许间隙的最长公共子序列
+
+    允许连续不匹配的字符数不超过max_gap
+
+    状态定义: dp[i][j][g] = text1前i个字符，text2前j个字符，当前间隙g的LCS长度
+    """
+    m, n = len(text1), len(text2)
+
+    # dp[i][j][g] = 前i个字符，前j个字符，当前间隙为g的LCS长度
+    dp = [[[0] * (max_gap + 1) for _ in range(n + 1)] for _ in range(m + 1)]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            for g in range(max_gap + 1):
+                if text1[i-1] == text2[j-1]:
+                    # 字符匹配，重置间隙
+                    dp[i][j][0] = dp[i-1][j-1][g] + 1
+                else:
+                    # 字符不匹配，增加间隙
+                    if g < max_gap:
+                        dp[i][j][g + 1] = dp[i-1][j-1][g]
+                    # 或跳过其中一个字符
+                    dp[i][j][g] = max(dp[i-1][j][g], dp[i][j-1][g])
+
+    return max(dp[m][n][g] for g in range(max_gap + 1))`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 最长递增子序列 (LIS)
+
+<CodeBlock
+  title="最长递增子序列多种解法"
+  code={`def longest_increasing_subsequence(nums: list) -> int:
+    """最长递增子序列长度 - O(n²)解法
+
+    状态定义: dp[i] = 以nums[i]结尾的最长递增子序列长度
+    状态转移: dp[i] = max(dp[j] + 1) for j < i and nums[j] < nums[i]
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n)
+    """
+    if not nums:
+        return 0
+
+    n = len(nums)
+    dp = [1] * n
+
+    for i in range(1, n):
+        for j in range(i):
+            if nums[i] > nums[j]:
+                dp[i] = max(dp[i], dp[j] + 1)
+
+    return max(dp)
+
+def longest_increasing_subsequence_optimized(nums: list) -> int:
+    """优化的LIS - O(n log n)解法
+
+    使用二分查找维护有序数组
+
+    时间复杂度: O(n log n)
+    空间复杂度: O(n)
+    """
+    if not nums:
+        return 0
+
+    tails = []  # tails[i] = 长度为i+1的递增子序列的最小末尾
+
+    for num in nums:
+        # 使用二分查找找到插入位置
+        left, right = 0, len(tails)
+        while left < right:
+            mid = (left + right) // 2
+            if tails[mid] < num:
+                left = mid + 1
+            else:
+                right = mid
+
+        if left == len(tails):
+            tails.append(num)
+        else:
+            tails[left] = num
+
+    return len(tails)
+
+def longest_increasing_subsequence_with_sequence(nums: list) -> tuple:
+    """返回最长递增子序列
+
+    Returns:
+        (LIS长度, LIS序列)
+    """
+    if not nums:
+        return 0, []
+
+    n = len(nums)
+    dp = [1] * n
+    prev = [-1] * n  # 记录前驱
+
+    for i in range(1, n):
+        for j in range(i):
+            if nums[i] > nums[j] and dp[i] < dp[j] + 1:
+                dp[i] = dp[j] + 1
+                prev[i] = j
+
+    max_length = max(dp)
+    max_index = dp.index(max_length)
+
+    # 重构LIS
+    lis = []
+    current = max_index
+    while current != -1:
+        lis.append(nums[current])
+        current = prev[current]
+
+    lis.reverse()
+    return max_length, lis
+
+def longest_increasing_subsequence_strict(nums: list) -> int:
+    """严格递增子序列（不允许相等）"""
+    if not nums:
+        return 0
+
+    tails = []
+    for num in nums:
+        left, right = 0, len(tails)
+        while left < right:
+            mid = (left + right) // 2
+            if tails[mid] < num:
+                left = mid + 1
+            else:
+                right = mid
+
+        if left == len(tails):
+            tails.append(num)
+        else:
+            tails[left] = num
+
+    return len(tails)
+
+def longest_increasing_subsequence_non_strict(nums: list) -> int:
+    """非严格递增子序列（允许相等）"""
+    if not nums:
+        return 0
+
+    tails = []
+    for num in nums:
+        left, right = 0, len(tails)
+        while left < right:
+            mid = (left + right) // 2
+            if tails[mid] <= num:
+                left = mid + 1
+            else:
+                right = mid
+
+        if left == len(tails):
+            tails.append(num)
+        else:
+            tails[left] = num
+
+    return len(tails)
+
+def longest_increasing_subsequence_circular(nums: list) -> int:
+    """循环数组的最长递增子序列
+
+    数组可以循环移动，求最长递增子序列
+
+    时间复杂度: O(n²)
+    """
+    if not nums:
+        return 0
+
+    n = len(nums)
+    max_length = 0
+
+    # 尝试每个起始点
+    for start in range(n):
+        # 构建循环数组
+        circular = nums[start:] + nums[:start]
+
+        # 计算这个起始点的LIS
+        dp = [1] * n
+        for i in range(1, n):
+            for j in range(i):
+                if circular[i] > circular[j]:
+                    dp[i] = max(dp[i], dp[j] + 1)
+
+        max_length = max(max_length, max(dp))
+
+    return max_length
+
+def longest_increasing_subsequence_2d(matrix: list) -> int:
+    """二维数组的最长递增子序列
+
+    在二维网格中找到最长的递增路径
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    if not matrix or not matrix[0]:
+        return 0
+
+    m, n = len(matrix), len(matrix[0])
+    dp = [[0] * n for _ in range(m)]
+    directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+
+    def dfs(i, j):
+        if dp[i][j] != 0:
+            return dp[i][j]
+
+        max_length = 1
+        for di, dj in directions:
+            ni, nj = i + di, j + dj
+            if 0 <= ni < m and 0 <= nj < n and matrix[ni][nj] > matrix[i][j]:
+                max_length = max(max_length, dfs(ni, nj) + 1)
+
+        dp[i][j] = max_length
+        return max_length
+
+    result = 0
+    for i in range(m):
+        for j in range(n):
+            result = max(result, dfs(i, j))
+
+    return result
+
+def longest_increasing_subsequence_kth(nums: list, k: int) -> int:
+    """第k长的递增子序列
+
+    找到第k长的递增子序列的长度
+
+    时间复杂度: O(n²)
+    """
+    if not nums or k <= 0:
+        return 0
+
+    n = len(nums)
+
+    # 计算以每个位置结尾的LIS长度
+    dp = [1] * n
+    for i in range(1, n):
+        for j in range(i):
+            if nums[i] > nums[j]:
+                dp[i] = max(dp[i], dp[j] + 1)
+
+    # 统计每个长度的出现次数
+    length_counts = {}
+    for length in dp:
+        length_counts[length] = length_counts.get(length, 0) + 1
+
+    # 按长度排序
+    sorted_lengths = sorted(length_counts.keys(), reverse=True)
+
+    # 找到第k长的长度
+    cumulative_count = 0
+    for length in sorted_lengths:
+        cumulative_count += length_counts[length]
+        if cumulative_count >= k:
+            return length
+
+    return 0  # k超过总数`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 3. 编辑距离
+
+<CodeBlock
+  title="编辑距离及其变体"
+  code={`def min_edit_distance(word1: str, word2: str) -> int:
+    """最小编辑距离（Levenshtein距离）
+
+    状态定义: dp[i][j] = word1前i个字符转换为word2前j个字符的最小编辑距离
+    状态转移:
+        if word1[i-1] == word2[j-1]: dp[i][j] = dp[i-1][j-1]
+        else: dp[i][j] = min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + 1)
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(word1), len(word2)
+
+    # dp[i][j] = word1前i个字符转换为word2前j个字符的最小编辑距离
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+
+    # 初始化
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = min(
+                    dp[i-1][j] + 1,    # 删除
+                    dp[i][j-1] + 1,    # 插入
+                    dp[i-1][j-1] + 1   # 替换
+                )
+
+    return dp[m][n]
+
+def min_edit_distance_with_operations(word1: str, word2: str) -> tuple:
+    """返回编辑操作的编辑距离
+
+    Returns:
+        (编辑距离, 操作序列)
+    """
+    m, n = len(word1), len(word2)
+
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    operations = [[None] * (n + 1) for _ in range(m + 1)]
+
+    # 初始化
+    for i in range(m + 1):
+        dp[i][0] = i
+        operations[i][0] = f"删除{i}次" if i > 0 else ""
+    for j in range(n + 1):
+        dp[0][j] = j
+        operations[0][j] = f"插入{j}次" if j > 0 else ""
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+                operations[i][j] = operations[i-1][j-1]
+            else:
+                delete_cost = dp[i-1][j] + 1
+                insert_cost = dp[i][j-1] + 1
+                replace_cost = dp[i-1][j-1] + 1
+
+                if delete_cost <= insert_cost and delete_cost <= replace_cost:
+                    dp[i][j] = delete_cost
+                    operations[i][j] = operations[i-1][j] + f" 删除'{word1[i-1]}'"
+                elif insert_cost <= delete_cost and insert_cost <= replace_cost:
+                    dp[i][j] = insert_cost
+                    operations[i][j] = operations[i][j-1] + f" 插入'{word2[j-1]}'"
+                else:
+                    dp[i][j] = replace_cost
+                    operations[i][j] = operations[i-1][j-1] + f" 替换'{word1[i-1]}'为'{word2[j-1]}'"
+
+    return dp[m][n], operations[m][n].strip()
+
+def min_edit_distance_optimized(word1: str, word2: str) -> int:
+    """空间优化的编辑距离
+
+    空间复杂度: O(min(m, n))
+    """
+    if len(word1) < len(word2):
+        word1, word2 = word2, word1
+
+    m, n = len(word1), len(word2)
+    prev = list(range(n + 1))
+    curr = [0] * (n + 1)
+
+    for i in range(1, m + 1):
+        curr[0] = i
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                curr[j] = prev[j-1]
+            else:
+                curr[j] = min(prev[j], curr[j-1], prev[j-1]) + 1
+        prev, curr = curr, prev
+
+    return prev[n]
+
+def damerau_levenshtein_distance(word1: str, word2: str) -> int:
+    """Damerau-Levenshtein距离
+
+    允许相邻字符的交换操作
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(word1), len(word2)
+
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+
+    # 初始化
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+            else:
+                dp[i][j] = min(
+                    dp[i-1][j] + 1,    # 删除
+                    dp[i][j-1] + 1,    # 插入
+                    dp[i-1][j-1] + 1   # 替换
+                )
+
+            # 检查相邻字符交换
+            if i > 1 and j > 1 and word1[i-1] == word2[j-2] and word1[i-2] == word2[j-1]:
+                dp[i][j] = min(dp[i][j], dp[i-2][j-2] + 1)  # 交换
+
+    return dp[m][n]
+
+def longest_common_substring(word1: str, word2: str) -> int:
+    """最长公共子串
+
+    注意：与子序列不同，子串要求连续
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(word1), len(word2)
+
+    # dp[i][j] = 以word1[i-1]和word2[j-1]结尾的最长公共子串长度
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    max_length = 0
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+                max_length = max(max_length, dp[i][j])
+            else:
+                dp[i][j] = 0
+
+    return max_length
+
+def fuzzy_string_matching(pattern: str, text: str, threshold: float = 0.8) -> list:
+    """模糊字符串匹配
+
+    在文本中找到与模式相似的子串
+
+    Args:
+        pattern: 模式字符串
+        text: 文本字符串
+        threshold: 相似度阈值 (0-1)
+
+    Returns:
+        匹配位置列表 [(start, end, similarity), ...]
+    """
+    m, n = len(pattern), len(text)
+    matches = []
+
+    if m == 0 or n == 0:
+        return matches
+
+    # 滑动窗口计算相似度
+    max_window_size = min(m * 2, n)
+
+    for window_size in range(max(1, m // 2), max_window_size + 1):
+        for start in range(n - window_size + 1):
+            window = text[start:start + window_size]
+
+            # 计算编辑距离
+            edit_dist = min_edit_distance(pattern, window)
+            max_len = max(len(pattern), window_size)
+            similarity = 1 - edit_dist / max_len
+
+            if similarity >= threshold:
+                matches.append((start, start + window_size - 1, similarity))
+
+    # 按相似度排序
+    matches.sort(key=lambda x: x[2], reverse=True)
+
+    # 去重（重叠的匹配保留相似度最高的）
+    unique_matches = []
+    for match in matches:
+        is_overlap = False
+        for existing in unique_matches:
+            if not (match[1] < existing[0] or match[0] > existing[1]):
+                is_overlap = True
+                break
+        if not is_overlap:
+            unique_matches.append(match)
+
+    return unique_matches
+
+def edit_distance_parallel(word1: str, word2: str) -> int:
+    """并行化的编辑距离算法
+
+    利用对角线并行计算
+    """
+    m, n = len(word1), len(word2)
+
+    if m == 0:
+        return n
+    if n == 0:
+        return m
+
+    # 使用对角线计算
+    total_diagonals = m + n - 1
+
+    def compute_diagonal(diag):
+        """计算对角线"""
+        results = {}
+
+        if diag < m:
+            start_i = diag
+            start_j = 0
+        else:
+            start_i = m - 1
+            start_j = diag - m + 1
+
+        i, j = start_i, start_j
+
+        while i >= 0 and j < n:
+            if i == 0:
+                results[(i, j)] = j
+            elif j == 0:
+                results[(i, j)] = i
+            else:
+                if word1[i] == word2[j]:
+                    results[(i, j)] = results.get((i-1, j-1), 0)
+                else:
+                    results[(i, j)] = min(
+                        results.get((i-1, j), float('inf')),
+                        results.get((i, j-1), float('inf')),
+                        results.get((i-1, j-1), float('inf'))
+                    ) + 1
+
+            i -= 1
+            j += 1
+
+        return results
+
+    # 顺序计算各对角线（实际并行环境可用多线程）
+    all_results = {}
+    for diag in range(total_diagonals):
+        diagonal_results = compute_diagonal(diag)
+        all_results.update(diagonal_results)
+
+    return all_results.get((m-1, n-1), m + n)`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 区间动态规划
+
+### 1. 矩阵链乘法
+
+<CodeBlock
+  title="矩阵链乘法实现"
+  code={`def matrix_chain_order(dimensions: list) -> tuple:
+    """矩阵链乘法最优括号化
+
+    输入: dimensions = [m0, m1, m2, ..., mn] 表示n个矩阵的维度
+    其中矩阵Ai的维度为 dimensions[i-1] × dimensions[i]
+
+    状态定义: dp[i][j] = 矩阵i到矩阵j的最小乘法次数
+    状态转移: dp[i][j] = min{dp[i][k] + dp[k+1][j] + dimensions[i] * dimensions[k+1] * dimensions[j+1]}
+
+    时间复杂度: O(n³)
+    空间复杂度: O(n²)
+
+    Returns:
+        (最小乘法次数, 最优括号化字符串)
+    """
+    n = len(dimensions) - 1  # 矩阵数量
+
+    # dp[i][j] = 矩阵i到矩阵j的最小乘法次数
+    dp = [[0] * n for _ in range(n)]
+    # split[i][j] = 最优分割点
+    split = [[0] * n for _ in range(n)]
+
+    for length in range(2, n + 1):  # 链长度
+        for i in range(n - length + 1):
+            j = i + length - 1
+            dp[i][j] = float('inf')
+
+            for k in range(i, j):
+                cost = (dp[i][k] + dp[k+1][j] +
+                       dimensions[i] * dimensions[k+1] * dimensions[j+1])
+
+                if cost < dp[i][j]:
+                    dp[i][j] = cost
+                    split[i][j] = k
+
+    # 重构最优括号化
+    def construct_optimal_parenthesis(i, j):
+        """递归构造最优括号化"""
+        if i == j:
+            return f"A{i+1}"
+        else:
+            k = split[i][j]
+            left = construct_optimal_parenthesis(i, k)
+            right = construct_optimal_parenthesis(k+1, j)
+            return f"({left} × {right})"
+
+    optimal_order = construct_optimal_parenthesis(0, n-1)
+
+    return dp[0][n-1], optimal_order
+
+def matrix_chain_multiplication(matrices: list, dimensions: list) -> tuple:
+    """实际执行矩阵链乘法
+
+    Args:
+        matrices: 矩阵列表
+        dimensions: 维度列表
+
+    Returns:
+        (最小乘法次数, 最优括号化, 结果矩阵)
+    """
+    min_multiplications, optimal_order = matrix_chain_order(dimensions)
+
+    def parse_parenthesis(expression):
+        """解析括号表达式"""
+        if expression[0] != '(':
+            # 单个矩阵
+            matrix_idx = int(expression[1:]) - 1
+            return matrices[matrix_idx]
+        else:
+            # 找到主运算符
+            balance = 0
+            for i, char in enumerate(expression):
+                if char == '(':
+                    balance += 1
+                elif char == ')':
+                    balance -= 1
+                elif char == '×' and balance == 1:
+                    left_expr = expression[1:i]
+                    right_expr = expression[i+2:-1]
+
+                    left_matrix = parse_parenthesis(left_expr)
+                    right_matrix = parse_parenthesis(right_expr)
+
+                    # 执行矩阵乘法
+                    return multiply_matrices(left_matrix, right_matrix)
+
+    def multiply_matrices(A, B):
+        """矩阵乘法"""
+        if isinstance(A, list) and isinstance(B, list):
+            m = len(A)
+            p = len(A[0])
+            n = len(B[0])
+            result = [[0] * n for _ in range(m)]
+
+            for i in range(m):
+                for j in range(n):
+                    for k in range(p):
+                        result[i][j] += A[i][k] * B[k][j]
+
+            return result
+        else:
+            # 简化处理：返回矩阵维度
+            return (A[0], B[1]) if isinstance(A, tuple) and isinstance(B, tuple) else A
+
+    # 解析并计算最优乘法顺序
+    result_matrix = parse_parenthesis(optimal_order)
+
+    return min_multiplications, optimal_order, result_matrix
+
+def matrix_chain_order_with_cache(dimensions: list) -> tuple:
+    """带缓存的矩阵链乘法
+
+    缓存中间结果，避免重复计算
+    """
+    n = len(dimensions) - 1
+
+    # 使用记忆化
+    memo = {}
+    split_memo = {}
+
+    def solve(i, j):
+        """解决子问题 [i, j]"""
+        if (i, j) in memo:
+            return memo[(i, j)], split_memo[(i, j)]
+
+        if i == j:
+            memo[(i, j)] = 0
+            split_memo[(i, j)] = i
+            return 0, i
+
+        min_cost = float('inf')
+        best_split = i
+
+        for k in range(i, j):
+            cost = (solve(i, k)[0] + solve(k+1, j)[0] +
+                   dimensions[i] * dimensions[k+1] * dimensions[j+1])
+
+            if cost < min_cost:
+                min_cost = cost
+                best_split = k
+
+        memo[(i, j)] = min_cost
+        split_memo[(i, j)] = best_split
+        return min_cost, best_split
+
+    min_cost, _ = solve(0, n-1)
+
+    # 构造最优括号化
+    def construct_parenthesis(i, j):
+        if i == j:
+            return f"A{i+1}"
+        else:
+            k = split_memo[(i, j)]
+            left = construct_parenthesis(i, k)
+            right = construct_parenthesis(k+1, j)
+            return f"({left} × {right})"
+
+    optimal_order = construct_parenthesis(0, n-1)
+    return min_cost, optimal_order
+
+def matrix_chain_parallel(dimensions: list) -> tuple:
+    """并行化的矩阵链乘法
+
+    利用动态规划的可并行性质
+    """
+    n = len(dimensions) - 1
+
+    if n == 0:
+        return 0, ""
+
+    # dp[i][j] = 矩阵i到矩阵j的最小乘法次数
+    dp = [[0] * n for _ in range(n)]
+    split = [[0] * n for _ in range(n)]
+
+    # 按链长度并行计算
+    for length in range(2, n + 1):
+        # 同一长度的子问题可以并行计算
+        subproblems = []
+
+        for i in range(n - length + 1):
+            j = i + length - 1
+            subproblems.append((i, j))
+
+        # 并行计算每个子问题（实际环境用多线程）
+        for i, j in subproblems:
+            dp[i][j] = float('inf')
+
+            for k in range(i, j):
+                cost = (dp[i][k] + dp[k+1][j] +
+                       dimensions[i] * dimensions[k+1] * dimensions[j+1])
+
+                if cost < dp[i][j]:
+                    dp[i][j] = cost
+                    split[i][j] = k
+
+    # 构造最优括号化
+    def construct_optimal_parenthesis(i, j):
+        if i == j:
+            return f"A{i+1}"
+        else:
+            k = split[i][j]
+            left = construct_optimal_parenthesis(i, k)
+            right = construct_optimal_parenthesis(k+1, j)
+            return f"({left} × {right})"
+
+    optimal_order = construct_optimal_parenthesis(0, n-1)
+    return dp[0][n-1], optimal_order
+
+def matrix_chain_approximate(dimensions: list, approximation_factor: float = 1.1) -> tuple:
+    """近似矩阵链乘法算法
+
+    使用贪心策略获得近似解
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    n = len(dimensions) - 1
+
+    if n == 0:
+        return 0, ""
+
+    # 贪心策略：每次选择乘法代价最小的分割
+    dp = [[0] * n for _ in range(n)]
+    split = [[0] * n for _ in range(n)]
+
+    for length in range(2, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+
+            # 找到代价最小的分割
+            min_cost = float('inf')
+            best_k = i
+
+            for k in range(i, j):
+                cost = (dimensions[i] * dimensions[k+1] * dimensions[j+1])
+                if cost < min_cost:
+                    min_cost = cost
+                    best_k = k
+
+            dp[i][j] = dp[i][best_k] + dp[best_k+1][j] + min_cost
+            split[i][j] = best_k
+
+    # 构造括号化
+    def construct_parenthesis(i, j):
+        if i == j:
+            return f"A{i+1}"
+        else:
+            k = split[i][j]
+            left = construct_parenthesis(i, k)
+            right = construct_parenthesis(k+1, j)
+            return f"({left} × {right})"
+
+    optimal_order = construct_parenthesis(0, n-1)
+    return dp[0][n-1], optimal_order
+
+def matrix_chain_with_constraints(dimensions: list, max_intermediate_size: int) -> tuple:
+    """带中间结果大小约束的矩阵链乘法
+
+    限制中间矩阵的行×列不超过max_intermediate_size
+
+    Returns:
+        (最小乘法次数, 最优括号化) 或 (None, None) 如果无解
+    """
+    n = len(dimensions) - 1
+
+    # dp[i][j] = (最小乘法次数, 最大中间尺寸)
+    dp = [[(float('inf'), float('inf'))] * n for _ in range(n)]
+    split = [[0] * n for _ in range(n)]
+
+    # 初始化
+    for i in range(n):
+        dp[i][i] = (0, dimensions[i] * dimensions[i+1])
+
+    for length in range(2, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+
+            min_cost = float('inf')
+            best_split = i
+            max_intermediate = float('inf')
+
+            for k in range(i, j):
+                left_cost, left_size = dp[i][k]
+                right_cost, right_size = dp[k+1][j]
+
+                # 计算当前分割的代价和中间尺寸
+                current_cost = left_cost + right_cost + dimensions[i] * dimensions[k+1] * dimensions[j+1]
+                current_intermediate = max(left_size, right_size, dimensions[i] * dimensions[j+1])
+
+                if (current_intermediate <= max_intermediate_size and
+                    current_cost < min_cost):
+                    min_cost = current_cost
+                    best_split = k
+                    max_intermediate = current_intermediate
+
+            if min_cost != float('inf'):
+                dp[i][j] = (min_cost, max_intermediate)
+                split[i][j] = best_split
+            else:
+                # 无可行解
+                return None, None
+
+    # 构造括号化
+    def construct_parenthesis(i, j):
+        if i == j:
+            return f"A{i+1}"
+        else:
+            k = split[i][j]
+            left = construct_parenthesis(i, k)
+            right = construct_parenthesis(k+1, j)
+            return f"({left} × {right})"
+
+    if dp[0][n-1][0] != float('inf'):
+        optimal_order = construct_parenthesis(0, n-1)
+        return dp[0][n-1][0], optimal_order
+    else:
+        return None, None`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 最长回文子串
+
+<CodeBlock
+  title="最长回文子串算法"
+  code={`def longest_palindromic_substring(s: str) -> str:
+    """最长回文子串 - 标准DP解法
+
+    状态定义: dp[i][j] = s[i:j+1]是否为回文
+    状态转移:
+        if s[i] == s[j] and (j-i <= 1 or dp[i+1][j-1]): dp[i][j] = True
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    if not s:
+        return ""
+
+    n = len(s)
+    # dp[i][j] = s[i:j+1]是否为回文
+    dp = [[False] * n for _ in range(n)]
+    start = 0
+    max_length = 1
+
+    # 所有长度为1的子串都是回文
+    for i in range(n):
+        dp[i][i] = True
+
+    # 检查长度为2的子串
+    for i in range(n - 1):
+        if s[i] == s[i + 1]:
+            dp[i][i + 1] = True
+            start = i
+            max_length = 2
+
+    # 检查长度大于2的子串
+    for length in range(3, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+
+            if s[i] == s[j] and dp[i + 1][j - 1]:
+                dp[i][j] = True
+                if length > max_length:
+                    start = i
+                    max_length = length
+
+    return s[start:start + max_length]
+
+def longest_palindromic_substring_optimized(s: str) -> str:
+    """空间优化的最长回文子串
+
+    使用中心扩展法
+
+    时间复杂度: O(n²)
+    空间复杂度: O(1)
+    """
+    if not s:
+        return ""
+
+    def expand_around_center(left, right):
+        """从中心扩展"""
+        while left >= 0 and right < len(s) and s[left] == s[right]:
+            left -= 1
+            right += 1
+        return right - left - 1
+
+    start = 0
+    end = 0
+
+    for i in range(len(s)):
+        len1 = expand_around_center(i, i)      # 奇数长度
+        len2 = expand_around_center(i, i + 1)  # 偶数长度
+        max_len = max(len1, len2)
+
+        if max_len > end - start:
+            start = i - (max_len - 1) // 2
+            end = i + max_len // 2
+
+    return s[start:end + 1]
+
+def longest_palindromic_substring_manacher(s: str) -> str:
+    """Manacher算法 - 最优解法
+
+    时间复杂度: O(n)
+    空间复杂度: O(n)
+    """
+    if not s:
+        return ""
+
+    # 预处理字符串，插入特殊字符
+    processed = '#' + '#'.join(s) + '#'
+    n = len(processed)
+
+    # P[i] = 以i为中心的最长回文半径
+    P = [0] * n
+
+    center = 0  # 当前中心
+    right = 0   # 当前右边界
+
+    max_center = 0  # 最长回文的中心
+    max_radius = 0   # 最长回文的半径
+
+    for i in range(n):
+        # 利用对称性
+        mirror = 2 * center - i
+
+        if i < right:
+            P[i] = min(right - i, P[mirror])
+
+        # 中心扩展
+        left_boundary = i - (P[i] + 1)
+        right_boundary = i + (P[i] + 1)
+
+        while (left_boundary >= 0 and right_boundary < n and
+               processed[left_boundary] == processed[right_boundary]):
+            P[i] += 1
+            left_boundary -= 1
+            right_boundary += 1
+
+        # 更新中心和右边界
+        if i + P[i] > right:
+            center = i
+            right = i + P[i]
+
+        # 更新最长回文
+        if P[i] > max_radius:
+            max_radius = P[i]
+            max_center = i
+
+    # 重构原始字符串中的最长回文
+    start = (max_center - max_radius) // 2
+    length = max_radius
+
+    return s[start:start + length]
+
+def longest_palindromic_subsequence(s: str) -> str:
+    """最长回文子序列
+
+    注意：与子串不同，子序列不要求连续
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    if not s:
+        return ""
+
+    n = len(s)
+    # dp[i][j] = s[i:j+1]的最长回文子序列长度
+    dp = [[0] * n for _ in range(n)]
+
+    # 长度为1的子序列
+    for i in range(n):
+        dp[i][i] = 1
+
+    # 填充DP表
+    for length in range(2, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+
+            if s[i] == s[j]:
+                if length == 2:
+                    dp[i][j] = 2
+                else:
+                    dp[i][j] = dp[i+1][j-1] + 2
+            else:
+                dp[i][j] = max(dp[i+1][j], dp[i][j-1])
+
+    # 重构LPS
+    def reconstruct_lps(i, j):
+        """重构最长回文子序列"""
+        if i > j:
+            return ""
+        if i == j:
+            return s[i]
+        if s[i] == s[j]:
+            return s[i] + reconstruct_lps(i+1, j-1) + s[j]
+        elif dp[i+1][j] > dp[i][j-1]:
+            return reconstruct_lps(i+1, j)
+        else:
+            return reconstruct_lps(i, j-1)
+
+    return reconstruct_lps(0, n-1)
+
+def count_palindromic_substrings(s: str) -> int:
+    """统计回文子串数量
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    if not s:
+        return 0
+
+    n = len(s)
+    dp = [[False] * n for _ in range(n)]
+    count = 0
+
+    # 单字符回文
+    for i in range(n):
+        dp[i][i] = True
+        count += 1
+
+    # 双字符回文
+    for i in range(n - 1):
+        if s[i] == s[i + 1]:
+            dp[i][i + 1] = True
+            count += 1
+
+    # 长度大于2的回文
+    for length in range(3, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+            if s[i] == s[j] and dp[i + 1][j - 1]:
+                dp[i][j] = True
+                count += 1
+
+    return count
+
+def count_palindromic_substrings_optimized(s: str) -> int:
+    """优化的回文子串统计
+
+    使用中心扩展法
+
+    时间复杂度: O(n²)
+    空间复杂度: O(1)
+    """
+    if not s:
+        return 0
+
+    n = len(s)
+    count = 0
+
+    def expand_around_center(left, right):
+        """从中心扩展，统计回文数量"""
+        local_count = 0
+        while left >= 0 and right < n and s[left] == s[right]:
+            local_count += 1
+            left -= 1
+            right += 1
+        return local_count
+
+    for i in range(n):
+        # 奇数长度回文
+        count += expand_around_center(i, i)
+        # 偶数长度回文
+        count += expand_around_center(i, i + 1)
+
+    return count
+
+def shortest_palindrome(s: str) -> str:
+    """最短回文（通过前面添加字符）
+
+    找到最长的回文前缀，然后将剩余部分反转添加到前面
+
+    时间复杂度: O(n)
+    空间复杂度: O(n)
+    """
+    if not s:
+        return ""
+
+    # 找到最长的回文前缀
+    def is_palindrome(sub):
+        return sub == sub[::-1]
+
+    for i in range(len(s), 0, -1):
+        if is_palindrome(s[:i]):
+            # 将剩余部分反转添加到前面
+            return s[i:][::-1] + s
+
+    return s[::-1] + s  # 如果没有回文前缀（除了单个字符）
+
+def palindrome_partitioning(s: str) -> list:
+    """回文分割
+
+    将字符串分割成若干回文子串的所有可能方式
+
+    时间复杂度: O(n * 2^n)
+    空间复杂度: O(n)
+    """
+    if not s:
+        return [[]]
+
+    n = len(s)
+    # 预处理回文信息
+    is_pal = [[False] * n for _ in range(n)]
+
+    # 单字符回文
+    for i in range(n):
+        is_pal[i][i] = True
+
+    # 双字符回文
+    for i in range(n - 1):
+        is_pal[i][i + 1] = (s[i] == s[i + 1])
+
+    # 长度大于2的回文
+    for length in range(3, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+            is_pal[i][j] = (s[i] == s[j] and is_pal[i + 1][j - 1])
+
+    result = []
+
+    def backtrack(start, path):
+        """回溯搜索所有分割方案"""
+        if start == n:
+            result.append(path[:])
+            return
+
+        for end in range(start, n):
+            if is_pal[start][end]:
+                path.append(s[start:end + 1])
+                backtrack(end + 1, path)
+                path.pop()
+
+    backtrack(0, [])
+    return result
+
+def min_palindrome_partitioning(s: str) -> int:
+    """最小回文分割次数
+
+    将字符串分割成回文子串的最少分割次数
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    if not s:
+        return 0
+
+    n = len(s)
+    # 预处理回文信息
+    is_pal = [[False] * n for _ in range(n)]
+
+    for i in range(n):
+        is_pal[i][i] = True
+
+    for i in range(n - 1):
+        is_pal[i][i + 1] = (s[i] == s[i + 1])
+
+    for length in range(3, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+            is_pal[i][j] = (s[i] == s[j] and is_pal[i + 1][j - 1])
+
+    # dp[i] = s[0:i+1]的最小分割次数
+    dp = [float('inf')] * n
+
+    for i in range(n):
+        if is_pal[0][i]:
+            dp[i] = 0
+        else:
+            for j in range(i):
+                if is_pal[j + 1][i]:
+                    dp[i] = min(dp[i], dp[j] + 1)
+
+    return dp[n - 1]`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 股票买卖问题
+
+<CodeBlock
+  title="股票买卖问题系列"
+  code={`def max_profit_one_transaction(prices: list) -> int:
+    """买卖股票的最佳时机（只允许一次交易）
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    min_price = prices[0]
+    max_profit = 0
+
+    for price in prices[1:]:
+        max_profit = max(max_profit, price - min_price)
+        min_price = min(min_price, price)
+
+    return max_profit
+
+def max_profit_unlimited_transactions(prices: list) -> int:
+    """买卖股票的最佳时机（允许无限次交易）
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    max_profit = 0
+
+    for i in range(1, len(prices)):
+        if prices[i] > prices[i-1]:
+            max_profit += prices[i] - prices[i-1]
+
+    return max_profit
+
+def max_profit_k_transactions(prices: list, k: int) -> int:
+    """买卖股票的最佳时机（最多k次交易）
+
+    时间复杂度: O(n * k)
+    空间复杂度: O(n * k)
+    """
+    if not prices or k == 0:
+        return 0
+
+    n = len(prices)
+
+    # 如果k >= n/2，相当于无限次交易
+    if k >= n // 2:
+        return max_profit_unlimited_transactions(prices)
+
+    # dp[i][j] = 最多i次交易，在第j天的最大利润
+    dp = [[0] * n for _ in range(k + 1)]
+
+    for i in range(1, k + 1):
+        max_diff = -prices[0]
+        for j in range(1, n):
+            dp[i][j] = max(dp[i][j-1], prices[j] + max_diff)
+            max_diff = max(max_diff, dp[i-1][j-1] - prices[j])
+
+    return dp[k][n-1]
+
+def max_profit_with_cooldown(prices: list) -> int:
+    """买卖股票的最佳时机（包含冷却期）
+
+    冷却期：卖出后第二天不能买入
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    # hold[i] = 第i天持有股票的最大收益
+    # sold[i] = 第i天卖出股票的最大收益
+    # rest[i] = 第i天休息的最大收益
+    hold = sold = rest = -float('inf')
+
+    for price in prices:
+        prev_hold = hold
+        prev_sold = sold
+        prev_rest = rest
+
+        # 当前持有：继续保持持有 或 之前休息今天买入
+        hold = max(prev_hold, prev_rest - price)
+        # 当前卖出：之前持有今天卖出
+        sold = prev_hold + price
+        # 当前休息：之前休息 或 之前卖出
+        rest = max(prev_rest, prev_sold)
+
+    return max(sold, rest)
+
+def max_profit_with_fee(prices: list, fee: int) -> int:
+    """买卖股票的最佳时机（包含手续费）
+
+    每次交易需要支付手续费
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    # cash[i] = 第i天不持有股票的最大收益
+    # hold[i] = 第i天持有股票的最大收益
+    cash, hold = 0, -prices[0]
+
+    for i in range(1, len(prices)):
+        # 不持有：继续保持不持有 或 卖出股票
+        cash = max(cash, hold + prices[i] - fee)
+        # 持有：继续保持持有 或 买入股票
+        hold = max(hold, cash - prices[i])
+
+    return cash
+
+def max_profit_with_cooldown_and_fee(prices: list, fee: int) -> int:
+    """买卖股票的最佳时机（包含冷却期和手续费）
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    # hold[i] = 第i天持有股票的最大收益
+    # sold[i] = 第i天卖出股票的最大收益
+    # rest[i] = 第i天休息的最大收益
+    hold = sold = rest = -float('inf')
+
+    for price in prices:
+        prev_hold = hold
+        prev_sold = sold
+        prev_rest = rest
+
+        # 当前持有：继续保持持有 或 之前休息今天买入
+        hold = max(prev_hold, prev_rest - price)
+        # 当前卖出：之前持有今天卖出
+        sold = prev_hold + price - fee
+        # 当前休息：之前休息 或 之前卖出
+        rest = max(prev_rest, prev_sold)
+
+    return max(sold, rest)
+
+def max_profit_ii_at_most_two_transactions(prices: list) -> int:
+    """买卖股票的最佳时机III（最多两次交易）
+
+    时间复杂度: O(n)
+    空间复杂度: O(1)
+    """
+    if not prices:
+        return 0
+
+    # 第一次交易
+    first_buy = -prices[0]
+    first_sell = 0
+
+    # 第二次交易
+    second_buy = -prices[0]
+    second_sell = 0
+
+    for i in range(1, len(prices)):
+        # 第一次交易
+        first_buy = max(first_buy, -prices[i])
+        first_sell = max(first_sell, first_buy + prices[i])
+
+        # 第二次交易
+        second_buy = max(second_buy, first_sell - prices[i])
+        second_sell = max(second_sell, second_buy + prices[i])
+
+    return second_sell
+
+def max_profit_iii_at_most_k_transactions(prices: list, k: int) -> int:
+    """买卖股票的最佳时机IV（最多k次交易）- 优化版
+
+    时间复杂度: O(n * min(k, n/2))
+    空间复杂度: O(min(k, n/2))
+    """
+    if not prices or k == 0:
+        return 0
+
+    n = len(prices)
+
+    # 如果k >= n/2，相当于无限次交易
+    if k >= n // 2:
+        return max_profit_unlimited_transactions(prices)
+
+    # 优化空间复杂度
+    dp = [[0] * n for _ in range(2)]
+
+    for i in range(1, k + 1):
+        max_diff = -prices[0]
+        for j in range(1, n):
+            dp[i % 2][j] = max(dp[i % 2][j-1], prices[j] + max_diff)
+            max_diff = max(max_diff, dp[(i-1) % 2][j-1] - prices[j])
+
+    return dp[k % 2][n-1]
+
+def best_time_to_buy_and_sell_stock_with_constraints(prices: list, constraints: dict) -> int:
+    """带约束的股票买卖问题
+
+    constraints可以包含：
+    - max_transactions: 最大交易次数
+    - cooldown: 冷却期
+    - fee: 手续费
+
+    时间复杂度: 根据约束条件变化
+    空间复杂度: 根据约束条件变化
+    """
+    if not prices:
+        return 0
+
+    max_transactions = constraints.get('max_transactions', float('inf'))
+    cooldown = constraints.get('cooldown', 0)
+    fee = constraints.get('fee', 0)
+
+    # 简化处理：只处理最常见的约束组合
+    if max_transactions == 1:
+        return max_profit_one_transaction(prices)
+    elif max_transactions == float('inf'):
+        if cooldown > 0:
+            return max_profit_with_cooldown(prices)
+        elif fee > 0:
+            return max_profit_with_fee(prices, fee)
+        else:
+            return max_profit_unlimited_transactions(prices)
+    else:
+        if cooldown > 0 and fee > 0:
+            # 最复杂的情况：同时有冷却期和手续费
+            return self._max_profit_complex_constraints(prices, max_transactions, cooldown, fee)
+        elif cooldown > 0:
+            # 只有冷却期
+            return self._max_profit_with_cooldown_k(prices, max_transactions)
+        elif fee > 0:
+            # 只有手续费
+            return self._max_profit_with_fee_k(prices, max_transactions, fee)
+        else:
+            # 只有交易次数限制
+            return max_profit_k_transactions(prices, max_transactions)
+
+def _max_profit_complex_constraints(prices: list, k: int, cooldown: int, fee: int) -> int:
+    """处理复杂约束的股票买卖问题"""
+    if k == 0 or not prices:
+        return 0
+
+    n = len(prices)
+
+    # dp[i][j][state] = 第i天，第j次交易，状态为state时的最大收益
+    # state: 0=持有股票，1=不持有股票（冷却期），2=不持有股票（非冷却期）
+    dp = [[[0] * 3 for _ in range(k + 1)] for _ in range(n)]
+
+    # 初始化
+    for j in range(k + 1):
+        dp[0][j][0] = -prices[0] - fee
+        dp[0][j][1] = 0
+        dp[0][j][2] = 0
+
+    for i in range(1, n):
+        for j in range(k + 1):
+            # 持有股票：继续保持 或 买入
+            if j > 0:
+                dp[i][j][0] = max(dp[i-1][j][0],
+                                 dp[i-1][j-1][2] - prices[i] - fee)
+            else:
+                dp[i][j][0] = dp[i-1][j][0]
+
+            # 不持有（冷却期）：卖出
+            dp[i][j][1] = dp[i-1][j][0] + prices[i]
+
+            # 不持有（非冷却期）：继续保持非冷却 或 从冷却期转换
+            dp[i][j][2] = max(dp[i-1][j][2], dp[i-1][j][1])
+
+    return max(dp[n-1][k][1], dp[n-1][k][2])
+
+def _max_profit_with_cooldown_k(prices: list, k: int) -> int:
+    """带冷却期和交易次数限制的股票买卖"""
+    # 实现细节...
+    pass
+
+def _max_profit_with_fee_k(prices: list, k: int, fee: int) -> int:
+    """带手续费和交易次数限制的股票买卖"""
+    # 实现细节...
+    pass`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 高级动态规划问题
+
+### 1. 戳气球问题
+
+<CodeBlock
+  title="戳气球问题实现"
+  code={`def max_coins(nums: list) -> int:
+    """戳气球问题
+
+    戳破气球i获得nums[i-1] * nums[i] * nums[i+1]个硬币
+    求戳破所有气球能获得的最大硬币数
+
+    状态定义: dp[i][j] = 戳破(i,j)开区间内所有气球的最大硬币数
+    状态转移: dp[i][j] = max{dp[i][k] + dp[k][j] + nums[i] * nums[k] * nums[j]}
+
+    时间复杂度: O(n³)
+    空间复杂度: O(n²)
+    """
+    n = len(nums)
+    # 添加边界
+    nums = [1] + nums + [1]
+    new_n = n + 2
+
+    # dp[i][j] = 戳破(i,j)开区间内所有气球的最大硬币数
+    dp = [[0] * new_n for _ in range(new_n)]
+
+    for length in range(2, new_n):  # 区间长度
+        for left in range(new_n - length):
+            right = left + length
+
+            for k in range(left + 1, right):
+                # k是区间内最后戳破的气球
+                coins = (nums[left] * nums[k] * nums[right] +
+                        dp[left][k] + dp[k][right])
+                dp[left][right] = max(dp[left][right], coins)
+
+    return dp[0][new_n - 1]
+
+def max_coins_with_path(nums: list) -> tuple:
+    """戳气球问题，返回戳破顺序
+
+    Returns:
+        (最大硬币数, 戳破顺序列表)
+    """
+    n = len(nums)
+    nums = [1] + nums + [1]
+    new_n = n + 2
+
+    dp = [[0] * new_n for _ in range(new_n)]
+    # 记录每个区间的最优戳破顺序
+    path = [[None] * new_n for _ in range(new_n)]
+
+    for length in range(2, new_n):
+        for left in range(new_n - length):
+            right = left + length
+
+            for k in range(left + 1, right):
+                coins = (nums[left] * nums[k] * nums[right] +
+                        dp[left][k] + dp[k][right])
+
+                if coins > dp[left][right]:
+                    dp[left][right] = coins
+                    path[left][right] = k
+
+    # 重构戳破顺序
+    def construct_order(left, right):
+        """递归构造戳破顺序"""
+        if left + 1 >= right:
+            return []
+
+        k = path[left][right]
+        if k is None:
+            return []
+
+        left_order = construct_order(left, k)
+        right_order = construct_order(k, right)
+
+        return left_order + [k - 1] + right_order  # k-1转换为原数组索引
+
+    burst_order = construct_order(0, new_n - 1)
+    return dp[0][new_n - 1], burst_order
+
+def max_coins_memoization(nums: list) -> int:
+    """记忆化搜索解决戳气球问题"""
+    n = len(nums)
+    nums = [1] + nums + [1]
+    new_n = n + 2
+
+    memo = {}
+
+    def solve(left, right):
+        """解决区间[left, right]"""
+        if (left, right) in memo:
+            return memo[(left, right)]
+
+        if left + 1 >= right:
+            return 0
+
+        max_coins = 0
+        for k in range(left + 1, right):
+            coins = (nums[left] * nums[k] * nums[right] +
+                    solve(left, k) + solve(k, right))
+            max_coins = max(max_coins, coins)
+
+        memo[(left, right)] = max_coins
+        return max_coins
+
+    return solve(0, new_n - 1)
+
+def max_coins_iterative_optimized(nums: list) -> int:
+    """迭代优化的戳气球问题"""
+    n = len(nums)
+    if n == 0:
+        return 0
+
+    nums = [1] + nums + [1]
+    new_n = n + 2
+
+    # 使用一维数组优化空间
+    dp = [0] * new_n * new_n
+
+    for length in range(2, new_n):
+        for left in range(new_n - length):
+            right = left + length
+
+            max_coins = 0
+            for k in range(left + 1, right):
+                idx = left * new_n + right
+                left_idx = left * new_n + k
+                right_idx = k * new_n + right
+
+                coins = (nums[left] * nums[k] * nums[right] +
+                        dp[left_idx] + dp[right_idx])
+                max_coins = max(max_coins, coins)
+
+            dp[left * new_n + right] = max_coins
+
+    return dp[new_n - 1]
+
+def max_coins_parallel(nums: list) -> int:
+    """并行化的戳气球问题
+
+    利用动态规划的可并行性质
+    """
+    n = len(nums)
+    if n == 0:
+        return 0
+
+    nums = [1] + nums + [1]
+    new_n = n + 2
+
+    dp = [[0] * new_n for _ in range(new_n)]
+
+    # 按区间长度并行计算
+    for length in range(2, new_n):
+        # 同一长度的区间可以并行计算
+        intervals = []
+
+        for left in range(new_n - length):
+            right = left + length
+            intervals.append((left, right))
+
+        # 并行计算每个区间（实际环境用多线程）
+        for left, right in intervals:
+            max_coins = 0
+
+            for k in range(left + 1, right):
+                coins = (nums[left] * nums[k] * nums[right] +
+                        dp[left][k] + dp[k][right])
+                max_coins = max(max_coins, coins)
+
+            dp[left][right] = max_coins
+
+    return dp[0][new_n - 1]
+
+def min_operations_to_burst_balloons(nums: list) -> int:
+    """最小操作次数戳气球问题
+
+    每次可以戳破相邻的相同气球
+
+    时间复杂度: O(n²)
+    空间复杂度: O(n²)
+    """
+    if not nums:
+        return 0
+
+    n = len(nums)
+    # dp[i][j] = 戳破区间[i,j]内气球的最小操作次数
+    dp = [[float('inf')] * n for _ in range(n)]
+
+    # 单个气球
+    for i in range(n):
+        dp[i][i] = 1
+
+    for length in range(2, n + 1):
+        for i in range(n - length + 1):
+            j = i + length - 1
+
+            # 尝试将区间分成两部分
+            for k in range(i, j):
+                left_ops = dp[i][k]
+                right_ops = dp[k+1][j]
+
+                # 检查是否可以合并操作
+                if nums[k] == nums[k+1]:
+                    # 可以合并，减少操作次数
+                    total_ops = left_ops + right_ops - 1
+                else:
+                    total_ops = left_ops + right_ops
+
+                dp[i][j] = min(dp[i][j], total_ops)
+
+    return dp[0][n-1]`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 正则表达式匹配
+
+<CodeBlock
+  title="正则表达式匹配实现"
+  code={`def is_match(s: str, p: str) -> bool:
+    """正则表达式匹配（支持 '.' 和 '*'）
+
+    '.' 匹配任意单个字符
+    '*' 匹配零个或多个前一个字符
+
+    状态定义: dp[i][j] = s前i个字符和p前j个字符是否匹配
+    状态转移:
+        if p[j-1] == '.' or p[j-1] == s[i-1]: dp[i][j] = dp[i-1][j-1]
+        elif p[j-1] == '*':
+            dp[i][j] = dp[i][j-2] or (dp[i-1][j] and (p[j-2] == '.' or p[j-2] == s[i-1]))
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(s), len(p)
+
+    # dp[i][j] = s前i个字符和p前j个字符是否匹配
+    dp = [[False] * (n + 1) for _ in range(m + 1)]
+
+    # 空字符串匹配空字符串
+    dp[0][0] = True
+
+    # 处理模式开头的'*'（可以匹配0次）
+    for j in range(1, n + 1):
+        if p[j-1] == '*':
+            dp[0][j] = dp[0][j-2]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if p[j-1] == '.' or p[j-1] == s[i-1]:
+                dp[i][j] = dp[i-1][j-1]
+            elif p[j-1] == '*':
+                dp[i][j] = dp[i][j-2]  # 匹配0次
+                if p[j-2] == '.' or p[j-2] == s[i-1]:
+                    dp[i][j] = dp[i][j] or dp[i-1][j]  # 匹配1次或多次
+
+    return dp[m][n]
+
+def is_match_optimized(s: str, p: str) -> bool:
+    """空间优化的正则表达式匹配
+
+    空间复杂度: O(n)
+    """
+    m, n = len(s), len(p)
+
+    prev = [False] * (n + 1)
+    curr = [False] * (n + 1)
+
+    prev[0] = True
+
+    for j in range(1, n + 1):
+        if p[j-1] == '*':
+            prev[j] = prev[j-2]
+
+    for i in range(1, m + 1):
+        curr[0] = False
+        for j in range(1, n + 1):
+            if p[j-1] == '.' or p[j-1] == s[i-1]:
+                curr[j] = prev[j-1]
+            elif p[j-1] == '*':
+                curr[j] = curr[j-2]
+                if p[j-2] == '.' or p[j-2] == s[i-1]:
+                    curr[j] = curr[j] or prev[j]
+        prev, curr = curr, prev
+
+    return prev[n]
+
+def is_match_with_plus(s: str, p: str) -> bool:
+    """支持 '+' 的正则表达式匹配
+
+    '+' 匹配一个或多个前一个字符
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(s), len(p)
+
+    dp = [[False] * (n + 1) for _ in range(m + 1)]
+    dp[0][0] = True
+
+    # 预处理模式，将 '+' 转换为等效形式
+    converted_pattern = []
+    i = 0
+    while i < len(p):
+        if i + 1 < len(p) and p[i+1] == '+':
+            # a+ -> aa*
+            converted_pattern.append(p[i])
+            converted_pattern.append(p[i])
+            converted_pattern.append('*')
+            i += 2
+        else:
+            converted_pattern.append(p[i])
+            i += 1
+
+    p = ''.join(converted_pattern)
+    n = len(p)
+
+    # 处理开头的'*'
+    for j in range(1, n + 1):
+        if p[j-1] == '*':
+            dp[0][j] = dp[0][j-2]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if p[j-1] == '.' or p[j-1] == s[i-1]:
+                dp[i][j] = dp[i-1][j-1]
+            elif p[j-1] == '*':
+                dp[i][j] = dp[i][j-2]
+                if p[j-2] == '.' or p[j-2] == s[i-1]:
+                    dp[i][j] = dp[i][j] or dp[i-1][j]
+
+    return dp[m][n]
+
+def is_match_with_question(s: str, p: str) -> bool:
+    """支持 '?' 的正则表达式匹配
+
+    '?' 匹配零个或一个前一个字符
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(s), len(p)
+
+    dp = [[False] * (n + 1) for _ in range(m + 1)]
+    dp[0][0] = True
+
+    # 处理开头的'?'和'*'
+    for j in range(1, n + 1):
+        if p[j-1] == '*' or p[j-1] == '?':
+            dp[0][j] = dp[0][j-2]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if p[j-1] == '.' or p[j-1] == s[i-1]:
+                dp[i][j] = dp[i-1][j-1]
+            elif p[j-1] == '*':
+                dp[i][j] = dp[i][j-2] or (dp[i-1][j] and (p[j-2] == '.' or p[j-2] == s[i-1]))
+            elif p[j-1] == '?':
+                dp[i][j] = dp[i][j-2] or (dp[i-1][j-2] and (p[j-2] == '.' or p[j-2] == s[i-1]))
+
+    return dp[m][n]
+
+def wildcard_matching(s: str, p: str) -> bool:
+    """通配符匹配
+
+    '?' 匹配任意单个字符
+    '*' 匹配任意字符串（包括空字符串）
+
+    时间复杂度: O(m * n)
+    空间复杂度: O(m * n)
+    """
+    m, n = len(s), len(p)
+
+    dp = [[False] * (n + 1) for _ in range(m + 1)]
+    dp[0][0] = True
+
+    # 处理开头的'*'
+    for j in range(1, n + 1):
+        if p[j-1] == '*':
+            dp[0][j] = dp[0][j-1]
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if p[j-1] == '?' or p[j-1] == s[i-1]:
+                dp[i][j] = dp[i-1][j-1]
+            elif p[j-1] == '*':
+                dp[i][j] = dp[i][j-1] or dp[i-1][j]
+
+    return dp[m][n]
+
+def is_match_with_groups(s: str, p: str) -> tuple:
+    """支持分组的正则表达式匹配
+
+    支持 '(' 和 ')' 分组
+
+    Returns:
+        (是否匹配, 分组匹配结果)
+    """
+    # 简化版本：只处理简单的分组
+    # 实际实现需要更复杂的解析
+
+    # 首先检查基本匹配
+    if not is_match(s, p):
+        return False, {}
+
+    # 简化的分组处理
+    groups = {}
+    stack = []
+    group_start = 0
+    group_id = 1
+
+    i = 0
+    while i < len(p):
+        if p[i] == '(':
+            stack.append(i)
+            group_start = i + 1
+        elif p[i] == ')':
+            if stack:
+                start = stack.pop()
+                # 这里应该记录分组范围
+                # 简化处理：只记录分组的起始位置
+                groups[f'group{group_id}'] = (start, i)
+                group_id += 1
+        i += 1
+
+    return True, groups
+
+def regex_to_nfa(pattern: str) -> dict:
+    """将正则表达式转换为NFA
+
+    简化的NFA构建
+
+    Returns:
+        NFA的表示
+    """
+    # 这是一个简化的实现
+    # 实际的正则表达式到NFA转换需要更复杂的算法
+
+    nfa = {
+        'states': set(),
+        'alphabet': set(),
+        'transitions': {},
+        'start': 0,
+        'accept': set()
+    }
+
+    current_state = 0
+    i = 0
+
+    while i < len(pattern):
+        if pattern[i] == '*':
+            # 处理重复
+            if i > 0:
+                # 添加ε转移
+                prev_char = pattern[i-1]
+                nfa['alphabet'].add(prev_char)
+
+                # 简化的处理
+                nfa['states'].add(current_state)
+                nfa['states'].add(current_state + 1)
+                nfa['states'].add(current_state + 2)
+
+                nfa['transitions'][(current_state, 'ε')] = {current_state + 1, current_state + 2}
+                nfa['transitions'][(current_state + 1, prev_char)] = {current_state + 1}
+                nfa['transitions'][(current_state + 1, 'ε')] = {current_state + 2}
+
+                current_state += 3
+        elif pattern[i] == '.':
+            # 处理通配符
+            nfa['alphabet'].update('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+
+            nfa['states'].add(current_state)
+            nfa['states'].add(current_state + 1)
+
+            # 为每个字符添加转移
+            for char in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789':
+                nfa['transitions'][(current_state, char)] = {current_state + 1}
+
+            current_state += 1
+        else:
+            # 处理普通字符
+            nfa['alphabet'].add(pattern[i])
+
+            nfa['states'].add(current_state)
+            nfa['states'].add(current_state + 1)
+
+            nfa['transitions'][(current_state, pattern[i])] = {current_state + 1}
+            current_state += 1
+
+        i += 1
+
+    nfa['accept'].add(current_state - 1)
+
+    return nfa
+
+def nfa_simulate(nfa: dict, input_string: str) -> bool:
+    """NFA模拟器
+
+    简化的NFA模拟
+    """
+    current_states = {nfa['start']}
+
+    def epsilon_closure(states):
+        """计算ε闭包"""
+        closure = set(states)
+        stack = list(states)
+
+        while stack:
+            state = stack.pop()
+            if (state, 'ε') in nfa['transitions']:
+                for next_state in nfa['transitions'][(state, 'ε')]:
+                    if next_state not in closure:
+                        closure.add(next_state)
+                        stack.append(next_state)
+
+        return closure
+
+    current_states = epsilon_closure(current_states)
+
+    for char in input_string:
+        next_states = set()
+
+        for state in current_states:
+            if (state, char) in nfa['transitions']:
+                next_states.update(nfa['transitions'][(state, char)])
+
+        current_states = epsilon_closure(next_states)
+
+        if not current_states:
+            return False
+
+    return bool(current_states & nfa['accept'])`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 动态规划模式总结
+
+<ComplexityAnalyzer
+  algorithms={[
+    {
+      name: "线性DP",
+      timeComplexity: "O(n) 或 O(n²)",
+      spaceComplexity: "O(n) 或 O(n²)",
+      bestCase: "O(n)",
+      worstCase: "O(n²)",
+      averageCase: "O(n) 或 O(n²)",
+      description: "按线性顺序解决，如斐波那契、LIS",
+      examples: ["斐波那契数列", "最长递增子序列", "最大子数组和"]
+    },
+    {
+      name: "背包DP",
+      timeComplexity: "O(n * W)",
+      spaceComplexity: "O(n * W) 或 O(W)",
+      bestCase: "O(n)",
+      worstCase: "O(n * W)",
+      averageCase: "O(n * W)",
+      description: "容量约束下的最优选择",
+      examples: ["0-1背包", "完全背包", "多重背包"]
+    },
+    {
+      name: "区间DP",
+      timeComplexity: "O(n³)",
+      spaceComplexity: "O(n²)",
+      bestCase: "O(n²)",
+      worstCase: "O(n³)",
+      averageCase: "O(n³)",
+      description: "涉及区间操作的DP",
+      examples: ["矩阵链乘法", "最长回文子串", "戳气球"]
+    },
+    {
+      name: "树形DP",
+      timeComplexity: "O(n)",
+      spaceComplexity: "O(n)",
+      bestCase: "O(n)",
+      worstCase: "O(n)",
+      averageCase: "O(n)",
+      description: "树结构上的DP",
+      examples: ["树的直径", "最大独立集", "树的最小覆盖"]
+    },
+    {
+      name: "状态压缩DP",
+      timeComplexity: "O(n * 2^n)",
+      spaceComplexity: "O(2^n)",
+      bestCase: "O(2^n)",
+      worstCase: "O(n * 2^n)",
+      averageCase: "O(n * 2^n)",
+      description: "状态用二进制表示",
+      examples: ["旅行商问题", "集合覆盖", "子集和问题"]
+    }
+  ]}
+/>
+
+### 动态规划问题识别指南
+
+<AlgorithmVisualizer
+  title="动态规划问题识别"
+  algorithm="dp-identification"
+  steps={[
+    {
+      title: "1. 检查最优子结构",
+      content: "问题的最优解是否包含子问题的最优解",
+      conditions: ["是", "否"],
+      results: {
+        "是": "继续检查",
+        "否": "可能不适合DP"
+      }
+    },
+    {
+      title: "2. 检查重叠子问题",
+      content: "是否存在重复计算的子问题",
+      conditions: ["是", "否"],
+      results: {
+        "是": "适合DP",
+        "否": "考虑分治或贪心"
+      }
+    },
+    {
+      title: "3. 确定状态维度",
+      content: "识别需要的状态变量数量",
+      conditions: ["1维", "2维", "3维+"],
+      results: {
+        "1维": "线性DP",
+        "2维": "矩阵DP或区间DP",
+        "3维+": "多维DP或状态压缩"
+      }
+    },
+    {
+      title: "4. 选择算法策略",
+      content: "根据问题特征选择具体DP方法",
+      results: {
+        "线性序列": "线性DP",
+        "约束优化": "背包DP",
+        "区间操作": "区间DP",
+        "树结构": "树形DP",
+        "组合优化": "状态压缩DP"
+      }
+    }
+  ]}
+/>
+
+## 交互式演示
+
+### 斐波那契数列可视化
+
+<AlgorithmVisualizer
+  title="斐波那契数列计算过程"
+  algorithm="fibonacci-demo"
+  steps={[
+    {
+      title: "递归计算",
+      content: "直接递归，产生大量重复计算",
+      code: "fib(n) = fib(n-1) + fib(n-2)",
+      complexity: "O(2^n)"
+    },
+    {
+      title: "记忆化优化",
+      content: "存储已计算结果，避免重复",
+      code: "memo[n] = fib(n-1) + fib(n-2)",
+      complexity: "O(n)"
+    },
+    {
+      title: "迭代优化",
+      content: "自底向上计算，空间O(1)",
+      code: "a, b = b, a + b",
+      complexity: "O(n)"
+    },
+    {
+      title: "矩阵快速幂",
+      content: "利用矩阵乘法对数时间",
+      code: "[[1,1],[1,0]]^n",
+      complexity: "O(log n)"
+    }
+  ]}
+/>
+
+### 背包问题可视化
+
+<ArrayVisualizer
+  title="0-1背包问题状态转移"
+  description="展示背包问题中状态转移的过程"
+  data={[
+    { capacity: 0, value: 0, items: [] },
+    { capacity: 2, value: 3, items: ["A"] },
+    { capacity: 3, value: 4, items: ["B"] },
+    { capacity: 5, value: 7, items: ["A", "B"] }
+  ]}
+  highlightIndices={[1, 2, 3]}
+/>
+
+## 实战练习
+
+### 练习1：实现旅行商问题
+
+<ExerciseBlock
+  title="旅行商问题DP实现"
+  description="实现使用动态规划解决旅行商问题的算法。"
+  difficulty="困难"
+  type="coding"
+  initialCode={`# TODO: 实现旅行商问题的DP解法
+def traveling_salesman_dp(distances: list) -> tuple:
+    """
+    动态规划解决旅行商问题
+
+    Args:
+        distances: 距离矩阵，distances[i][j]表示城市i到城市j的距离
+
+    Returns:
+        (最短路径长度, 最短路径)
+    """
+    n = len(distances)
+    if n == 0:
+        return 0, []
+    if n == 1:
+        return 0, [0]
+
+    # dp[mask][current] = 访问过的城市集合mask，当前在current城市的最短距离
+    # 需要使用状态压缩
+    pass`}
+  expectedOutput="返回最短路径长度和对应的路径"
+  solution={`def traveling_salesman_dp(distances: list) -> tuple:
+    n = len(distances)
+    if n == 0:
+        return 0, []
+    if n == 1:
+        return 0, [0]
+
+    # dp[mask][current] = 当前状态的最短距离
+    dp = [[float('inf')] * n for _ in range(1 << n)]
+    # parent[mask][current] = 用于重构路径
+    parent = [[-1] * n for _ in range(1 << n)]
+
+    # 从城市0开始
+    dp[1][0] = 0
+
+    # 遍历所有状态
+    for mask in range(1 << n):
+        for current in range(n):
+            if dp[mask][current] == float('inf'):
+                continue
+
+            # 尝试访问下一个城市
+            for next_city in range(n):
+                if not (mask & (1 << next_city)):
+                    next_mask = mask | (1 << next_city)
+                    new_distance = dp[mask][current] + distances[current][next_city]
+
+                    if new_distance < dp[next_mask][next_city]:
+                        dp[next_mask][next_city] = new_distance
+                        parent[next_mask][next_city] = current
+
+    # 找到回到起点的最短路径
+    final_mask = (1 << n) - 1
+    min_distance = float('inf')
+    last_city = -1
+
+    for city in range(1, n):
+        total_distance = dp[final_mask][city] + distances[city][0]
+        if total_distance < min_distance:
+            min_distance = total_distance
+            last_city = city
+
+    if min_distance == float('inf'):
+        return float('inf'), []
+
+    # 重构路径
+    path = []
+    current_mask = final_mask
+    current_city = last_city
+
+    while current_city != -1:
+        path.append(current_city)
+        prev_city = parent[current_mask][current_city]
+        if prev_city == -1:
+            break
+        current_mask &= ~(1 << current_city)
+        current_city = prev_city
+
+    path.append(0)  # 回到起点
+    path.reverse()
+
+    return min_distance, path`}
+/>
+
+### 练习2：实现编辑距离的可视化
+
+<ExerciseBlock
+  title="编辑距离可视化"
+  description="实现一个可以可视化编辑距离计算过程的函数。"
+  difficulty="中等"
+  type="coding"
+  initialCode={`# TODO: 实现编辑距离的可视化
+def visualize_edit_distance(word1: str, word2: str) -> dict:
+    """
+    可视化编辑距离的计算过程
+
+    Args:
+        word1: 第一个单词
+        word2: 第二个单词
+
+    Returns:
+        包含DP表和操作序列的字典
+    """
+    # 计算DP表
+    # 记录每一步的操作
+    # 返回可视化数据
+    pass`}
+  expectedOutput="返回包含DP表和详细操作过程的数据结构"
+  solution={`def visualize_edit_distance(word1: str, word2: str) -> dict:
+    m, n = len(word1), len(word2)
+
+    # DP表
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    # 操作表
+    operations = [[None] * (n + 1) for _ in range(m + 1)]
+
+    # 初始化
+    for i in range(m + 1):
+        dp[i][0] = i
+        operations[i][0] = f"删除{i}次"
+    for j in range(n + 1):
+        dp[0][j] = j
+        operations[0][j] = f"插入{j}次"
+
+    # 填充DP表
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if word1[i-1] == word2[j-1]:
+                dp[i][j] = dp[i-1][j-1]
+                operations[i][j] = operations[i-1][j-1]
+            else:
+                delete_cost = dp[i-1][j] + 1
+                insert_cost = dp[i][j-1] + 1
+                replace_cost = dp[i-1][j-1] + 1
+
+                if delete_cost <= insert_cost and delete_cost <= replace_cost:
+                    dp[i][j] = delete_cost
+                    operations[i][j] = f"{operations[i-1][j]} 删除'{word1[i-1]}'"
+                elif insert_cost <= delete_cost and insert_cost <= replace_cost:
+                    dp[i][j] = insert_cost
+                    operations[i][j] = f"{operations[i][j-1]} 插入'{word2[j-1]}'"
+                else:
+                    dp[i][j] = replace_cost
+                    operations[i][j] = f"{operations[i-1][j-1]} 替换'{word1[i-1]}'为'{word2[j-1]}'"
+
+    return {
+        'dp_table': dp,
+        'operations': operations,
+        'final_distance': dp[m][n],
+        'final_operation': operations[m][n],
+        'word1': word1,
+        'word2': word2
+    }`}
+/>
+
+## 总结与要点
+
+### 核心概念回顾
+
+1. **最优子结构**: 问题的最优解包含子问题的最优解
+2. **重叠子问题**: 递归求解时重复计算相同子问题
+3. **状态定义**: 描述问题当前状况的变量组合
+4. **状态转移**: 建立状态间的递推关系
+5. **边界条件**: 确保递推的基础正确性
+
+### 算法设计技巧
+
+1. **问题分析**: 识别最优子结构和重叠子问题
+2. **状态设计**: 选择合适的状态变量和维度
+3. **转移方程**: 建立正确的递推关系
+4. **边界处理**: 设置正确的初始条件
+5. **空间优化**: 应用滚动数组等技巧
+
+### 实际应用要点
+
+- **算法选择**: 根据问题特征选择合适的DP模式
+- **复杂度分析**: 准确分析时间和空间复杂度
+- **优化策略**: 应用各种优化技巧提升性能
+- **代码实现**: 注意代码的清晰性和可维护性
+
+## 进一步学习
+
+### 相关算法
+
+- **记忆化搜索**: 自顶向下的DP实现方式
+- **斜率优化**: 用于优化特定形式的DP转移
+- **四边形不等式**: 优化区间DP的转移顺序
+- **单调队列优化**: 优化滑动窗口类型的DP
+
+### 推荐资源
+
+1. **算法导论** - 第15章：动态规划
+2. **动态规划经典问题** - 各种DP问题详解
+3. **LeetCode DP标签** - 大量DP练习题
+4. **CodeForces** - 竞赛中的DP应用
+
+---
+
+## 课程导航
+
+**上一课**: [L08 - 最小生成树](/mit6006-algorithms/lectures/L08-minimum-spanning-tree)
+**下一课**: [L10 - 字符串算法](/mit6006-algorithms/lectures/L10-string-algorithms)
+**课程主页**: [MIT 6.006 算法导论](/mit6006-algorithms)

@@ -1,0 +1,1256 @@
+---
+title: "Lecture 20: 安全性 - 分布式系统安全机制"
+description: "分布式系统的安全机制：认证、授权、加密和安全实践"
+---
+
+# Lecture 20: 安全性 - 分布式系统安全机制
+
+## 本周内容
+
+- **认证机制**：JWT、OAuth 2.0、OpenID Connect和证书认证
+- **授权系统**：RBAC、ABAC和基于策略的访问控制
+- **加密通信**：TLS 1.3、mTLS和端到端加密
+- **安全存储**：密钥管理、加密存储和敏感数据处理
+- **安全监控**：审计日志、异常检测和响应机制
+- **实践项目**：构建安全的分布式API网关
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/Y_5d2G2pYqQ" title="分布式系统安全" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 分布式系统安全概述
+
+分布式系统的安全性涉及多个层面，从网络通信到应用逻辑，都需要精心设计的安全机制。
+
+**安全架构层次**
+```
+应用层
+├── 认证授权
+├── 数据验证
+└── 业务逻辑安全
+┌─────────────────┐
+│   安全中间件    │
+├── API网关        │
+├── 服务间认证     │
+└── 请求限流       │
+┌─────────────────┐
+│   网络层        │
+├── TLS/SSL        │
+├── 防火墙         │
+└── 网络隔离       │
+┌─────────────────┐
+│   基础设施       │
+├── 身份管理       │
+├── 密钥管理       │
+└── 安全监控       │
+```
+
+**安全原则**
+- **最小权限原则**：只授予必要的权限
+- **深度防御**：多层安全保护
+- **零信任**：永不信任，始终验证
+- **安全默认**：默认配置应该安全
+
+### 认证机制
+
+#### 1. JWT认证系统
+
+```go
+package security
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// JWT管理器
+type JWTManager struct {
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
+	issuer     string
+	expiration time.Duration
+}
+
+// JWT声明
+type Claims struct {
+	UserID   string                 `json:"user_id"`
+	Username string                 `json:"username"`
+	Roles    []string               `json:"roles"`
+	Metadata map[string]interface{} `json:"metadata"`
+	jwt.RegisteredClaims
+}
+
+// 创建JWT管理器
+func NewJWTManager(issuer string, expiration time.Duration) (*JWTManager, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("生成RSA密钥失败: %v", err)
+	}
+
+	return &JWTManager{
+		privateKey: privateKey,
+		publicKey:  &privateKey.PublicKey,
+		issuer:     issuer,
+		expiration: expiration,
+	}, nil
+}
+
+// 生成访问令牌
+func (m *JWTManager) GenerateAccessToken(userID, username string, roles []string, metadata map[string]interface{}) (string, error) {
+	now := time.Now()
+
+	claims := &Claims{
+		UserID:   userID,
+		Username: username,
+		Roles:    roles,
+		Metadata: metadata,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			Subject:   userID,
+			ExpiresAt: jwt.NewNumericDate(now.Add(m.expiration)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	return token.SignedString(m.privateKey)
+}
+
+// 生成刷新令牌
+func (m *JWTManager) GenerateRefreshToken(userID string) (string, error) {
+	now := time.Now()
+
+	claims := &jwt.RegisteredClaims{
+		Issuer:    m.issuer,
+		Subject:   userID,
+		ExpiresAt: jwt.NewNumericDate(now.Add(7 * 24 * time.Hour)), // 7天
+		IssuedAt:  jwt.NewNumericDate(now),
+		NotBefore: jwt.NewNumericDate(now),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	return token.SignedString(m.privateKey)
+}
+
+// 验证令牌
+func (m *JWTManager) VerifyToken(tokenString string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("意外的签名方法: %v", token.Header["alg"])
+		}
+		return m.publicKey, nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("令牌验证失败: %v", err)
+	}
+
+	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		return claims, nil
+	}
+
+	return nil, fmt.Errorf("无效的令牌声明")
+}
+
+// 中间件：JWT认证
+func JWTMiddleware(manager *JWTManager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				http.Error(w, "缺少授权头", http.StatusUnauthorized)
+				return
+			}
+
+			tokenString := ""
+			if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+				tokenString = authHeader[7:]
+			} else {
+				http.Error(w, "无效的授权格式", http.StatusUnauthorized)
+				return
+			}
+
+			claims, err := manager.VerifyToken(tokenString)
+			if err != nil {
+				http.Error(w, "令牌验证失败", http.StatusUnauthorized)
+				return
+			}
+
+			// 将用户信息存入上下文
+			ctx := context.WithValue(r.Context(), "user", claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+```
+
+#### 2. OAuth 2.0集成
+
+```go
+package security
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+
+	"golang.org/x/oauth2"
+)
+
+// OAuth配置
+type OAuthConfig struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	Scopes       []string
+	AuthURL      string
+	TokenURL     string
+	UserInfoURL  string
+}
+
+// OAuth管理器
+type OAuthManager struct {
+	config *oauth2.Config
+}
+
+// 用户信息
+type UserInfo struct {
+	ID       string                 `json:"id"`
+	Username string                 `json:"username"`
+	Email    string                 `json:"email"`
+	Name     string                 `json:"name"`
+	Picture  string                 `json:"picture"`
+	Provider string                 `json:"provider"`
+	RawData  map[string]interface{} `json:"raw_data"`
+}
+
+// 创建OAuth管理器
+func NewOAuthManager(cfg *OAuthConfig) *OAuthManager {
+	oauthConfig := &oauth2.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  cfg.RedirectURL,
+		Scopes:       cfg.Scopes,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  cfg.AuthURL,
+			TokenURL: cfg.TokenURL,
+		},
+	}
+
+	return &OAuthManager{
+		config: oauthConfig,
+	}
+}
+
+// 获取认证URL
+func (m *OAuthManager) GetAuthURL(state string) string {
+	return m.config.AuthCodeURL(state)
+}
+
+// 交换令牌
+func (m *OAuthManager) ExchangeToken(ctx context.Context, code string) (*oauth2.Token, error) {
+	return m.config.Exchange(ctx, code)
+}
+
+// 获取用户信息
+func (m *OAuthManager) GetUserInfo(ctx context.Context, token *oauth2.Token, userInfoURL string) (*UserInfo, error) {
+	client := m.config.Client(ctx, token)
+
+	resp, err := client.Get(userInfoURL)
+	if err != nil {
+		return nil, fmt.Errorf("获取用户信息失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("用户信息请求失败: %s", resp.Status)
+	}
+
+	var userInfo UserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("解析用户信息失败: %v", err)
+	}
+
+	return &userInfo, nil
+}
+
+// 支持的OAuth提供商
+var OAuthProviders = map[string]*OAuthConfig{
+	"google": {
+		ClientID:     "your-google-client-id",
+		ClientSecret: "your-google-client-secret",
+		RedirectURL:  "http://localhost:8080/auth/google/callback",
+		Scopes:       []string{"openid", "profile", "email"},
+		AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		UserInfoURL:  "https://www.googleapis.com/oauth2/v2/userinfo",
+	},
+	"github": {
+		ClientID:     "your-github-client-id",
+		ClientSecret: "your-github-client-secret",
+		RedirectURL:  "http://localhost:8080/auth/github/callback",
+		Scopes:       []string{"user:email"},
+		AuthURL:      "https://github.com/login/oauth/authorize",
+		TokenURL:     "https://github.com/login/oauth/access_token",
+		UserInfoURL:  "https://api.github.com/user",
+	},
+}
+
+// OAuth回调处理器
+func OAuthCallbackHandler(manager *OAuthManager, jwtManager *JWTManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		state := r.URL.Query().Get("state")
+
+		if code == "" {
+			http.Error(w, "缺少授权码", http.StatusBadRequest)
+			return
+		}
+
+		// 交换令牌
+		token, err := manager.ExchangeToken(r.Context(), code)
+		if err != nil {
+			http.Error(w, "令牌交换失败", http.StatusBadRequest)
+			return
+		}
+
+		// 获取用户信息
+		userInfo, err := manager.GetUserInfo(r.Context(), token, manager.config.UserInfoURL)
+		if err != nil {
+			http.Error(w, "获取用户信息失败", http.StatusInternalServerError)
+			return
+		}
+
+		// 生成JWT令牌
+		jwtToken, err := jwtManager.GenerateAccessToken(
+			userInfo.ID,
+			userInfo.Username,
+			[]string{"user"},
+			map[string]interface{}{
+				"provider": userInfo.Provider,
+				"email":    userInfo.Email,
+			},
+		)
+		if err != nil {
+			http.Error(w, "生成令牌失败", http.StatusInternalServerError)
+			return
+		}
+
+		// 返回令牌
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"access_token": jwtToken,
+			"token_type":   "Bearer",
+		})
+	}
+}
+```
+
+### 授权系统
+
+#### 1. 基于角色的访问控制(RBAC)
+
+```go
+package security
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+)
+
+// 权限定义
+type Permission struct {
+	Resource string `json:"resource"`
+	Action   string `json:"action"`
+}
+
+// 角色定义
+type Role struct {
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Permissions []Permission `json:"permissions"`
+}
+
+// 用户定义
+type User struct {
+	ID       string   `json:"id"`
+	Username string   `json:"username"`
+	Roles    []string `json:"roles"`
+	IsActive bool     `json:"is_active"`
+}
+
+// RBAC管理器
+type RBACManager struct {
+	roles    map[string]*Role
+	users    map[string]*User
+	mu       sync.RWMutex
+	policies map[string]bool // 缓存权限策略
+}
+
+// 创建RBAC管理器
+func NewRBACManager() *RBACManager {
+	return &RBACManager{
+		roles:    make(map[string]*Role),
+		users:    make(map[string]*User),
+		policies: make(map[string]bool),
+	}
+}
+
+// 添加角色
+func (m *RBACManager) AddRole(role *Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.roles[role.ID]; exists {
+		return fmt.Errorf("角色已存在: %s", role.ID)
+	}
+
+	m.roles[role.ID] = role
+	m.invalidatePolicyCache()
+	return nil
+}
+
+// 添加用户
+func (m *RBACManager) AddUser(user *User) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.users[user.ID]; exists {
+		return fmt.Errorf("用户已存在: %s", user.ID)
+	}
+
+	m.users[user.ID] = user
+	return nil
+}
+
+// 为用户分配角色
+func (m *RBACManager) AssignRole(userID, roleID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	user, exists := m.users[userID]
+	if !exists {
+		return fmt.Errorf("用户不存在: %s", userID)
+	}
+
+	role, exists := m.roles[roleID]
+	if !exists {
+		return fmt.Errorf("角色不存在: %s", roleID)
+	}
+
+	// 检查是否已有该角色
+	for _, r := range user.Roles {
+		if r == roleID {
+			return fmt.Errorf("用户已有该角色: %s", roleID)
+		}
+	}
+
+	user.Roles = append(user.Roles, roleID)
+	m.invalidatePolicyCache()
+	return nil
+}
+
+// 检查权限
+func (m *RBACManager) CheckPermission(userID string, permission Permission) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// 检查缓存
+	cacheKey := fmt.Sprintf("%s:%s:%s", userID, permission.Resource, permission.Action)
+	if cached, exists := m.policies[cacheKey]; exists {
+		return cached
+	}
+
+	user, exists := m.users[userID]
+	if !exists || !user.IsActive {
+		return false
+	}
+
+	// 检查用户的所有角色
+	for _, roleID := range user.Roles {
+		role, exists := m.roles[roleID]
+		if !exists {
+			continue
+		}
+
+		// 检查角色的所有权限
+		for _, p := range role.Permissions {
+			if (p.Resource == "*" || p.Resource == permission.Resource) &&
+				(p.Action == "*" || p.Action == permission.Action) {
+				m.policies[cacheKey] = true
+				return true
+			}
+		}
+	}
+
+	m.policies[cacheKey] = false
+	return false
+}
+
+// 清除策略缓存
+func (m *RBACManager) invalidatePolicyCache() {
+	m.policies = make(map[string]bool)
+}
+
+// 中间件：RBAC授权
+func RBACMiddleware(rbacManager *RBACManager, requiredPermission Permission) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 从上下文获取用户信息
+			claims, ok := r.Context().Value("user").(*Claims)
+			if !ok {
+				http.Error(w, "用户信息缺失", http.StatusUnauthorized)
+				return
+			}
+
+			// 检查权限
+			if !rbacManager.CheckPermission(claims.UserID, requiredPermission) {
+				http.Error(w, "权限不足", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+```
+
+### 加密通信
+
+#### 1. TLS配置
+
+```go
+package security
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"io/ioutil"
+	"net/http"
+
+	"golang.org/x/crypto/acme/autocert"
+)
+
+// TLS配置
+type TLSConfig struct {
+	CertFile    string
+	KeyFile     string
+	CertManager *autocert.Manager
+	MinVersion  uint16
+	MaxVersion  uint16
+	CipherSuites []uint16
+}
+
+// 创建TLS配置
+func NewTLSConfig() *TLSConfig {
+	return &TLSConfig{
+		MinVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+		},
+	}
+}
+
+// 创建TLS服务器
+func (c *TLSConfig) NewServer(handler http.Handler) (*http.Server, error) {
+	tlsConfig := &tls.Config{
+		MinVersion:   c.MinVersion,
+		CipherSuites: c.CipherSuites,
+	}
+
+	if c.CertManager != nil {
+		tlsConfig.GetCertificate = c.CertManager.GetCertificate
+	} else if c.CertFile != "" && c.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("加载证书失败: %v", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	return &http.Server{
+		Addr:      ":443",
+		Handler:   handler,
+		TLSConfig: tlsConfig,
+	}, nil
+}
+
+// 自动证书管理器
+func NewAutoCertManager(domains []string, cacheDir string) *autocert.Manager {
+	return &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(domains...),
+		Cache:      autocert.DirCache(cacheDir),
+	}
+}
+```
+
+### 密钥管理
+
+#### 1. 密钥管理器
+
+```go
+package security
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sync"
+	"time"
+)
+
+// 密钥类型
+type KeyType string
+
+const (
+	KeyTypeRSA    KeyType = "rsa"
+	KeyTypeAES    KeyType = "aes"
+	KeyTypeHMAC   KeyType = "hmac"
+	KeyTypeECDSA  KeyType = "ecdsa"
+)
+
+// 密钥元数据
+type KeyMetadata struct {
+	ID           string            `json:"id"`
+	Type         KeyType           `json:"type"`
+	Size         int               `json:"size"`
+	CreatedAt    time.Time         `json:"created_at"`
+	ExpiresAt    time.Time         `json:"expires_at"`
+	IsActive     bool              `json:"is_active"`
+	RotationDays int               `json:"rotation_days"`
+	Tags         map[string]string `json:"tags"`
+}
+
+// 密钥管理器
+type KeyManager struct {
+	keys    map[string]*KeyMetadata
+	secrets map[string][]byte
+	mu      sync.RWMutex
+	storage KeyStorage
+}
+
+// 密钥存储接口
+type KeyStorage interface {
+	Save(keyID string, metadata *KeyMetadata, secret []byte) error
+	Load(keyID string) (*KeyMetadata, []byte, error)
+	Delete(keyID string) error
+	List() ([]string, error)
+}
+
+// 文件系统存储
+type FileSystemKeyStorage struct {
+	baseDir string
+}
+
+// 创建文件系统存储
+func NewFileSystemKeyStorage(baseDir string) *FileSystemKeyStorage {
+	return &FileSystemKeyStorage{
+		baseDir: baseDir,
+	}
+}
+
+// 保存密钥
+func (s *FileSystemKeyStorage) Save(keyID string, metadata *KeyMetadata, secret []byte) error {
+	// 创建目录
+	if err := os.MkdirAll(s.baseDir, 0700); err != nil {
+		return err
+	}
+
+	// 保存元数据
+	metadataFile := fmt.Sprintf("%s/%s.metadata", s.baseDir, keyID)
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+
+	if err := ioutil.WriteFile(metadataFile, metadataData, 0600); err != nil {
+		return err
+	}
+
+	// 保存密钥
+	secretFile := fmt.Sprintf("%s/%s.secret", s.baseDir, keyID)
+	return ioutil.WriteFile(secretFile, secret, 0600)
+}
+
+// 创建密钥管理器
+func NewKeyManager(storage KeyStorage) *KeyManager {
+	return &KeyManager{
+		keys:    make(map[string]*KeyMetadata),
+		secrets: make(map[string][]byte),
+		storage: storage,
+	}
+}
+
+// 生成RSA密钥对
+func (m *KeyManager) GenerateRSAKeyPair(keyID string, bits int) (*rsa.PrivateKey, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return nil, fmt.Errorf("生成RSA密钥失败: %v", err)
+	}
+
+	// 创建元数据
+	metadata := &KeyMetadata{
+		ID:           keyID,
+		Type:         KeyTypeRSA,
+		Size:         bits,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().AddDate(1, 0, 0), // 1年过期
+		IsActive:     true,
+		RotationDays: 365,
+		Tags:         make(map[string]string),
+	}
+
+	// 序列化私钥
+	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	})
+
+	// 保存密钥
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.storage.Save(keyID, metadata, privateKeyPEM); err != nil {
+		return nil, fmt.Errorf("保存密钥失败: %v", err)
+	}
+
+	m.keys[keyID] = metadata
+	m.secrets[keyID] = privateKeyPEM
+
+	return privateKey, nil
+}
+
+// 生成AES密钥
+func (m *KeyManager) GenerateAESKey(keyID string, bits int) ([]byte, error) {
+	if bits != 128 && bits != 256 {
+		return nil, errors.New("AES密钥长度必须是128或256位")
+	}
+
+	key := make([]byte, bits/8)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("生成AES密钥失败: %v", err)
+	}
+
+	// 创建元数据
+	metadata := &KeyMetadata{
+		ID:           keyID,
+		Type:         KeyTypeAES,
+		Size:         bits,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().AddDate(0, 6, 0), // 6个月过期
+		IsActive:     true,
+		RotationDays: 180,
+		Tags:         make(map[string]string),
+	}
+
+	// 保存密钥
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.storage.Save(keyID, metadata, key); err != nil {
+		return nil, fmt.Errorf("保存密钥失败: %v", err)
+	}
+
+	m.keys[keyID] = metadata
+	m.secrets[keyID] = key
+
+	return key, nil
+}
+```
+
+### 审计日志
+
+#### 1. 审计日志系统
+
+```go
+package security
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+)
+
+// 审计事件类型
+type AuditEventType string
+
+const (
+	AuditEventLogin         AuditEventType = "login"
+	AuditEventLogout        AuditEventType = "logout"
+	AuditEventAccess        AuditEventType = "access"
+	AuditEventCreate        AuditEventType = "create"
+	AuditEventUpdate        AuditEventType = "update"
+	AuditEventDelete        AuditEventType = "delete"
+	AuditEventPermission    AuditEventType = "permission"
+	AuditEventSystem        AuditEventType = "system"
+	AuditEventSecurity      AuditEventType = "security"
+)
+
+// 审计事件级别
+type AuditEventLevel string
+
+const (
+	AuditLevelInfo     AuditEventLevel = "info"
+	AuditLevelWarning  AuditEventLevel = "warning"
+	AuditLevelError    AuditEventLevel = "error"
+	AuditLevelCritical AuditEventLevel = "critical"
+)
+
+// 审计事件
+type AuditEvent struct {
+	ID        string                 `json:"id"`
+	Type      AuditEventType          `json:"type"`
+	Level     AuditEventLevel         `json:"level"`
+	UserID    string                 `json:"user_id,omitempty"`
+	Username  string                 `json:"username,omitempty"`
+	Resource  string                 `json:"resource,omitempty"`
+	Action    string                 `json:"action,omitempty"`
+	IP        string                 `json:"ip,omitempty"`
+	UserAgent string                 `json:"user_agent,omitempty"`
+	Status    string                 `json:"status,omitempty"`
+	Message   string                 `json:"message"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+// 审计日志管理器
+type AuditLogManager struct {
+	storage    AuditStorage
+	buffer     chan *AuditEvent
+	workers    int
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+// 审计日志存储接口
+type AuditStorage interface {
+	Save(event *AuditEvent) error
+	Query(filter AuditFilter) ([]*AuditEvent, error)
+	GetLatest(count int) ([]*AuditEvent, error)
+}
+
+// 审计过滤器
+type AuditFilter struct {
+	StartTime  *time.Time
+	EndTime    *time.Time
+	UserID     string
+	Type       AuditEventType
+	Level      AuditEventLevel
+	Resource   string
+	IP         string
+	Limit      int
+	Offset     int
+}
+
+// 文件系统审计存储
+type FileSystemAuditStorage struct {
+	baseDir string
+}
+
+// 创建文件系统审计存储
+func NewFileSystemAuditStorage(baseDir string) *FileSystemAuditStorage {
+	return &FileSystemAuditStorage{
+		baseDir: baseDir,
+	}
+}
+
+// 保存审计事件
+func (s *FileSystemAuditStorage) Save(event *AuditEvent) error {
+	// 按日期创建文件
+	dateStr := event.Timestamp.Format("2006-01-02")
+	filename := fmt.Sprintf("%s/audit-%s.jsonl", s.baseDir, dateStr)
+
+	// 序列化事件
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("序列化审计事件失败: %v", err)
+	}
+
+	// 追加到文件
+	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("打开审计文件失败: %v", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(string(data) + "\n"); err != nil {
+		return fmt.Errorf("写入审计事件失败: %v", err)
+	}
+
+	return nil
+}
+
+// 创建审计日志管理器
+func NewAuditLogManager(storage AuditStorage, workers int) *AuditLogManager {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &AuditLogManager{
+		storage: storage,
+		buffer:  make(chan *AuditEvent, 1000),
+		workers: workers,
+		ctx:     ctx,
+		cancel:  cancel,
+	}
+}
+
+// 启动审计日志管理器
+func (m *AuditLogManager) Start() {
+	for i := 0; i < m.workers; i++ {
+		go m.worker()
+	}
+}
+
+// 记录审计事件
+func (m *AuditLogManager) Log(event *AuditEvent) {
+	// 生成事件ID
+	event.ID = generateUUID()
+	event.Timestamp = time.Now()
+
+	select {
+	case m.buffer <- event:
+	default:
+		log.Printf("审计日志缓冲区已满，丢弃事件: %s", event.ID)
+	}
+}
+
+// 记录登录事件
+func (m *AuditLogManager) LogLogin(userID, username, ip, userAgent, status string) {
+	m.Log(&AuditEvent{
+		Type:      AuditEventLogin,
+		Level:     AuditLevelInfo,
+		UserID:    userID,
+		Username:  username,
+		IP:        ip,
+		UserAgent: userAgent,
+		Status:    status,
+		Message:   fmt.Sprintf("用户 %s 登录%s", username, status),
+	})
+}
+
+// 记录访问事件
+func (m *AuditLogManager) LogAccess(userID, username, resource, action, ip string, success bool) {
+	level := AuditLevelInfo
+	status := "成功"
+	if !success {
+		level = AuditLevelWarning
+		status = "失败"
+	}
+
+	m.Log(&AuditEvent{
+		Type:     AuditEventAccess,
+		Level:    level,
+		UserID:   userID,
+		Username: username,
+		Resource: resource,
+		Action:   action,
+		IP:       ip,
+		Status:   status,
+		Message:  fmt.Sprintf("用户 %s %s 资源 %s %s", username, action, resource, status),
+	})
+}
+```
+
+## 实践项目：构建安全API网关
+
+### 项目结构
+
+```
+security-gateway/
+├── config/
+│   ├── config.go          # 配置管理
+│   └── security.yaml      # 安全配置文件
+├── security/
+│   ├── auth/              # 认证模块
+│   │   ├── jwt.go
+│   │   ├── oauth.go
+│   │   └── password.go
+│   ├── authorization/     # 授权模块
+│   │   ├── rbac.go
+│   │   └── abac.go
+│   ├── crypto/           # 加密模块
+│   │   ├── tls.go
+│   │   └── encryption.go
+│   ├── audit/            # 审计模块
+│   │   └── audit.go
+│   └── gateway/          # 网关模块
+│       └── gateway.go
+├── api/
+│   ├── auth.go           # 认证API
+│   ├── admin.go          # 管理API
+│   └── health.go         # 健康检查
+├── cmd/
+│   └── main.go           # 主程序
+├── test/
+│   ├── integration_test.go
+│   └── security_test.go
+└── docs/
+    └── api.md            # API文档
+```
+
+### 主程序实现
+
+```go
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/yourproject/security-gateway/config"
+	"github.com/yourproject/security-gateway/security"
+)
+
+func main() {
+	// 解析命令行参数
+	var configPath string
+	flag.StringVar(&configPath, "config", "./config/security.yaml", "配置文件路径")
+	flag.Parse()
+
+	// 加载配置
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		log.Fatalf("加载配置失败: %v", err)
+	}
+
+	// 创建安全系统
+	securitySystem, err := security.NewSecuritySystem(cfg)
+	if err != nil {
+		log.Fatalf("创建安全系统失败: %v", err)
+	}
+
+	// 创建HTTP服务器
+	server := &http.Server{
+		Addr:    cfg.ListenAddr,
+		Handler: securitySystem.GetGateway(),
+	}
+
+	// 启动服务器
+	go func() {
+		log.Printf("安全网关启动在 %s", cfg.ListenAddr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("服务器启动失败: %v", err)
+		}
+	}()
+
+	// 等待关闭信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	// 优雅关闭
+	log.Println("正在关闭服务器...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("服务器关闭失败: %v", err)
+	}
+
+	if err := securitySystem.Stop(); err != nil {
+		log.Printf("安全系统关闭失败: %v", err)
+	}
+
+	log.Println("服务器已关闭")
+}
+```
+
+### 安全配置示例
+
+```yaml
+# security.yaml
+gateway:
+  listen_addr: ":8080"
+  enable_tls: false
+  enable_rate_limit: true
+  rate_limit:
+    requests_per_minute: 60
+    burst_size: 10
+    enable_ip_tracking: true
+  enable_cors: true
+  cors_config:
+    allowed_origins:
+      - "http://localhost:3000"
+      - "https://yourdomain.com"
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+      - "OPTIONS"
+    allowed_headers:
+      - "Content-Type"
+      - "Authorization"
+      - "X-Requested-With"
+    allow_credentials: true
+    max_age: 86400
+  enable_audit: true
+  audit_config:
+    storage_dir: "./audit-logs"
+    workers: 3
+    retention_days: 90
+  services:
+    "/api/auth": "http://localhost:8081"
+    "/api/users": "http://localhost:8082"
+    "/api/orders": "http://localhost:8083"
+    "/api/admin": "http://localhost:8084"
+
+security:
+  jwt:
+    issuer: "security-gateway"
+    expiration: "24h"
+    secret: "your-secret-key-here"
+
+  password:
+    min_length: 12
+    require_upper: true
+    require_lower: true
+    require_digit: true
+    require_special: true
+
+  security_headers:
+    X-Content-Type-Options: "nosniff"
+    X-Frame-Options: "DENY"
+    X-XSS-Protection: "1; mode=block"
+    Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+    Content-Security-Policy: "default-src 'self'"
+    Referrer-Policy: "strict-origin-when-cross-origin"
+    Permissions-Policy: "geolocation=(), microphone=(), camera=()"
+```
+
+## 练习题
+
+### 概念题
+
+1. **认证与授权**：解释认证和授权的区别，以及它们在分布式系统中的作用。
+
+2. **JWT安全性**：分析JWT令牌的安全性风险，以及如何减轻这些风险。
+
+3. **零信任架构**：解释零信任架构的核心原则，以及如何在分布式系统中实现。
+
+4. **加密通信**：比较TLS和mTLS的区别，以及它们的使用场景。
+
+### 编程题
+
+1. **OAuth集成**：实现一个完整的OAuth 2.0授权流程，包括令牌刷新机制。
+
+2. **密钥轮换**：实现一个自动密钥轮换系统，确保密钥定期更新而不影响服务。
+
+3. **审计日志分析**：创建一个审计日志分析工具，能够检测异常访问模式。
+
+4. **安全扫描器**：实现一个安全扫描器，定期检查系统配置和代码漏洞。
+
+### 设计题
+
+1. **微服务安全架构**：设计一个完整的微服务安全架构，包括服务间通信安全。
+
+2. **多因素认证**：设计一个多因素认证系统，支持多种认证方式。
+
+3. **数据保护**：设计一个数据保护方案，包括加密、脱敏和访问控制。
+
+4. **安全监控**：设计一个安全监控系统，能够实时检测和响应安全威胁。
+
+## 常见问题
+
+### Q: 如何处理JWT令牌的吊销？
+
+A: JWT令牌通常是无状态的，难以直接吊销。解决方案包括：
+- 使用短期的访问令牌和长期的刷新令牌
+- 维护令牌黑名单
+- 使用基于JWT的令牌吊销协议（如RFC 7009）
+
+### Q: 如何防止CSRF攻击？
+
+A: 防止CSRF攻击的方法包括：
+- 使用SameSite Cookie属性
+- 实现CSRF令牌验证
+- 检查Origin和Referer头
+- 使用双重提交Cookie
+
+### Q: 如何选择合适的加密算法？
+
+A: 选择加密算法时考虑：
+- AES-256用于对称加密
+- RSA-2048+用于非对称加密
+- Argon2id用于密码哈希
+- SHA-256用于哈希
+- 避免使用已知的弱算法
+
+### Q: 如何实现安全的密码存储？
+
+A: 安全密码存储的最佳实践：
+- 使用强哈希算法（如Argon2id）
+- 每个密码使用唯一的盐值
+- 设置适当的计算参数
+- 实现密码强度检查
+- 定期更新哈希算法
+
+## 扩展资源
+
+### 必读资源
+
+1. **[OWASP安全指南](https://owasp.org/www-project-top-ten/)** - Web应用安全风险
+2. **[NIST网络安全框架](https://www.nist.gov/cyberframework)** - 网络安全标准
+3. **[RFC 6749 OAuth 2.0](https://tools.ietf.org/html/rfc6749)** - OAuth 2.0授权框架
+4. **[JWT规范](https://jwt.io/)** - JSON Web Token标准
+
+### 安全工具
+
+1. **[Vault](https://www.vaultproject.io/)** - 密钥管理和 secrets 存储
+2. **[OpenSSL](https://www.openssl.org/)** - 加密工具包
+3. **[Fail2Ban](https://www.fail2ban.org/)** - 入侵防御软件
+4. **[Snort](https://www.snort.org/)** - 网络入侵检测系统
+
+### 在线课程
+
+1. **[Coursera网络安全专项课程](https://www.coursera.org/specializations/security)** - 网络安全课程
+2. **[UdemyWeb应用安全](https://www.udemy.com/course/web-application-security/)** - Web安全实践
+3. **[edX网络安全课程](https://www.edx.org/learn/cybersecurity)** - 网络安全基础
+4. **[Pluralsight安全路径](https://www.pluralsight.com/paths/security)** - 安全学习路径
+
+## 下一步学习
+
+在完成Lecture 20后，你应该继续：
+
+1. **实践项目**：构建完整的安全API网关
+2. **安全测试**：学习安全测试方法和工具
+3. **安全监控**：深入了解安全监控和响应
+4. **合规性**：了解安全合规要求和标准
+
+---
+
+*分布式系统的安全性是构建可靠系统的基础。通过认证、授权、加密和监控等多层次的安全机制，可以确保系统的机密性、完整性和可用性。记住，安全是一个持续的过程，需要不断更新和改进。*

@@ -1,0 +1,288 @@
+---
+title: "第1讲：AI时代的操作系统"
+description: "南京大学操作系统2025 - 绪论：AI时代下的操作系统设计与挑战"
+---
+
+# 第1讲：AI时代的操作系统
+
+## 课程导论
+
+欢迎来到南京大学操作系统2025课程！在这一讲中，我们将探讨AI时代下操作系统的新挑战和新机遇。
+
+## 什么是操作系统？
+
+### 传统定义
+操作系统是管理计算机硬件与软件资源的系统软件，为应用程序提供运行环境。
+
+### AI时代的新定义
+在AI时代，操作系统不仅需要管理传统的计算资源，还需要：
+- 管理AI加速器（GPU、TPU、NPU等）
+- 支持大规模并行计算
+- 优化AI工作负载的调度
+- 提供高效的内存和数据管理
+
+## AI对操作系统的挑战
+
+### 1. 计算资源管理
+```c
+// 传统CPU调度
+void schedule_cpu() {
+    // 基于时间片轮转
+    while (has_ready_processes()) {
+        process = get_next_process();
+        run_process(process, TIME_SLICE);
+    }
+}
+
+// AI时代的资源调度
+void schedule_ai_workload() {
+    // 需要考虑CPU、GPU、内存、网络等资源
+    ai_task = get_next_ai_task();
+    resources = allocate_resources(ai_task);
+    execute_task(ai_task, resources);
+}
+```
+
+### 2. 内存管理革新
+AI应用需要处理大规模数据，传统的内存管理方式面临挑战：
+- **海量数据**：大语言模型需要GB级别的内存
+- **数据局部性**：AI访问模式与传统应用不同
+- **内存层次**：需要更智能的缓存策略
+
+### 3. 并发与并行
+AI应用具有高度的并行性：
+- **数据并行**：同一模型处理多个数据
+- **模型并行**：大型模型分布在多个设备
+- **流水线并行**：不同阶段的并行处理
+
+## 现代操作系统的核心功能
+
+### 1. 虚拟化
+```python
+# 进程虚拟化
+class Process:
+    def __init__(self, pid, memory, code):
+        self.pid = pid
+        self.memory = memory  # 虚拟地址空间
+        self.code = code
+        self.state = 'READY'
+
+# 地址空间虚拟化
+class AddressSpace:
+    def __init__(self):
+        self.segments = {
+            'text': 0x00000000,    # 代码段
+            'data': 0x10000000,    # 数据段
+            'heap': 0x20000000,    # 堆段
+            'stack': 0x7fffffff    # 栈段
+        }
+```
+
+### 2. 并发
+```c
+// 线程同步示例
+pthread_mutex_t mutex;
+pthread_cond_t cond;
+
+void* producer(void* arg) {
+    pthread_mutex_lock(&mutex);
+    // 生产数据
+    pthread_cond_signal(&cond);
+    pthread_mutex_unlock(&mutex);
+}
+
+void* consumer(void* arg) {
+    pthread_mutex_lock(&mutex);
+    pthread_cond_wait(&cond, &mutex);
+    // 消费数据
+    pthread_mutex_unlock(&mutex);
+}
+```
+
+### 3. 持久化
+```c
+// 文件系统接口
+FILE* file = fopen("model_weights.bin", "rb");
+fread(weights, sizeof(float), num_weights, file);
+fclose(file);
+
+// 数据库接口
+sqlite3* db;
+sqlite3_open("training_data.db", &db);
+sqlite3_exec(db, "SELECT * FROM training_samples", callback, 0, 0);
+sqlite3_close(db);
+```
+
+## 多视角理解操作系统
+
+### 应用视角
+从应用程序开发者的角度看，操作系统提供：
+- **系统调用接口**：文件操作、进程管理、网络通信
+- **运行时环境**：动态链接、信号处理
+- **性能优化**：缓存、预取、并行化
+
+### 硬件视角
+从硬件设计者的角度看，操作系统需要：
+- **抽象硬件细节**：提供统一的设备接口
+- **优化资源利用**：CPU调度、内存管理
+- **处理异常情况**：中断、错误恢复
+
+### 数学视角
+从理论角度看，操作系统涉及：
+- **算法设计**：调度算法、页面置换算法
+- **形式化验证**：安全性证明、并发正确性
+- **性能分析**：复杂度分析、排队论
+
+## AI时代操作系统的典型案例
+
+### 1. 深度学习框架的操作系统支持
+```python
+# PyTorch的多GPU训练
+import torch
+import torch.distributed as dist
+
+# 初始化进程组
+dist.init_process_group(backend='nccl')
+
+# 创建模型并移至GPU
+model = MyModel().cuda()
+model = torch.nn.parallel.DistributedDataParallel(model)
+
+# 数据并行训练
+for data, target in data_loader:
+    output = model(data)
+    loss = criterion(output, target)
+    loss.backward()
+    optimizer.step()
+```
+
+### 2. 大语言模型推理优化
+```c
+// 内存管理优化
+class LLMInferenceEngine {
+private:
+    KVCache kv_cache;           // KV缓存
+    MemoryPool memory_pool;     // 内存池
+    Scheduler scheduler;        // 请求调度器
+
+public:
+    void inference(Request req) {
+        // 内存预分配
+        Tensor* tensors = memory_pool.allocate(req.size);
+
+        // KV缓存管理
+        kv_cache.update(req.tokens);
+
+        // 计算调度
+        scheduler.schedule(req);
+    }
+};
+```
+
+### 3. 分布式训练的操作系统支持
+```python
+# 分布式训练示例
+import horovod.tensorflow as hvd
+
+# 初始化Horovod
+hvd.init()
+
+# Pin GPU to be used to process local rank
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    tf.config.experimental.set_visible_devices(gpus[hvd.local_rank()], 'GPU')
+
+# 构建模型
+model = ...
+opt = hvd.DistributedOptimizer(opt)
+
+# 广播初始变量
+hvd.callbacks.BroadcastGlobalVariablesCallback(0)
+
+# 训练
+model.fit(...)
+```
+
+## 学习方法建议
+
+### 1. 理论学习
+- **阅读经典教材**：《现代操作系统》、《操作系统概念》
+- **学习算法**：调度算法、页面置换算法
+- **理解概念**：进程、线程、虚拟内存、文件系统
+
+### 2. 实践编程
+- **完成实验**：M1-M9实验项目
+- **阅读源码**：Linux内核、xv6教学系统
+- **动手实现**：Mini操作系统、文件系统
+
+### 3. 现代技术跟踪
+- **关注AI系统**：深度学习框架、大模型系统
+- **学习分布式**：Kubernetes、云原生技术
+- **了解前沿**：量子计算、新型存储
+
+## 实验环境搭建
+
+### 1. 开发环境
+```bash
+# 安装必要的开发工具
+sudo apt update
+sudo apt install build-essential gdb qemu-system-x86
+
+# 下载课程代码
+git clone https://github.com/jyy-os/2025.git
+cd 2025
+```
+
+### 2. 调试工具
+```bash
+# 使用GDB调试
+gcc -g program.c -o program
+gdb ./program
+
+# 使用QEMU模拟
+qemu-system-x86_64 -kernel kernel.img
+```
+
+### 3. 版本控制
+```bash
+# 配置Git
+git config --global user.name "Your Name"
+git config --global user.email "your@email.com"
+
+# 创建实验分支
+git checkout -b lab1
+```
+
+## 课程安排
+
+### 学习进度
+- **第1-2周**：绪论与基础概念
+- **第3-8周**：虚拟化技术（实验M1-M4）
+- **第9-13周**：并发控制（实验M5-M7）
+- **第14-15周**：持久化存储（实验M8）
+- **第16周**：系统安全与现代架构（实验M9）
+
+### 重要日期
+- **期中考试**：第8周
+- **期末考试**：6月21日16:30，仙I-107
+- **实验截止**：2025年8月3日23:59:59
+
+## 总结
+
+本讲我们介绍了AI时代操作系统的基本概念和挑战。操作系统作为计算机系统的核心软件，在AI时代面临着新的机遇和挑战。我们将从应用、硬件、数学三个视角来深入学习操作系统的设计与实现。
+
+## 课后练习
+
+1. **思考题**：AI应用对操作系统的哪些方面提出了新的要求？
+2. **编程题**：编写一个简单的进程调度程序。
+3. **阅读题**：阅读《现代操作系统》第1章。
+
+## 下一讲预告
+
+第2讲：操作系统基础架构 - 计算机系统架构、操作系统历史发展、现代操作系统的核心功能。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第1讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect1.md](https://jyywiki.cn/OS/2025/lect1.md)*

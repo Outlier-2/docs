@@ -1,0 +1,1190 @@
+---
+title: "Lecture 12: 查询执行 I"
+description: "CMU 15-445 Lecture 12 - 查询处理框架、执行引擎、表达式求值、物化策略"
+---
+
+# Lecture 12: 查询执行 I
+
+## 查询执行概述
+
+### 查询执行引擎的作用
+
+查询执行引擎是数据库系统的核心组件，负责：
+
+1. **查询解析**：将SQL查询转换为内部表示
+2. **查询优化**：生成最优的执行计划
+3. **计划执行**：按照执行计划操作数据
+4. **结果返回**：将处理结果返回给客户端
+
+### 执行引擎架构
+```
+查询执行引擎架构：
+├── 查询解析器：解析SQL语句
+├── 查询优化器：生成执行计划
+├── 执行引擎：执行操作符
+├── 存储引擎：提供数据访问接口
+└── 缓冲池管理器：管理内存缓冲
+```
+
+## 查询处理框架
+
+### 迭代器模型
+
+#### 基础迭代器接口
+```cpp
+class Iterator {
+public:
+    virtual ~Iterator() = default;
+
+    // 初始化迭代器
+    virtual void open() = 0;
+
+    // 获取下一条记录
+    virtual bool next(Record* record) = 0;
+
+    // 关闭迭代器
+    virtual void close() = 0;
+
+    // 获取输出模式（schema）
+    const Schema& get_output_schema() const {
+        return output_schema_;
+    }
+
+    // 获取迭代器统计信息
+    IteratorStats get_stats() const {
+        return stats_;
+    }
+
+protected:
+    Schema output_schema_;
+    IteratorStats stats_;
+};
+
+class IteratorStats {
+public:
+    size_t tuples_processed = 0;
+    size_t bytes_processed = 0;
+    chrono::milliseconds execution_time{0};
+    size_t memory_usage = 0;
+    size_t disk_io_ops = 0;
+
+    void reset() {
+        tuples_processed = 0;
+        bytes_processed = 0;
+        execution_time = chrono::milliseconds{0};
+        memory_usage = 0;
+        disk_io_ops = 0;
+    }
+
+    void merge(const IteratorStats& other) {
+        tuples_processed += other.tuples_processed;
+        bytes_processed += other.bytes_processed;
+        execution_time += other.execution_time;
+        memory_usage = max(memory_usage, other.memory_usage);
+        disk_io_ops += other.disk_io_ops;
+    }
+};
+```
+
+### 执行操作符
+
+#### 扫描操作符
+```cpp
+class SeqScanIterator : public Iterator {
+private:
+    Table* table_;
+    unique_ptr<TableIterator> table_iterator_;
+    vector<Predicate> predicates_;
+    vector<string> output_columns_;
+    bool is_open_ = false;
+
+public:
+    SeqScanIterator(Table* table, const vector<Predicate>& preds,
+                   const vector<string>& output_cols)
+        : table_(table), predicates_(preds), output_columns_(output_cols) {
+        // 设置输出模式
+        output_schema_ = build_output_schema();
+    }
+
+    void open() override {
+        if (is_open_) {
+            throw runtime_error("Iterator already open");
+        }
+
+        table_iterator_ = table_->create_iterator();
+        is_open_ = true;
+        stats_.reset();
+    }
+
+    bool next(Record* record) override {
+        if (!is_open_) {
+            throw runtime_error("Iterator not open");
+        }
+
+        auto start_time = chrono::steady_clock::now();
+
+        while (table_iterator_->has_next()) {
+            Record current = table_iterator_->next();
+            stats_.tuples_processed++;
+            stats_.bytes_processed += current.get_size();
+
+            // 应用谓词过滤
+            if (satisfies_predicates(current)) {
+                // 投影输出列
+                *record = project_record(current);
+                auto end_time = chrono::steady_clock::now();
+                stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+                return true;
+            }
+        }
+
+        auto end_time = chrono::steady_clock::now();
+        stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        return false;
+    }
+
+    void close() override {
+        if (!is_open_) {
+            return;
+        }
+
+        table_iterator_.reset();
+        is_open_ = false;
+    }
+
+private:
+    bool satisfies_predicates(const Record& record) const {
+        for (const auto& pred : predicates_) {
+            if (!pred.evaluate(record)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Record project_record(const Record& record) const {
+        Record result;
+        for (const auto& col : output_columns_) {
+            Value value = record.get_value(col);
+            result.add_value(value, col);
+        }
+        return result;
+    }
+
+    Schema build_output_schema() {
+        Schema schema;
+        for (const auto& col : output_columns_) {
+            const ColumnInfo* col_info = table_->get_column_info(col);
+            schema.add_column(col_info->name, col_info->type);
+        }
+        return schema;
+    }
+};
+```
+
+#### 索引扫描操作符
+```cpp
+class IndexScanIterator : public Iterator {
+private:
+    Table* table_;
+    Index* index_;
+    IndexCondition index_condition_;
+    vector<Predicate> predicates_;
+    vector<string> output_columns_;
+    unique_ptr<IndexIterator> index_iterator_;
+    bool is_open_ = false;
+
+public:
+    IndexScanIterator(Table* table, Index* index, const IndexCondition& idx_cond,
+                     const vector<Predicate>& preds, const vector<string>& output_cols)
+        : table_(table), index_(index), index_condition_(idx_cond),
+          predicates_(preds), output_columns_(output_cols) {
+        output_schema_ = build_output_schema();
+    }
+
+    void open() override {
+        if (is_open_) {
+            throw runtime_error("Iterator already open");
+        }
+
+        index_iterator_ = index_->create_iterator(index_condition_);
+        is_open_ = true;
+        stats_.reset();
+    }
+
+    bool next(Record* record) override {
+        if (!is_open_) {
+            throw runtime_error("Iterator not open");
+        }
+
+        auto start_time = chrono::steady_clock::now();
+
+        while (index_iterator_->has_next()) {
+            RecordId rid = index_iterator_->next();
+            Record current = table_->get_record(rid);
+
+            stats_.tuples_processed++;
+            stats_.bytes_processed += current.get_size();
+
+            // 应用剩余谓词
+            if (satisfies_predicates(current)) {
+                *record = project_record(current);
+                auto end_time = chrono::steady_clock::now();
+                stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+                return true;
+            }
+        }
+
+        auto end_time = chrono::steady_clock::now();
+        stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        return false;
+    }
+
+    void close() override {
+        if (!is_open_) {
+            return;
+        }
+
+        index_iterator_.reset();
+        is_open_ = false;
+    }
+
+private:
+    bool satisfies_predicates(const Record& record) const {
+        for (const auto& pred : predicates_) {
+            if (!pred.evaluate(record)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Record project_record(const Record& record) const {
+        Record result;
+        for (const auto& col : output_columns_) {
+            Value value = record.get_value(col);
+            result.add_value(value, col);
+        }
+        return result;
+    }
+
+    Schema build_output_schema() {
+        Schema schema;
+        for (const auto& col : output_columns_) {
+            const ColumnInfo* col_info = table_->get_column_info(col);
+            schema.add_column(col_info->name, col_info->type);
+        }
+        return schema;
+    }
+};
+```
+
+## 表达式求值
+
+### 表达式框架
+
+#### 表达式求值器
+```cpp
+class ExpressionEvaluator {
+public:
+    virtual ~ExpressionEvaluator() = default;
+
+    // 表达式类型
+    enum class ExprType {
+        CONSTANT,
+        COLUMN_REF,
+        FUNCTION_CALL,
+        ARITHMETIC_OP,
+        LOGICAL_OP,
+        COMPARISON_OP,
+        CASE_EXPR,
+        AGGREGATE_EXPR
+    };
+
+    // 表达式结果
+    struct ExprResult {
+        Value value;
+        bool is_null;
+        DataType type;
+
+        ExprResult() : is_null(true), type(DataType::UNKNOWN) {}
+        ExprResult(const Value& val, DataType dtype) : value(val), is_null(false), type(dtype) {}
+        static ExprResult null_result(DataType dtype) { return ExprResult(Value(), dtype); }
+    };
+
+    virtual ExprResult evaluate(const Record& record) = 0;
+    virtual ExprType get_type() const = 0;
+    virtual DataType get_result_type() const = 0;
+};
+
+class ConstantExpression : public ExpressionEvaluator {
+private:
+    Value constant_value_;
+    DataType result_type_;
+
+public:
+    ConstantExpression(const Value& value, DataType type)
+        : constant_value_(value), result_type_(type) {}
+
+    ExprResult evaluate(const Record& record) override {
+        return ExprResult(constant_value_, result_type_);
+    }
+
+    ExprType get_type() const override { return ExprType::CONSTANT; }
+    DataType get_result_type() const override { return result_type_; }
+};
+
+class ColumnReferenceExpression : public ExpressionEvaluator {
+private:
+    string column_name_;
+    DataType column_type_;
+    int column_index_ = -1;
+
+public:
+    ColumnReferenceExpression(const string& col_name, DataType col_type)
+        : column_name_(col_name), column_type_(col_type) {}
+
+    ExprResult evaluate(const Record& record) override {
+        try {
+            Value value = record.get_value(column_name_);
+            return ExprResult(value, column_type_);
+        } catch (const exception&) {
+            return ExprResult::null_result(column_type_);
+        }
+    }
+
+    ExprType get_type() const override { return ExprType::COLUMN_REF; }
+    DataType get_result_type() const override { return column_type_; }
+
+    void set_column_index(int idx) { column_index_ = idx; }
+};
+
+class ArithmeticExpression : public ExpressionEvaluator {
+private:
+    unique_ptr<ExpressionEvaluator> left_;
+    unique_ptr<ExpressionEvaluator> right_;
+    char op_;  // '+', '-', '*', '/'
+    DataType result_type_;
+
+public:
+    ArithmeticExpression(unique_ptr<ExpressionEvaluator> left, char op,
+                        unique_ptr<ExpressionEvaluator> right, DataType result_type)
+        : left_(move(left)), right_(move(right)), op_(op), result_type_(result_type) {}
+
+    ExprResult evaluate(const Record& record) override {
+        ExprResult left_result = left_->evaluate(record);
+        ExprResult right_result = right_->evaluate(record);
+
+        if (left_result.is_null || right_result.is_null) {
+            return ExprResult::null_result(result_type_);
+        }
+
+        switch (op_) {
+            case '+':
+                return evaluate_addition(left_result, right_result);
+            case '-':
+                return evaluate_subtraction(left_result, right_result);
+            case '*':
+                return evaluate_multiplication(left_result, right_result);
+            case '/':
+                return evaluate_division(left_result, right_result);
+            default:
+                throw runtime_error("Unknown arithmetic operator: " + string(1, op_));
+        }
+    }
+
+    ExprType get_type() const override { return ExprType::ARITHMETIC_OP; }
+    DataType get_result_type() const override { return result_type_; }
+
+private:
+    ExprResult evaluate_addition(const ExprResult& left, const ExprResult& right) {
+        switch (result_type_) {
+            case DataType::INTEGER:
+                return ExprResult(Value(left.value.get_int() + right.value.get_int()), result_type_);
+            case DataType::FLOAT:
+                return ExprResult(Value(left.value.get_float() + right.value.get_float()), result_type_);
+            case DataType::DECIMAL:
+                return ExprResult(Value(left.value.get_decimal() + right.value.get_decimal()), result_type_);
+            default:
+                throw runtime_error("Addition not supported for type");
+        }
+    }
+
+    ExprResult evaluate_subtraction(const ExprResult& left, const ExprResult& right) {
+        switch (result_type_) {
+            case DataType::INTEGER:
+                return ExprResult(Value(left.value.get_int() - right.value.get_int()), result_type_);
+            case DataType::FLOAT:
+                return ExprResult(Value(left.value.get_float() - right.value.get_float()), result_type_);
+            case DataType::DECIMAL:
+                return ExprResult(Value(left.value.get_decimal() - right.value.get_decimal()), result_type_);
+            default:
+                throw runtime_error("Subtraction not supported for type");
+        }
+    }
+
+    ExprResult evaluate_multiplication(const ExprResult& left, const ExprResult& right) {
+        switch (result_type_) {
+            case DataType::INTEGER:
+                return ExprResult(Value(left.value.get_int() * right.value.get_int()), result_type_);
+            case DataType::FLOAT:
+                return ExprResult(Value(left.value.get_float() * right.value.get_float()), result_type_);
+            case DataType::DECIMAL:
+                return ExprResult(Value(left.value.get_decimal() * right.value.get_decimal()), result_type_);
+            default:
+                throw runtime_error("Multiplication not supported for type");
+        }
+    }
+
+    ExprResult evaluate_division(const ExprResult& left, const ExprResult& right) {
+        // 检查除零
+        if (is_zero(right.value)) {
+            return ExprResult::null_result(result_type_);
+        }
+
+        switch (result_type_) {
+            case DataType::INTEGER:
+                return ExprResult(Value(left.value.get_int() / right.value.get_int()), result_type_);
+            case DataType::FLOAT:
+                return ExprResult(Value(left.value.get_float() / right.value.get_float()), result_type_);
+            case DataType::DECIMAL:
+                return ExprResult(Value(left.value.get_decimal() / right.value.get_decimal()), result_type_);
+            default:
+                throw runtime_error("Division not supported for type");
+        }
+    }
+
+    bool is_zero(const Value& value) const {
+        switch (value.get_type()) {
+            case DataType::INTEGER: return value.get_int() == 0;
+            case DataType::FLOAT: return value.get_float() == 0.0f;
+            case DataType::DECIMAL: return value.get_decimal() == 0.0;
+            default: return false;
+        }
+    }
+};
+```
+
+### 聚合表达式
+
+#### 聚合函数表达式
+```cpp
+class AggregateExpression : public ExpressionEvaluator {
+private:
+    string function_name_;
+    unique_ptr<ExpressionEvaluator> argument_;
+    bool distinct_;
+    DataType result_type_;
+
+    // 聚合状态（需要在查询执行过程中维护）
+    struct AggregateState {
+        virtual ~AggregateState() = default;
+        virtual void accumulate(const Value& value) = 0;
+        virtual Value get_result() const = 0;
+        virtual void reset() = 0;
+        virtual unique_ptr<AggregateState> clone() const = 0;
+    };
+
+    unique_ptr<AggregateState> create_aggregate_state() const;
+
+public:
+    AggregateExpression(const string& func_name, unique_ptr<ExpressionEvaluator> arg,
+                        bool is_distinct, DataType result_type)
+        : function_name_(func_name), argument_(move(arg)), distinct_(is_distinct),
+          result_type_(result_type) {}
+
+    ExprResult evaluate(const Record& record) override {
+        // 聚合表达式不能直接在记录上求值
+        throw runtime_error("Aggregate expressions must be evaluated through aggregation context");
+    }
+
+    ExprType get_type() const override { return ExprType::AGGREGATE_EXPR; }
+    DataType get_result_type() const override { return result_type_; }
+
+    const string& get_function_name() const { return function_name_; }
+    const ExpressionEvaluator* get_argument() const { return argument_.get(); }
+    bool is_distinct() const { return distinct_; }
+
+    unique_ptr<AggregateState> create_state() const {
+        return create_aggregate_state();
+    }
+};
+
+class CountAggregate : public AggregateExpression::AggregateState {
+private:
+    int64_t count_ = 0;
+    unordered_set<Value> distinct_values_;  // 用于COUNT(DISTINCT)
+
+public:
+    void accumulate(const Value& value) override {
+        if (!value.is_null()) {
+            if (is_distinct_) {
+                distinct_values_.insert(value);
+            } else {
+                count_++;
+            }
+        }
+    }
+
+    Value get_result() const override {
+        if (is_distinct_) {
+            return Value(static_cast<int64_t>(distinct_values_.size()));
+        }
+        return Value(count_);
+    }
+
+    void reset() override {
+        count_ = 0;
+        distinct_values_.clear();
+    }
+
+    unique_ptr<AggregateState> clone() const override {
+        auto result = make_unique<CountAggregate>();
+        result->count_ = count_;
+        result->distinct_values_ = distinct_values_;
+        return result;
+    }
+};
+
+class SumAggregate : public AggregateExpression::AggregateState {
+private:
+    DataType data_type_;
+    Value sum_;
+    bool has_values_ = false;
+
+public:
+    SumAggregate(DataType dtype) : data_type_(dtype) {
+        initialize_sum();
+    }
+
+    void accumulate(const Value& value) override {
+        if (value.is_null()) return;
+
+        if (!has_values_) {
+            sum_ = value;
+            has_values_ = true;
+        } else {
+            switch (data_type_) {
+                case DataType::INTEGER:
+                    sum_ = Value(sum_.get_int() + value.get_int());
+                    break;
+                case DataType::FLOAT:
+                    sum_ = Value(sum_.get_float() + value.get_float());
+                    break;
+                case DataType::DECIMAL:
+                    sum_ = Value(sum_.get_decimal() + value.get_decimal());
+                    break;
+                default:
+                    throw runtime_error("SUM not supported for type");
+            }
+        }
+    }
+
+    Value get_result() const override {
+        return has_values_ ? sum_ : Value();  // NULL if no values
+    }
+
+    void reset() override {
+        initialize_sum();
+        has_values_ = false;
+    }
+
+    unique_ptr<AggregateState> clone() const override {
+        auto result = make_unique<SumAggregate>(data_type_);
+        result->sum_ = sum_;
+        result->has_values_ = has_values_;
+        return result;
+    }
+
+private:
+    void initialize_sum() {
+        switch (data_type_) {
+            case DataType::INTEGER: sum_ = Value(0); break;
+            case DataType::FLOAT: sum_ = Value(0.0f); break;
+            case DataType::DECIMAL: sum_ = Value(0.0); break;
+            default: sum_ = Value();
+        }
+    }
+};
+
+class AverageAggregate : public AggregateExpression::AggregateState {
+private:
+    DataType data_type_;
+    Value sum_;
+    int64_t count_ = 0;
+
+public:
+    AverageAggregate(DataType dtype) : data_type_(dtype) {
+        initialize_sum();
+    }
+
+    void accumulate(const Value& value) override {
+        if (value.is_null()) return;
+
+        switch (data_type_) {
+            case DataType::INTEGER:
+                sum_ = Value(sum_.get_int() + value.get_int());
+                break;
+            case DataType::FLOAT:
+                sum_ = Value(sum_.get_float() + value.get_float());
+                break;
+            case DataType::DECIMAL:
+                sum_ = Value(sum_.get_decimal() + value.get_decimal());
+                break;
+            default:
+                throw runtime_error("AVG not supported for type");
+        }
+        count_++;
+    }
+
+    Value get_result() const override {
+        if (count_ == 0) return Value();  // NULL
+
+        switch (data_type_) {
+            case DataType::INTEGER:
+                return Value(static_cast<double>(sum_.get_int()) / count_);
+            case DataType::FLOAT:
+                return Value(sum_.get_float() / count_);
+            case DataType::DECIMAL:
+                return Value(sum_.get_decimal() / static_cast<double>(count_));
+            default:
+                throw runtime_error("AVG not supported for type");
+        }
+    }
+
+    void reset() override {
+        initialize_sum();
+        count_ = 0;
+    }
+
+    unique_ptr<AggregateState> clone() const override {
+        auto result = make_unique<AverageAggregate>(data_type_);
+        result->sum_ = sum_;
+        result->count_ = count_;
+        return result;
+    }
+
+private:
+    void initialize_sum() {
+        switch (data_type_) {
+            case DataType::INTEGER: sum_ = Value(0); break;
+            case DataType::FLOAT: sum_ = Value(0.0f); break;
+            case DataType::DECIMAL: sum_ = Value(0.0); break;
+            default: sum_ = Value();
+        }
+    }
+};
+```
+
+## 物化策略
+
+### 物化操作符
+
+#### 物化聚合操作符
+```cpp
+class HashAggregateIterator : public Iterator {
+private:
+    unique_ptr<Iterator> child_;
+    vector<unique_ptr<ExpressionEvaluator>> group_by_exprs_;
+    vector<unique_ptr<AggregateExpression>> aggregate_exprs_;
+    unordered_map<vector<Value>, vector<unique_ptr<AggregateExpression::AggregateState>>> groups_;
+    vector<vector<Value>> group_keys_;
+    size_t current_group_index_ = 0;
+    bool is_open_ = false;
+
+public:
+    HashAggregateIterator(unique_ptr<Iterator> child,
+                         vector<unique_ptr<ExpressionEvaluator>> group_exprs,
+                         vector<unique_ptr<AggregateExpression>> agg_exprs)
+        : child_(move(child)), group_by_exprs_(move(group_exprs)),
+          aggregate_exprs_(move(agg_exprs)) {
+        output_schema_ = build_output_schema();
+    }
+
+    void open() override {
+        if (is_open_) {
+            throw runtime_error("Iterator already open");
+        }
+
+        child_->open();
+        build_groups();
+        is_open_ = true;
+        stats_.reset();
+    }
+
+    bool next(Record* record) override {
+        if (!is_open_) {
+            throw runtime_error("Iterator not open");
+        }
+
+        auto start_time = chrono::steady_clock::now();
+
+        if (current_group_index_ < group_keys_.size()) {
+            *record = build_output_record(group_keys_[current_group_index_]);
+            current_group_index_++;
+
+            auto end_time = chrono::steady_clock::now();
+            stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+            stats_.tuples_processed++;
+            return true;
+        }
+
+        auto end_time = chrono::steady_clock::now();
+        stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        return false;
+    }
+
+    void close() override {
+        if (!is_open_) {
+            return;
+        }
+
+        child_->close();
+        groups_.clear();
+        group_keys_.clear();
+        current_group_index_ = 0;
+        is_open_ = false;
+    }
+
+private:
+    void build_groups() {
+        Record input_record;
+
+        while (child_->next(&input_record)) {
+            // 计算分组键
+            vector<Value> group_key = compute_group_key(input_record);
+
+            // 查找或创建分组
+            auto& group_state = groups_[group_key];
+            if (group_state.empty()) {
+                // 新分组，初始化聚合状态
+                for (const auto& agg_expr : aggregate_exprs_) {
+                    group_state.push_back(agg_expr->create_state());
+                }
+                group_keys_.push_back(group_key);
+            }
+
+            // 更新聚合状态
+            for (size_t i = 0; i < aggregate_exprs_.size(); i++) {
+                ExpressionEvaluator::ExprResult arg_result =
+                    aggregate_exprs_[i]->get_argument()->evaluate(input_record);
+
+                if (!arg_result.is_null) {
+                    group_state[i]->accumulate(arg_result.value);
+                }
+            }
+        }
+    }
+
+    vector<Value> compute_group_key(const Record& record) {
+        vector<Value> key;
+        key.reserve(group_by_exprs_.size());
+
+        for (const auto& expr : group_by_exprs_) {
+            ExpressionEvaluator::ExprResult result = expr->evaluate(record);
+            key.push_back(result.value);
+        }
+
+        return key;
+    }
+
+    Record build_output_record(const vector<Value>& group_key) {
+        Record output_record;
+
+        // 添加分组列
+        for (size_t i = 0; i < group_key.size(); i++) {
+            output_record.add_value(group_key[i], group_by_exprs_[i]->get_result_type());
+        }
+
+        // 添加聚合结果
+        auto& group_state = groups_[group_key];
+        for (size_t i = 0; i < aggregate_exprs_.size(); i++) {
+            Value agg_result = group_state[i]->get_result();
+            output_record.add_value(agg_result, aggregate_exprs_[i]->get_result_type());
+        }
+
+        return output_record;
+    }
+
+    Schema build_output_schema() {
+        Schema schema;
+
+        // 添加分组列
+        for (const auto& expr : group_by_exprs_) {
+            schema.add_column("group_col_" + to_string(schema.get_column_count()),
+                            expr->get_result_type());
+        }
+
+        // 添加聚合列
+        for (const auto& agg_expr : aggregate_exprs_) {
+            schema.add_column(agg_expr->get_function_name(),
+                            agg_expr->get_result_type());
+        }
+
+        return schema;
+    }
+};
+```
+
+### 流式聚合
+
+#### 流式聚合操作符
+```cpp
+class StreamingAggregateIterator : public Iterator {
+private:
+    unique_ptr<Iterator> child_;
+    vector<unique_ptr<ExpressionEvaluator>> group_by_exprs_;
+    vector<unique_ptr<AggregateExpression>> aggregate_exprs_;
+    vector<Value> current_group_key_;
+    vector<unique_ptr<AggregateExpression::AggregateState>> current_aggregate_states_;
+    Record next_output_record_;
+    bool has_next_output_ = false;
+    bool is_open_ = false;
+
+public:
+    StreamingAggregateIterator(unique_ptr<Iterator> child,
+                               vector<unique_ptr<ExpressionEvaluator>> group_exprs,
+                               vector<unique_ptr<AggregateExpression>> agg_exprs)
+        : child_(move(child)), group_by_exprs_(move(group_exprs)),
+          aggregate_exprs_(move(agg_exprs)) {
+        output_schema_ = build_output_schema();
+    }
+
+    void open() override {
+        if (is_open_) {
+            throw runtime_error("Iterator already open");
+        }
+
+        child_->open();
+        initialize_aggregates();
+        is_open_ = true;
+        stats_.reset();
+    }
+
+    bool next(Record* record) override {
+        if (!is_open_) {
+            throw runtime_error("Iterator not open");
+        }
+
+        auto start_time = chrono::steady_clock::now();
+
+        // 如果有缓存的输出，直接返回
+        if (has_next_output_) {
+            *record = next_output_record_;
+            has_next_output_ = false;
+
+            auto end_time = chrono::steady_clock::now();
+            stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+            stats_.tuples_processed++;
+            return true;
+        }
+
+        // 读取下一条记录
+        Record input_record;
+        while (child_->next(&input_record)) {
+            stats_.bytes_processed += input_record.get_size();
+
+            // 计算当前记录的分组键
+            vector<Value> new_group_key = compute_group_key(input_record);
+
+            if (current_group_key_.empty()) {
+                // 第一条记录，初始化当前分组
+                current_group_key_ = new_group_key;
+                for (auto& state : current_aggregate_states_) {
+                    state->reset();
+                }
+            }
+
+            if (new_group_key != current_group_key_) {
+                // 分组变化，输出当前分组结果
+                next_output_record_ = build_output_record();
+                has_next_output_ = true;
+
+                // 开始新分组
+                current_group_key_ = new_group_key;
+                for (auto& state : current_aggregate_states_) {
+                    state->reset();
+                }
+
+                auto end_time = chrono::steady_clock::now();
+                stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+                stats_.tuples_processed++;
+                return true;
+            }
+
+            // 更新聚合状态
+            update_aggregates(input_record);
+        }
+
+        // 处理最后一个分组
+        if (!current_group_key_.empty() && !has_next_output_) {
+            next_output_record_ = build_output_record();
+            has_next_output_ = true;
+            current_group_key_.clear();
+
+            auto end_time = chrono::steady_clock::now();
+            stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+            stats_.tuples_processed++;
+            return true;
+        }
+
+        auto end_time = chrono::steady_clock::now();
+        stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        return false;
+    }
+
+    void close() override {
+        if (!is_open_) {
+            return;
+        }
+
+        child_->close();
+        current_group_key_.clear();
+        current_aggregate_states_.clear();
+        has_next_output_ = false;
+        is_open_ = false;
+    }
+
+private:
+    void initialize_aggregates() {
+        current_aggregate_states_.clear();
+        for (const auto& agg_expr : aggregate_exprs_) {
+            current_aggregate_states_.push_back(agg_expr->create_state());
+        }
+    }
+
+    vector<Value> compute_group_key(const Record& record) {
+        vector<Value> key;
+        key.reserve(group_by_exprs_.size());
+
+        for (const auto& expr : group_by_exprs_) {
+            ExpressionEvaluator::ExprResult result = expr->evaluate(record);
+            key.push_back(result.value);
+        }
+
+        return key;
+    }
+
+    void update_aggregates(const Record& record) {
+        for (size_t i = 0; i < aggregate_exprs_.size(); i++) {
+            ExpressionEvaluator::ExprResult arg_result =
+                aggregate_exprs_[i]->get_argument()->evaluate(record);
+
+            if (!arg_result.is_null) {
+                current_aggregate_states_[i]->accumulate(arg_result.value);
+            }
+        }
+    }
+
+    Record build_output_record() {
+        Record output_record;
+
+        // 添加分组列
+        for (size_t i = 0; i < current_group_key_.size(); i++) {
+            output_record.add_value(current_group_key_[i], group_by_exprs_[i]->get_result_type());
+        }
+
+        // 添加聚合结果
+        for (size_t i = 0; i < aggregate_exprs_.size(); i++) {
+            Value agg_result = current_aggregate_states_[i]->get_result();
+            output_record.add_value(agg_result, aggregate_exprs_[i]->get_result_type());
+        }
+
+        return output_record;
+    }
+
+    Schema build_output_schema() {
+        Schema schema;
+
+        // 添加分组列
+        for (const auto& expr : group_by_exprs_) {
+            schema.add_column("group_col_" + to_string(schema.get_column_count()),
+                            expr->get_result_type());
+        }
+
+        // 添加聚合列
+        for (const auto& agg_expr : aggregate_exprs_) {
+            schema.add_column(agg_expr->get_function_name(),
+                            agg_expr->get_result_type());
+        }
+
+        return schema;
+    }
+};
+```
+
+## 性能优化技术
+
+### 表达式编译优化
+
+#### JIT编译表达式
+```cpp
+class JITExpressionCompiler {
+public:
+    struct CompiledExpression {
+        void* compiled_code;
+        DataType result_type;
+        size_t code_size;
+    };
+
+    CompiledExpression compile_expression(const ExpressionEvaluator* expr) {
+        // 使用LLVM JIT编译表达式
+        LLVMContext context;
+        Module module("expression_jit", context);
+        IRBuilder<> builder(context);
+
+        // 创建函数签名
+        vector<Type*> arg_types = {PointerType::getUnqual(getRecordType(context))};
+        FunctionType* func_type = FunctionType::get(
+            PointerType::getUnqual(getValueType(context)), arg_types, false);
+
+        Function* function = Function::Create(func_type, Function::ExternalLinkage,
+                                           "eval_expression", &module);
+
+        // 生成IR代码
+        generate_expression_ir(expr, function, builder);
+
+        // JIT编译
+        ExecutionEngine* engine = create_execution_engine(&module);
+        void* compiled_code = engine->getPointerToFunction(function);
+
+        return CompiledExpression{
+            compiled_code,
+            expr->get_result_type(),
+            0  // 实际代码大小可以由LLVM提供
+        };
+    }
+
+private:
+    void generate_expression_ir(const ExpressionEvaluator* expr, Function* function,
+                               IRBuilder<>& builder) {
+        BasicBlock* entry = BasicBlock::Create(function->getContext(), "entry", function);
+        builder.SetInsertPoint(entry);
+
+        // 获取函数参数
+        Function::arg_iterator args = function->arg_begin();
+        Value* record_arg = &*args;
+        record_arg->setName("record");
+
+        Value* result = nullptr;
+
+        switch (expr->get_type()) {
+            case ExpressionEvaluator::ExprType::CONSTANT:
+                result = generate_constant_ir(
+                    static_cast<const ConstantExpression*>(expr), builder);
+                break;
+            case ExpressionEvaluator::ExprType::COLUMN_REF:
+                result = generate_column_ref_ir(
+                    static_cast<const ColumnReferenceExpression*>(expr),
+                    record_arg, builder);
+                break;
+            case ExpressionEvaluator::ExprType::ARITHMETIC_OP:
+                result = generate_arithmetic_ir(
+                    static_cast<const ArithmeticExpression*>(expr),
+                    record_arg, builder);
+                break;
+            // 处理其他表达式类型...
+        }
+
+        builder.CreateRet(result);
+    }
+
+    Value* generate_constant_ir(const ConstantExpression* expr,
+                                IRBuilder<>& builder) {
+        // 生成常量值的IR
+        const Value& const_value = expr->get_constant_value();
+        Type* llvm_type = get_llvm_type(const_value.get_type(), builder.getContext());
+
+        switch (const_value.get_type()) {
+            case DataType::INTEGER:
+                return ConstantInt::get(llvm_type, const_value.get_int());
+            case DataType::FLOAT:
+                return ConstantFP::get(llvm_type, const_value.get_float());
+            case DataType::DECIMAL:
+                return ConstantFP::get(llvm_type, const_value.get_decimal());
+            default:
+                throw runtime_error("Unsupported constant type");
+        }
+    }
+
+    Value* generate_column_ref_ir(const ColumnReferenceExpression* expr,
+                                   Value* record_arg, IRBuilder<>& builder) {
+        // 生成列引用的IR
+        int col_index = expr->get_column_index();
+        if (col_index == -1) {
+            throw runtime_error("Column index not set");
+        }
+
+        // 调用记录的get_value方法
+        vector<Value*> args = {
+            record_arg,
+            ConstantInt::get(Type::getInt32Ty(builder.getContext()), col_index)
+        };
+
+        Function* get_value_func = get_or_declare_function(
+            builder.GetInsertBlock()->getParent()->getParent(),
+            "record_get_value", PointerType::getUnqual(getValueType(builder.getContext())),
+            {PointerType::getUnqual(getRecordType(builder.getContext())), Type::getInt32Ty(builder.getContext())});
+
+        return builder.CreateCall(get_value_func, args);
+    }
+
+    Value* generate_arithmetic_ir(const ArithmeticExpression* expr,
+                                  Value* record_arg, IRBuilder<>& builder) {
+        // 生成算术运算的IR
+        Value* left = generate_expression_ir(expr->get_left(), record_arg, builder);
+        Value* right = generate_expression_ir(expr->get_right(), record_arg, builder);
+
+        switch (expr->get_operator()) {
+            case '+':
+                return builder.CreateAdd(left, right);
+            case '-':
+                return builder.CreateSub(left, right);
+            case '*':
+                return builder.CreateMul(left, right);
+            case '/':
+                return builder.CreateSDiv(left, right);  // 有符号除法
+            default:
+                throw runtime_error("Unknown arithmetic operator");
+        }
+    }
+};
+```
+
+## 实践建议
+
+### 执行引擎优化策略
+1. **流水线执行**：减少中间结果的物化开销
+2. **向量化处理**：利用SIMD指令加速批量操作
+3. **内存池管理**：减少内存分配和回收开销
+4. **JIT编译**：编译热点表达式和操作符
+
+### 表达式优化技巧
+1. **常量折叠**：在编译时计算常量表达式
+2. **表达式简化**：消除冗余的子表达式
+3. **类型优化**：选择最适合的数据类型
+4. **缓存中间结果**：避免重复计算
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持向量化处理的扫描操作符
+2. 设计并实现一个表达式优化器，能够进行常量折叠和表达式简化
+3. 实现一个支持多种物化策略的通用聚合操作符
+
+### 思考题
+1. 分析不同物化策略在各种查询模式下的性能特征
+2. 讨论表达式求值中的类型转换和优化策略
+3. 如何设计一个支持分布式查询执行的扩展框架？
+
+## 下节预告
+
+下一讲将介绍**查询执行 II**，包括：
+- 高级执行技术
+- 并行查询执行
+- 自适应查询执行
+- 执行计划缓存
+
+---
+
+**核心概念**：高效的查询执行引擎是数据库性能的关键，需要在物化开销和计算效率之间找到平衡！

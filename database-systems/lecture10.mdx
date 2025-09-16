@@ -1,0 +1,1114 @@
+---
+title: "Lecture 10: 排序与聚合算法"
+description: "CMU 15-445 Lecture 10 - 外部排序、聚合操作、分组算法、性能优化"
+---
+
+# Lecture 10: 排序与聚合算法
+
+## 排序算法概述
+
+### 数据库中的排序需求
+
+数据库系统中排序操作的重要性：
+
+1. **ORDER BY子句**：按指定列排序查询结果
+2. **索引创建**：创建B+树索引前需要排序数据
+3. **连接操作**：排序-合并连接算法需要排序输入
+4. **聚合操作**：GROUP BY操作通常需要排序分组
+5. **去重操作**：DISTINCT操作需要排序来识别重复值
+
+### 排序算法分类
+- **内存排序**：数据完全适合内存
+- **外部排序**：数据超过内存容量，需要磁盘I/O
+- **分布式排序**：数据分布在多个节点上
+
+## 外部排序算法
+
+### 多路归并排序
+
+#### 两阶段多路归并排序
+```cpp
+class ExternalSorter {
+private:
+    struct Run {
+        string file_path;
+        size_t record_count;
+        size_t current_position;
+        unique_ptr<BufferedReader> reader;
+    };
+
+    size_t memory_limit;     // 内存限制（字节）
+    size_t record_size;      // 记录大小
+    string temp_dir;        // 临时文件目录
+    FileManager* file_manager;
+
+public:
+    ExternalSorter(size_t mem_limit, size_t rec_size, const string& temp_dir_path)
+        : memory_limit(mem_limit), record_size(rec_size), temp_dir(temp_dir_path) {}
+
+    bool external_sort(const string& input_file, const string& output_file,
+                      const SortKey& sort_key) {
+        // 第一阶段：创建有序的运行
+        vector<string> run_files = create_sorted_runs(input_file, sort_key);
+
+        if (run_files.empty()) {
+            return false;
+        }
+
+        // 第二阶段：归并运行文件
+        if (run_files.size() == 1) {
+            // 只有一个运行，直接重命名
+            return file_manager->rename(run_files[0], output_file);
+        }
+
+        return merge_runs(run_files, output_file, sort_key);
+    }
+
+private:
+    vector<string> create_sorted_runs(const string& input_file, const SortKey& sort_key) {
+        vector<string> run_files;
+        unique_ptr<BufferedReader> reader = file_manager->create_reader(input_file);
+
+        // 计算每个运行的记录数
+        size_t records_per_run = memory_limit / record_size;
+        vector<Record> buffer;
+        buffer.reserve(records_per_run);
+
+        while (true) {
+            // 读取一批记录到内存
+            buffer.clear();
+            for (size_t i = 0; i < records_per_run; i++) {
+                Record record;
+                if (!reader->read_record(&record)) {
+                    break;
+                }
+                buffer.push_back(record);
+            }
+
+            if (buffer.empty()) {
+                break;  // 文件读取完毕
+            }
+
+            // 在内存中排序
+            sort(buffer.begin(), buffer.end(),
+                [&sort_key](const Record& a, const Record& b) {
+                    return compare_records(a, b, sort_key);
+                });
+
+            // 写入临时运行文件
+            string run_file = create_temp_file();
+            unique_ptr<BufferedWriter> writer = file_manager->create_writer(run_file);
+
+            for (const auto& record : buffer) {
+                writer->write_record(record);
+            }
+
+            run_files.push_back(run_file);
+        }
+
+        return run_files;
+    }
+
+    bool merge_runs(const vector<string>& run_files, const string& output_file,
+                   const SortKey& sort_key) {
+        // 计算可以同时归并的运行数
+        size_t merge_fan_in = memory_limit / (record_size * 2);  // 输入+输出缓冲区
+        vector<string> current_runs = run_files;
+
+        while (current_runs.size() > 1) {
+            vector<string> merged_runs;
+
+            for (size_t i = 0; i < current_runs.size(); i += merge_fan_in) {
+                size_t end_index = min(i + merge_fan_in, current_runs.size());
+                vector<string> batch(current_runs.begin() + i, current_runs.begin() + end_index);
+
+                if (batch.size() == 1) {
+                    merged_runs.push_back(batch[0]);
+                } else {
+                    string merged_file = merge_batch(batch, sort_key);
+                    merged_runs.push_back(merged_file);
+                }
+            }
+
+            current_runs = merged_runs;
+        }
+
+        // 最终归并结果
+        return file_manager->rename(current_runs[0], output_file);
+    }
+
+    string merge_batch(const vector<string>& run_files, const SortKey& sort_key) {
+        string output_file = create_temp_file();
+        vector<unique_ptr<Run>> runs;
+
+        // 初始化运行读取器
+        for (const auto& file : run_files) {
+            auto run = make_unique<Run>();
+            run->file_path = file;
+            run->reader = file_manager->create_reader(file);
+            run->current_position = 0;
+
+            // 读取第一条记录
+            Record first_record;
+            if (run->reader->read_record(&first_record)) {
+                run->record_count++;
+                // 存储第一条记录用于比较
+            }
+
+            runs.push_back(move(run));
+        }
+
+        // 使用优先队列进行归并
+        auto comparator = [&sort_key](const pair<Record, size_t>& a, const pair<Record, size_t>& b) {
+            return compare_records(a.first, b.first, sort_key) > 0;
+        };
+
+        priority_queue<pair<Record, size_t>, vector<pair<Record, size_t>>, decltype(comparator)>
+            min_heap(comparator);
+
+        // 初始化堆
+        for (size_t i = 0; i < runs.size(); i++) {
+            if (runs[i]->record_count > 0) {
+                Record record;
+                if (runs[i]->reader->read_record(&record)) {
+                    min_heap.emplace(record, i);
+                }
+            }
+        }
+
+        // 归并写入输出文件
+        unique_ptr<BufferedWriter> writer = file_manager->create_writer(output_file);
+
+        while (!min_heap.empty()) {
+            auto [record, run_index] = min_heap.top();
+            min_heap.pop();
+
+            writer->write_record(record);
+
+            // 从对应的运行中读取下一条记录
+            if (runs[run_index]->reader->read_record(&record)) {
+                min_heap.emplace(record, run_index);
+                runs[run_index]->current_position++;
+            }
+        }
+
+        // 清理临时文件
+        for (const auto& run : runs) {
+            file_manager->delete_file(run->file_path);
+        }
+
+        return output_file;
+    }
+
+    string create_temp_file() {
+        return temp_dir + "/run_" + to_string(get_random_id()) + ".tmp";
+    }
+
+    bool compare_records(const Record& a, const Record& b, const SortKey& sort_key) {
+        // 根据排序键比较记录
+        return a.get_value(sort_key) < b.get_value(sort_key);
+    }
+};
+```
+
+### 替换选择排序
+
+#### 替换选择算法实现
+```cpp
+class ReplacementSelectionSorter {
+private:
+    struct HeapNode {
+        Record record;
+        size_t input_index;
+        bool in_current_run;
+
+        bool operator<(const HeapNode& other) const {
+            return record < other.record;
+        }
+    };
+
+    size_t memory_size;
+    size_t record_count_in_memory;
+    vector<Record> memory_buffer;
+    priority_queue<HeapNode> selection_heap;
+    priority_queue<HeapNode> waiting_heap;
+
+public:
+    vector<string> replacement_selection(const string& input_file, size_t mem_size) {
+        memory_size = mem_size;
+        record_count_in_memory = mem_size / sizeof(Record);
+        memory_buffer.resize(record_count_in_memory);
+
+        vector<string> run_files;
+        unique_ptr<BufferedReader> reader = create_reader(input_file);
+
+        while (true) {
+            string run_file = generate_run(reader);
+            if (run_file.empty()) {
+                break;
+            }
+            run_files.push_back(run_file);
+        }
+
+        return run_files;
+    }
+
+private:
+    string generate_run(unique_ptr<BufferedReader>& reader) {
+        vector<Record> current_run;
+        Record last_output;
+
+        // 初始化：填充内存缓冲区
+        if (!initialize_memory(reader)) {
+            return "";  // 输入文件已空
+        }
+
+        // 构建初始堆
+        build_initial_heap();
+
+        while (!selection_heap.empty()) {
+            HeapNode smallest = selection_heap.top();
+            selection_heap.pop();
+
+            // 检查是否可以添加到当前运行
+            if (current_run.empty() || smallest.record >= last_output) {
+                current_run.push_back(smallest.record);
+                last_output = smallest.record;
+            } else {
+                // 不能添加到当前运行，放到等待堆
+                waiting_heap.push(smallest);
+            }
+
+            // 尝试从输入读取新记录
+            if (reader && !reader->eof()) {
+                Record new_record;
+                if (reader->read_record(&new_record)) {
+                    HeapNode new_node{new_record, 0, false};
+
+                    if (new_record >= last_output) {
+                        selection_heap.push(new_node);
+                    } else {
+                        waiting_heap.push(new_node);
+                    }
+                }
+            }
+
+            // 如果选择堆空，交换堆
+            if (selection_heap.empty()) {
+                swap(selection_heap, waiting_heap);
+                if (!current_run.empty()) {
+                    // 写入当前运行
+                    write_run_to_file(current_run);
+                    current_run.clear();
+                }
+            }
+        }
+
+        if (!current_run.empty()) {
+            write_run_to_file(current_run);
+        }
+
+        return current_run.empty() ? "" : create_temp_file();
+    }
+
+    bool initialize_memory(unique_ptr<BufferedReader>& reader) {
+        size_t count = 0;
+        while (count < record_count_in_memory && reader && !reader->eof()) {
+            Record record;
+            if (reader->read_record(&record)) {
+                memory_buffer[count] = record;
+                count++;
+            }
+        }
+
+        if (count == 0) {
+            return false;
+        }
+
+        // 调整缓冲区大小到实际读取的记录数
+        memory_buffer.resize(count);
+        return true;
+    }
+
+    void build_initial_heap() {
+        // 将所有记录放入选择堆
+        for (size_t i = 0; i < memory_buffer.size(); i++) {
+            HeapNode node{memory_buffer[i], i, true};
+            selection_heap.push(node);
+        }
+    }
+
+    void write_run_to_file(const vector<Record>& run) {
+        string filename = create_temp_file();
+        unique_ptr<BufferedWriter> writer = create_writer(filename);
+
+        for (const auto& record : run) {
+            writer->write_record(record);
+        }
+    }
+};
+```
+
+## 聚合操作算法
+
+### 基本聚合算法
+
+#### 聚合操作实现
+```cpp
+class AggregationOperator {
+public:
+    enum class AggregateType {
+        COUNT,
+        SUM,
+        AVG,
+        MIN,
+        MAX,
+        STDDEV,
+        VAR_POP,
+        VAR_SAMP
+    };
+
+    struct AggregateFunction {
+        AggregateType type;
+        string column_name;
+        string alias;
+        bool distinct;
+    };
+
+    struct AggregateResult {
+        unordered_map<string, Value> results;
+        size_t input_count;
+        size_t output_count;
+    };
+
+    AggregateResult compute_aggregate(
+        const vector<AggregateFunction>& functions,
+        const vector<Record>& records) {
+
+        AggregateResult result;
+        result.input_count = records.size();
+
+        for (const auto& func : functions) {
+            Value agg_value = compute_single_aggregate(func, records);
+            result.results[func.alias.empty() ? func.column_name : func.alias] = agg_value;
+        }
+
+        result.output_count = result.results.size();
+        return result;
+    }
+
+private:
+    Value compute_single_aggregate(const AggregateFunction& func, const vector<Record>& records) {
+        vector<Value> values;
+
+        // 提取列值
+        for (const auto& record : records) {
+            Value value = record.get_value(func.column_name);
+            if (!value.is_null()) {
+                if (!func.distinct ||
+                    find(values.begin(), values.end(), value) == values.end()) {
+                    values.push_back(value);
+                }
+            }
+        }
+
+        if (values.empty()) {
+            return Value();  // 返回NULL
+        }
+
+        switch (func.type) {
+            case AggregateType::COUNT:
+                return Value(static_cast<int64_t>(values.size()));
+
+            case AggregateType::SUM:
+                return compute_sum(values);
+
+            case AggregateType::AVG:
+                return compute_average(values);
+
+            case AggregateType::MIN:
+                return *min_element(values.begin(), values.end());
+
+            case AggregateType::MAX:
+                return *max_element(values.begin(), values.end());
+
+            case AggregateType::STDDEV:
+                return compute_stddev(values, false);
+
+            case AggregateType::VAR_POP:
+                return compute_variance(values, true);
+
+            case AggregateType::VAR_SAMP:
+                return compute_variance(values, false);
+
+            default:
+                throw runtime_error("Unsupported aggregate type");
+        }
+    }
+
+    Value compute_sum(const vector<Value>& values) {
+        if (values.empty()) return Value();
+
+        double sum = 0.0;
+        for (const auto& val : values) {
+            sum += val.get_double();
+        }
+        return Value(sum);
+    }
+
+    Value compute_average(const vector<Value>& values) {
+        if (values.empty()) return Value();
+
+        double sum = compute_sum(values).get_double();
+        return Value(sum / values.size());
+    }
+
+    Value compute_stddev(const vector<Value>& values, bool is_population) {
+        double variance = compute_variance(values, is_population).get_double();
+        return Value(sqrt(variance));
+    }
+
+    Value compute_variance(const vector<Value>& values, bool is_population) {
+        if (values.empty()) return Value();
+        if (values.size() == 1 && !is_population) return Value();  // 样本方差需要至少2个值
+
+        double mean = compute_average(values).get_double();
+        double sum_squared_diff = 0.0;
+
+        for (const auto& val : values) {
+            double diff = val.get_double() - mean;
+            sum_squared_diff += diff * diff;
+        }
+
+        double denominator = is_population ? values.size() : values.size() - 1;
+        return Value(sum_squared_diff / denominator);
+    }
+};
+```
+
+### 分组聚合算法
+
+#### 哈希分组聚合
+```cpp
+class HashGroupByOperator {
+private:
+    struct GroupKey {
+        vector<Value> values;
+
+        bool operator==(const GroupKey& other) const {
+            return values == other.values;
+        }
+
+        size_t hash() const {
+            size_t hash_value = 0;
+            for (const auto& val : values) {
+                hash_value ^= val.hash();
+            }
+            return hash_value;
+        }
+    };
+
+    struct GroupInfo {
+        vector<Value> group_values;
+        vector<AggregateAccumulator> accumulators;
+        size_t count;
+    };
+
+    vector<string> group_by_columns;
+    vector<AggregateFunction> aggregate_functions;
+    unordered_map<GroupKey, GroupInfo> group_map;
+    size_t memory_usage;
+    size_t memory_limit;
+
+public:
+    HashGroupByOperator(const vector<string>& group_cols,
+                        const vector<AggregateFunction>& agg_funcs,
+                        size_t mem_limit)
+        : group_by_columns(group_cols), aggregate_functions(agg_funcs),
+          memory_usage(0), memory_limit(mem_limit) {}
+
+    vector<Record> process_records(const vector<Record>& input_records) {
+        for (const auto& record : input_records) {
+            process_record(record);
+        }
+
+        return build_output_records();
+    }
+
+private:
+    void process_record(const Record& record) {
+        // 构建分组键
+        GroupKey group_key = build_group_key(record);
+
+        // 查找或创建分组信息
+        auto it = group_map.find(group_key);
+        if (it == group_map.end()) {
+            it = group_map.emplace(group_key, create_group_info(record)).first;
+        }
+
+        // 更新聚合累加器
+        update_aggregates(it->second, record);
+    }
+
+    GroupKey build_group_key(const Record& record) const {
+        GroupKey key;
+        for (const auto& col : group_by_columns) {
+            key.values.push_back(record.get_value(col));
+        }
+        return key;
+    }
+
+    GroupInfo create_group_info(const Record& record) const {
+        GroupInfo info;
+        info.group_values.reserve(group_by_columns.size());
+
+        for (const auto& col : group_by_columns) {
+            info.group_values.push_back(record.get_value(col));
+        }
+
+        // 初始化聚合累加器
+        for (const auto& agg_func : aggregate_functions) {
+            info.accumulators.push_back(create_accumulator(agg_func));
+        }
+
+        info.count = 1;
+        return info;
+    }
+
+    AggregateAccumulator create_accumulator(const AggregateFunction& func) const {
+        switch (func.type) {
+            case AggregateType::COUNT:
+                return CountAccumulator();
+            case AggregateType::SUM:
+                return SumAccumulator();
+            case AggregateType::AVG:
+                return AverageAccumulator();
+            case AggregateType::MIN:
+                return MinAccumulator();
+            case AggregateType::MAX:
+                return MaxAccumulator();
+            default:
+                throw runtime_error("Unsupported aggregate type");
+        }
+    }
+
+    void update_aggregates(GroupInfo& group_info, const Record& record) {
+        for (size_t i = 0; i < aggregate_functions.size(); i++) {
+            const auto& func = aggregate_functions[i];
+            Value value = record.get_value(func.column_name);
+            group_info.accumulators[i].accumulate(value);
+        }
+        group_info.count++;
+    }
+
+    vector<Record> build_output_records() const {
+        vector<Record> output_records;
+        output_records.reserve(group_map.size());
+
+        for (const auto& [group_key, group_info] : group_map) {
+            Record output_record;
+
+            // 添加分组列
+            for (size_t i = 0; i < group_by_columns.size(); i++) {
+                output_record.add_value(group_info.group_values[i], group_by_columns[i]);
+            }
+
+            // 添加聚合结果
+            for (size_t i = 0; i < aggregate_functions.size(); i++) {
+                Value result = group_info.accumulators[i].get_result();
+                string alias = aggregate_functions[i].alias.empty() ?
+                    aggregate_functions[i].column_name : aggregate_functions[i].alias;
+                output_record.add_value(result, alias);
+            }
+
+            output_records.push_back(output_record);
+        }
+
+        return output_records;
+    }
+};
+```
+
+#### 排序分组聚合
+```cpp
+class SortGroupByOperator {
+private:
+    vector<string> group_by_columns;
+    vector<AggregateFunction> aggregate_functions;
+    vector<Record> sorted_records;
+
+public:
+    SortGroupByOperator(const vector<string>& group_cols,
+                        const vector<AggregateFunction>& agg_funcs)
+        : group_by_columns(group_cols), aggregate_functions(agg_funcs) {}
+
+    vector<Record> process_records(const vector<Record>& input_records) {
+        if (input_records.empty()) {
+            return {};
+        }
+
+        // 按分组列排序记录
+        sort_records(input_records);
+
+        // 分组并聚合
+        return group_and_aggregate();
+    }
+
+private:
+    void sort_records(const vector<Record>& records) {
+        sorted_records = records;
+        sort(sorted_records.begin(), sorted_records.end(),
+            [this](const Record& a, const Record& b) {
+                for (const auto& col : group_by_columns) {
+                    Value val_a = a.get_value(col);
+                    Value val_b = b.get_value(col);
+                    if (val_a != val_b) {
+                        return val_a < val_b;
+                    }
+                }
+                return false;
+            });
+    }
+
+    vector<Record> group_and_aggregate() {
+        vector<Record> output_records;
+        if (sorted_records.empty()) {
+            return output_records;
+        }
+
+        // 初始化当前分组
+        vector<Value> current_group_values = get_group_values(sorted_records[0]);
+        vector<AggregateAccumulator> accumulators = create_accumulators();
+        accumulators[0].accumulate(get_aggregate_value(sorted_records[0], 0));
+
+        // 处理后续记录
+        for (size_t i = 1; i < sorted_records.size(); i++) {
+            vector<Value> new_group_values = get_group_values(sorted_records[i]);
+
+            if (new_group_values != current_group_values) {
+                // 分组变化，输出当前分组结果
+                output_records.push_back(build_output_record(current_group_values, accumulators));
+
+                // 开始新分组
+                current_group_values = new_group_values;
+                accumulators = create_accumulators();
+            }
+
+            // 更新聚合累加器
+            for (size_t j = 0; j < aggregate_functions.size(); j++) {
+                Value value = get_aggregate_value(sorted_records[i], j);
+                accumulators[j].accumulate(value);
+            }
+        }
+
+        // 输出最后一个分组
+        output_records.push_back(build_output_record(current_group_values, accumulators));
+
+        return output_records;
+    }
+
+    vector<Value> get_group_values(const Record& record) const {
+        vector<Value> values;
+        for (const auto& col : group_by_columns) {
+            values.push_back(record.get_value(col));
+        }
+        return values;
+    }
+
+    Value get_aggregate_value(const Record& record, size_t agg_index) const {
+        return record.get_value(aggregate_functions[agg_index].column_name);
+    }
+
+    vector<AggregateAccumulator> create_accumulators() const {
+        vector<AggregateAccumulator> accums;
+        for (const auto& func : aggregate_functions) {
+            accums.push_back(create_accumulator(func));
+        }
+        return accums;
+    }
+
+    Record build_output_record(const vector<Value>& group_values,
+                             const vector<AggregateAccumulator>& accumulators) const {
+        Record output_record;
+
+        // 添加分组列
+        for (size_t i = 0; i < group_by_columns.size(); i++) {
+            output_record.add_value(group_values[i], group_by_columns[i]);
+        }
+
+        // 添加聚合结果
+        for (size_t i = 0; i < aggregate_functions.size(); i++) {
+            Value result = accumulators[i].get_result();
+            string alias = aggregate_functions[i].alias.empty() ?
+                aggregate_functions[i].column_name : aggregate_functions[i].alias;
+            output_record.add_value(result, alias);
+        }
+
+        return output_record;
+    }
+};
+```
+
+## 流式聚合算法
+
+### 滑动窗口聚合
+
+#### 滑动窗口聚合实现
+```cpp
+class SlidingWindowAggregator {
+private:
+    struct WindowConfig {
+        size_t window_size;      // 窗口大小（记录数）
+        size_t slide_interval;  // 滑动间隔
+        enum WindowType { ROWS, RANGE, SESSION } type;
+    };
+
+    struct WindowState {
+        deque<Record> window_records;
+        vector<AggregateAccumulator> accumulators;
+        uint64_t window_start;
+        uint64_t window_end;
+    };
+
+    WindowConfig config;
+    vector<AggregateFunction> aggregate_functions;
+    vector<WindowState> active_windows;
+
+public:
+    SlidingWindowAggregator(const WindowConfig& cfg,
+                           const vector<AggregateFunction>& agg_funcs)
+        : config(cfg), aggregate_functions(agg_funcs) {}
+
+    vector<Record> process_stream(const vector<Record>& stream_records) {
+        vector<Record> output_records;
+
+        for (const auto& record : stream_records) {
+            auto window_results = process_record(record);
+            output_records.insert(output_records.end(),
+                                 window_results.begin(), window_results.end());
+        }
+
+        return output_records;
+    }
+
+private:
+    vector<Record> process_record(const Record& record) {
+        vector<Record> results;
+
+        // 更新所有活跃窗口
+        for (auto& window : active_windows) {
+            // 检查是否需要移除过期记录
+            while (should_remove_record(window, record)) {
+                remove_oldest_record(window);
+            }
+
+            // 添加新记录到窗口
+            add_record_to_window(window, record);
+
+            // 如果窗口完整，计算聚合结果
+            if (is_window_complete(window)) {
+                results.push_back(build_window_result(window));
+            }
+        }
+
+        // 检查是否需要创建新窗口
+        if (should_create_new_window(record)) {
+            WindowState new_window = create_new_window(record);
+            active_windows.push_back(new_window);
+        }
+
+        return results;
+    }
+
+    bool should_remove_record(const WindowState& window, const Record& record) const {
+        switch (config.type) {
+            case WindowConfig::ROWS:
+                return window.window_records.size() >= config.window_size;
+            case WindowConfig::RANGE:
+                return record.get_timestamp() - window.window_records.front().get_timestamp() > config.window_size;
+            case WindowConfig::SESSION:
+                return record.get_timestamp() - window.window_records.back().get_timestamp() > config.slide_interval;
+            default:
+                return false;
+        }
+    }
+
+    void remove_oldest_record(WindowState& window) {
+        if (!window.window_records.empty()) {
+            Record oldest = window.window_records.front();
+            window.window_records.pop_front();
+
+            // 从聚合累加器中移除影响
+            for (size_t i = 0; i < aggregate_functions.size(); i++) {
+                Value value = oldest.get_value(aggregate_functions[i].column_name);
+                window.accumulators[i].remove(value);
+            }
+        }
+    }
+
+    void add_record_to_window(WindowState& window, const Record& record) {
+        window.window_records.push_back(record);
+
+        // 更新聚合累加器
+        for (size_t i = 0; i < aggregate_functions.size(); i++) {
+            Value value = record.get_value(aggregate_functions[i].column_name);
+            window.accumulators[i].accumulate(value);
+        }
+
+        window.window_end = record.get_timestamp();
+    }
+
+    bool is_window_complete(const WindowState& window) const {
+        switch (config.type) {
+            case WindowConfig::ROWS:
+                return window.window_records.size() >= config.window_size;
+            case WindowConfig::RANGE:
+                return window.window_end - window.window_start >= config.window_size;
+            case WindowConfig::SESSION:
+                return !window.window_records.empty();  // 会话窗口总是产生结果
+            default:
+                return false;
+        }
+    }
+
+    bool should_create_new_window(const Record& record) const {
+        if (active_windows.empty()) {
+            return true;
+        }
+
+        const WindowState& last_window = active_windows.back();
+        switch (config.type) {
+            case WindowConfig::ROWS:
+                return last_window.window_records.size() % config.slide_interval == 0;
+            case WindowConfig::RANGE:
+                return record.get_timestamp() - last_window.window_start >= config.slide_interval;
+            case WindowConfig::SESSION:
+                return record.get_timestamp() - last_window.window_records.back().get_timestamp() > config.slide_interval;
+            default:
+                return false;
+        }
+    }
+
+    WindowState create_new_window(const Record& record) {
+        WindowState window;
+        window.window_records.push_back(record);
+        window.window_start = record.get_timestamp();
+        window.window_end = record.get_timestamp();
+
+        // 初始化聚合累加器
+        for (const auto& func : aggregate_functions) {
+            window.accumulators.push_back(create_accumulator(func));
+            Value value = record.get_value(func.column_name);
+            window.accumulators.back().accumulate(value);
+        }
+
+        return window;
+    }
+
+    Record build_window_result(const WindowState& window) const {
+        Record result;
+
+        // 添加窗口信息
+        result.add_value(Value(window.window_start), "window_start");
+        result.add_value(Value(window.window_end), "window_end");
+        result.add_value(Value(static_cast<int64_t>(window.window_records.size())), "window_size");
+
+        // 添加聚合结果
+        for (size_t i = 0; i < aggregate_functions.size(); i++) {
+            Value agg_result = window.accumulators[i].get_result();
+            string alias = aggregate_functions[i].alias.empty() ?
+                aggregate_functions[i].column_name : aggregate_functions[i].alias;
+            result.add_value(agg_result, alias);
+        }
+
+        return result;
+    }
+};
+```
+
+## 性能优化技术
+
+### 聚合下推优化
+
+#### 聚合下推实现
+```cpp
+class AggregatePushdownOptimizer {
+public:
+    struct QueryPlan {
+        vector<OperatorNode> operators;
+        vector<TableScan> scans;
+        vector<JoinOperator> joins;
+        vector<AggregateOperator> aggregates;
+    };
+
+    QueryPlan optimize_aggregate_pushdown(const QueryPlan& original_plan) {
+        QueryPlan optimized_plan = original_plan;
+
+        // 识别可以下推的聚合操作
+        vector<AggregateOperator> pushdown_aggs = identify_pushdown_candidates(optimized_plan);
+
+        // 应用聚合下推
+        for (const auto& agg : pushdown_aggs) {
+            apply_pushdown(optimized_plan, agg);
+        }
+
+        // 移除冗余聚合操作
+        remove_redundant_aggregates(optimized_plan);
+
+        return optimized_plan;
+    }
+
+private:
+    vector<AggregateOperator> identify_pushdown_candidates(const QueryPlan& plan) const {
+        vector<AggregateOperator> candidates;
+
+        for (const auto& agg : plan.aggregates) {
+            if (can_pushdown_aggregate(agg, plan)) {
+                candidates.push_back(agg);
+            }
+        }
+
+        return candidates;
+    }
+
+    bool can_pushdown_aggregate(const AggregateOperator& agg, const QueryPlan& plan) const {
+        // 检查聚合函数是否支持下推
+        for (const auto& func : agg.functions) {
+            if (!is_pushdown_supported(func)) {
+                return false;
+            }
+        }
+
+        // 检查分组列是否可用
+        for (const auto& group_col : agg.group_by_columns) {
+            if (!is_column_available(group_col, plan)) {
+                return false;
+            }
+        }
+
+        // 检查是否存在阻止下推的操作
+        if (has_blocking_operators_above(agg, plan)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    bool is_pushdown_supported(const AggregateFunction& func) const {
+        // 某些聚合函数可以下推到存储引擎
+        switch (func.type) {
+            case AggregateType::COUNT:
+            case AggregateType::SUM:
+            case AggregateType::MIN:
+            case AggregateType::MAX:
+                return true;
+            case AggregateType::AVG:
+            case AggregateType::STDDEV:
+            case AggregateType::VAR_POP:
+            case AggregateType::VAR_SAMP:
+                return false;  // 这些需要多遍扫描，不能直接下推
+            default:
+                return false;
+        }
+    }
+
+    bool is_column_available(const string& column, const QueryPlan& plan) const {
+        // 检查列是否在基础表中可用
+        for (const auto& scan : plan.scans) {
+            if (scan.has_column(column)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool has_blocking_operators_above(const AggregateOperator& agg, const QueryPlan& plan) const {
+        // 检查聚合操作上方是否有阻塞操作符
+        // 如排序、DISTINCT等
+        return false;  // 简化实现
+    }
+
+    void apply_pushdown(QueryPlan& plan, const AggregateOperator& agg) {
+        // 创建下推的聚合操作
+        AggregateOperator pushed_agg = create_pushdown_aggregate(agg);
+
+        // 找到合适的插入位置（通常在表扫描之后）
+        size_t insert_position = find_pushdown_position(plan, agg);
+
+        // 插入下推聚合
+        plan.operators.insert(plan.operators.begin() + insert_position,
+                             OperatorNode{pushed_agg});
+
+        // 修改原始聚合操作
+        modify_original_aggregate(plan, agg, pushed_agg);
+    }
+
+    size_t find_pushdown_position(const QueryPlan& plan, const AggregateOperator& agg) const {
+        // 找到表扫描操作的位置
+        for (size_t i = 0; i < plan.operators.size(); i++) {
+            if (is_table_scan(plan.operators[i])) {
+                return i + 1;  // 在表扫描之后插入
+            }
+        }
+        return 0;
+    }
+
+    void modify_original_aggregate(QueryPlan& plan, const AggregateOperator& original_agg,
+                                  const AggregateOperator& pushed_agg) {
+        // 修改原始聚合操作，使其使用下推的结果
+        for (auto& op : plan.operators) {
+            if (is_same_aggregate(op.aggregate, original_agg)) {
+                op.aggregate = create_modified_aggregate(original_agg, pushed_agg);
+                break;
+            }
+        }
+    }
+
+    void remove_redundant_aggregates(QueryPlan& plan) {
+        // 移除被下推聚合替代的冗余聚合操作
+        auto it = remove_if(plan.operators.begin(), plan.operators.end(),
+            [](const OperatorNode& op) {
+                return is_redundant_aggregate(op);
+            });
+        plan.operators.erase(it, plan.operators.end());
+    }
+};
+```
+
+## 实践建议
+
+### 算法选择策略
+1. **数据大小**：小数据用内存排序，大数据用外部排序
+2. **内存限制**：根据可用内存选择合适的算法
+3. **数据分布**：倾斜数据需要特殊处理
+4. **查询模式**：流式数据需要窗口聚合
+
+### 性能优化技巧
+1. **缓冲区管理**：合理设置I/O缓冲区大小
+2. **并行处理**：利用多核CPU进行并行排序和聚合
+3. **预排序优化**：利用预排序的数据减少排序开销
+4. **近似聚合**：对于大数据集考虑近似聚合算法
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持自定义比较函数的外部排序算法
+2. 设计并实现一个分布式分组聚合系统
+3. 实现一个自适应的聚合算法，能够根据数据特征选择最优策略
+
+### 思考题
+1. 分析不同排序算法在各种数据分布下的性能特征
+2. 讨论聚合操作的内存使用优化策略
+3. 如何设计一个支持实时流处理的高效聚合系统？
+
+## 下节预告
+
+下一讲将介绍**连接算法**，包括：
+- 嵌套循环连接
+- 哈希连接
+- 归并连接
+- 连接算法的性能分析和优化
+
+---
+
+**核心概念**：高效的排序和聚合算法是数据库查询性能的基础，需要根据数据特征和查询需求选择合适的算法！

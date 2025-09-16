@@ -1,0 +1,196 @@
+---
+title: "Week 1：网络基础与数据报"
+description: "CS144 Week 1 - 课程介绍、数据报概念、网络封装原理"
+---
+
+# Week 1：网络基础与数据报
+
+## 课程概述
+
+Week 1 introduces the fundamental concepts of computer networking, focusing on datagrams and encapsulation.
+
+## 核心概念
+
+### 什么是计算机网络？
+
+计算机网络是指将地理位置不同的具有独立功能的计算机及其外部设备，通过通信线路连接起来，在网络操作系统、网络管理软件及网络通信协议的管理和协调下，实现资源共享和信息传递的系统。
+
+### 网络层次模型
+
+#### OSI七层模型
+1. **物理层** (Physical Layer): 传输比特流
+2. **数据链路层** (Data Link Layer): 帧传输、错误检测
+3. **网络层** (Network Layer): 路由选择、逻辑寻址
+4. **传输层** (Transport Layer): 端到端连接、可靠传输
+5. **会话层** (Session Layer): 会话管理
+6. **表示层** (Presentation Layer): 数据格式转换
+7. **应用层** (Application Layer): 用户接口
+
+#### TCP/IP四层模型
+1. **网络接口层** (Network Interface): 物理传输
+2. **网络层** (Internet): IP协议、路由
+3. **传输层** (Transport): TCP/UDP协议
+4. **应用层** (Application): HTTP、FTP、SMTP等
+
+### 数据报 (Datagram)
+
+数据报是网络传输的基本单位，包含以下部分：
+
+```
++----------------------+
+|      Header          |
++----------------------+
+|      Payload         |
++----------------------+
+|      Trailer         |
++----------------------+
+```
+
+#### 数据报结构
+- **Header**: 控制信息（源地址、目的地址、协议类型等）
+- **Payload**: 实际传输的数据
+- **Trailer**: 错误检测信息（如CRC校验）
+
+### 封装 (Encapsulation)
+
+封装是网络通信的核心概念，指在数据传输过程中，每一层协议都会添加自己的头部信息：
+
+```
+应用层数据
+    ↓ (添加TCP头部)
+TCP段
+    ↓ (添加IP头部)
+IP数据报
+    ↓ (添加帧头部)
+以太网帧
+    ↓ (转换为比特流)
+物理层信号
+```
+
+## 实践操作
+
+### 网络工具使用
+
+#### ping命令
+```bash
+ping google.com
+```
+用于测试网络连通性，测量往返时间。
+
+#### traceroute/tracert
+```bash
+traceroute google.com  # Linux/Mac
+tracert google.com     # Windows
+```
+显示数据包到达目标主机所经过的路由器。
+
+#### Wireshark基础
+1. 安装Wireshark
+2. 选择网络接口
+3. 开始捕获网络流量
+4. 分析数据包结构
+
+### 编程实践
+
+#### Socket基础概念
+Socket是网络编程的API，提供网络通信的接口：
+
+```cpp
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+// 创建socket
+int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+
+// 绑定地址
+struct sockaddr_in addr;
+addr.sin_family = AF_INET;
+addr.sin_port = htons(8080);
+addr.sin_addr.s_addr = INADDR_ANY;
+bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+```
+
+## 实验项目：Checkpoint 0
+
+### 目标
+- 搭建开发环境
+- 理解基本网络概念
+- 实现简单的网络通信
+
+### 步骤
+1. 安装必要的开发工具
+2. 配置网络环境
+3. 实现简单的客户端-服务器通信
+
+### 代码示例
+
+#### 简单的TCP服务器
+```cpp
+#include <iostream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <string.h>
+
+int main() {
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(8080);
+
+    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
+    listen(server_fd, 3);
+
+    std::cout << "Server listening on port 8080" << std::endl;
+
+    int new_socket = accept(server_fd, (struct sockaddr*)&address, (socklen_t*)&addrlen);
+
+    char buffer[1024] = {0};
+    read(new_socket, buffer, 1024);
+    std::cout << "Message received: " << buffer << std::endl;
+
+    send(new_socket, "Hello from server", 17, 0);
+
+    close(new_socket);
+    close(server_fd);
+    return 0;
+}
+```
+
+## 重点概念
+
+### 关键术语
+- **Datagram**: 数据报，网络传输的基本单位
+- **Encapsulation**: 封装，各层协议添加头部信息的过程
+- **Protocol Stack**: 协议栈，网络协议的层次结构
+- **Socket**: 套接字，网络编程的API
+- **Packet**: 数据包，网络层的数据单位
+
+### 重要原理
+1. **分层设计**: 每层只关心自己的功能
+2. **封装与解封装**: 发送时封装，接收时解封装
+3. **协议独立性**: 各层协议可以独立更换
+4. **端到端原则**: 复杂性放在边缘，网络保持简单
+
+## 课后练习
+
+### 理论问题
+1. 解释OSI七层模型各层的功能
+2. 比较TCP/IP和OSI模型的异同
+3. 什么是数据报？它的结构是什么？
+
+### 实践练习
+1. 使用Wireshark捕获HTTP流量
+2. 实现简单的echo服务器
+3. 分析ping命令的数据包结构
+
+## 下周预告
+
+Week 2将深入探讨可靠性传输和TCP协议的实现原理。
+
+---
+*继续学习：[Week 2：可靠性传输与TCP](./week2)*

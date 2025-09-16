@@ -1,0 +1,567 @@
+---
+title: "第2讲：操作系统基础架构"
+description: "南京大学操作系统2025 - 计算机系统架构、操作系统历史发展、现代操作系统的核心功能"
+---
+
+# 第2讲：操作系统基础架构
+
+## 计算机系统架构回顾
+
+### 现代计算机系统组成
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      应用程序层                               │
+├─────────────────────────────────────────────────────────────┤
+│                      操作系统层                               │
+├─────────────────────────────────────────────────────────────┤
+│                      硬件抽象层                               │
+├─────────────────────────────────────────────────────────────┤
+│  CPU    │   内存   │   存储   │   网络   │   I/O设备   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 核心硬件组件
+
+**处理器 (CPU)**
+- 执行指令的计算单元
+- 多核心架构支持并行处理
+- 包含寄存器、缓存、控制单元
+
+**内存系统**
+- 主内存 (RAM)：快速访问的易失性存储
+- 缓存层次：L1/L2/L3缓存
+- 虚拟地址空间管理
+
+**存储设备**
+- 固态硬盘 (SSD)：高速非易失性存储
+- 机械硬盘 (HDD)：大容量存储
+- 内存层次结构设计
+
+## 操作系统的历史发展
+
+### 早期操作系统 (1940s-1950s)
+
+**批处理系统**
+```c
+// 早期的批处理作业控制
+void batch_process() {
+    while (has_jobs()) {
+        job = load_next_job();
+        execute_job(job);
+        output_results(job);
+    }
+}
+```
+
+**特点**：
+- 无交互能力
+- 作业串行执行
+- 人工干预频繁
+
+### 多道程序设计 (1960s)
+
+**多道批处理系统**
+```c
+// 多道程序设计的基本思想
+void multiprogramming() {
+    while (has_ready_jobs()) {
+        if (cpu_idle() && has_ready_job()) {
+            job = get_ready_job();
+            load_to_memory(job);
+            execute(job);
+        }
+        if (io_request() && has_io_device()) {
+            handle_io_operation();
+        }
+    }
+}
+```
+
+**技术突破**：
+- 内存中同时存放多个作业
+- CPU和I/O设备并行工作
+- 提高了系统利用率
+
+### 分时系统 (1970s)
+
+**交互式计算**
+```c
+// 分时系统的调度
+void time_sharing() {
+    quantum = TIME_QUANTUM;  // 时间片
+    while (true) {
+        for (each_process in ready_queue) {
+            run_process(each_process, quantum);
+            if (process_completed) {
+                remove_from_queue(each_process);
+            }
+            handle_interrupts();  // 处理中断
+        }
+    }
+}
+```
+
+**代表性系统**：
+- UNIX系统：现代操作系统的基石
+- MULTICS：分时系统的先驱
+- CTSS：首个分时系统
+
+### 现代操作系统 (1980s-至今)
+
+**个人计算机时代**
+- MS-DOS：单用户单任务
+- Windows：图形用户界面
+- macOS：基于UNIX的现代系统
+
+**网络与分布式系统**
+- 客户端/服务器架构
+- 分布式文件系统
+- 网络协议栈集成
+
+## 现代操作系统的核心功能
+
+### 1. 进程管理
+
+**进程控制块 (PCB)**
+```c
+struct process_control_block {
+    int pid;                    // 进程标识符
+    int state;                  // 进程状态
+    int priority;               // 优先级
+    void* program_counter;      // 程序计数器
+    void* stack_pointer;        // 栈指针
+    void* page_table;           // 页表指针
+    struct file* open_files;    // 打开文件列表
+    struct process* parent;     // 父进程
+    struct process* children;    // 子进程
+};
+```
+
+**进程状态转换**
+```
+创建 → 就绪 → 运行 → 等待 → 终止
+       ↑      ↓       ↓
+       ←──────┴───────┘
+```
+
+### 2. 内存管理
+
+**地址空间布局**
+```python
+# 进程地址空间示例
+class ProcessAddressSpace:
+    def __init__(self):
+        self.layout = {
+            'code':     0x00000000,  # 代码段
+            'data':     0x10000000,  # 数据段
+            'heap':     0x20000000,  # 堆段
+            'stack':    0x7fffffff,  # 栈段
+            'kernel':   0xc0000000   # 内核空间
+        }
+
+    def virtual_to_physical(self, virtual_addr):
+        # 虚拟地址到物理地址转换
+        page_table = self.get_page_table()
+        return page_table.translate(virtual_addr)
+```
+
+**内存分配策略**
+- 连续分配：固定分区、可变分区
+- 非连续分配：分页、分段、段页式
+- 虚拟内存：按需调页、页面置换
+
+### 3. 文件系统
+
+**文件控制块 (FCB)**
+```c
+struct file_control_block {
+    char filename[256];        // 文件名
+    int inode_number;          // inode号
+    size_t file_size;          // 文件大小
+    time_t creation_time;       // 创建时间
+    time_t modification_time;  // 修改时间
+    int permissions;           // 访问权限
+    int link_count;            // 链接计数
+    void* data_blocks;         // 数据块指针
+};
+```
+
+**目录结构**
+```
+/
+├── bin/          # 可执行文件
+├── etc/          # 配置文件
+├── home/         # 用户目录
+├── lib/          # 库文件
+├── proc/         # 进程信息
+├── tmp/          # 临时文件
+└── usr/          # 用户程序
+```
+
+### 4. I/O设备管理
+
+**设备控制器**
+```c
+struct device_controller {
+    int device_id;             // 设备标识符
+    enum device_type type;     // 设备类型
+    int status;                // 设备状态
+    void* interrupt_handler;   // 中断处理程序
+    struct queue* request_queue; // 请求队列
+
+    // 设备操作接口
+    int (*read)(void* buffer, size_t size);
+    int (*write)(void* buffer, size_t size);
+    int (*control)(int command, void* arg);
+};
+```
+
+**I/O调度策略**
+- 先来先服务 (FCFS)
+- 最短寻道时间优先 (SSTF)
+- 扫描算法 (SCAN)
+- 循环扫描 (C-SCAN)
+
+### 5. 网络协议栈
+
+**TCP/IP协议层次**
+```python
+# 网络协议栈简化模型
+class NetworkStack:
+    def __init__(self):
+        self.layers = {
+            'application': HTTP, FTP, SMTP,    # 应用层
+            'transport':   TCP, UDP,           # 传输层
+            'network':     IP, ICMP,           # 网络层
+            'link':        Ethernet, Wi-Fi      # 链路层
+        }
+
+    def send_packet(self, data, dest_addr):
+        # 数据封装过程
+        segment = self.transport_layer(data)
+        packet = self.network_layer(segment, dest_addr)
+        frame = self.link_layer(packet)
+        self.hardware_transmit(frame)
+```
+
+## 系统调用接口设计
+
+### 系统调用机制
+
+**陷入内核**
+```c
+// 系统调用的基本流程
+void system_call(int syscall_num, void* args) {
+    // 1. 保存用户上下文
+    save_user_context();
+
+    // 2. 切换到内核模式
+    switch_to_kernel_mode();
+
+    // 3. 调用内核函数
+    switch (syscall_num) {
+        case SYS_READ:
+            kernel_read(args);
+            break;
+        case SYS_WRITE:
+            kernel_write(args);
+            break;
+        case SYS_FORK:
+            kernel_fork();
+            break;
+        // ... 其他系统调用
+    }
+
+    // 4. 恢复用户上下文
+    restore_user_context();
+}
+```
+
+**常用系统调用**
+
+| 类别 | 系统调用 | 功能描述 |
+|------|----------|----------|
+| 进程控制 | fork(), exec(), exit() | 创建、执行、终止进程 |
+| 文件操作 | open(), read(), write(), close() | 文件基本操作 |
+| 目录操作 | mkdir(), rmdir(), readdir() | 目录管理 |
+| 内存管理 | brk(), mmap(), munmap() | 内存分配和映射 |
+| 进程间通信 | pipe(), shmget(), msgget() | IPC机制 |
+
+### 标准库封装
+
+**C库封装示例**
+```c
+// fopen的实现 (简化版)
+FILE* fopen(const char* filename, const char* mode) {
+    int fd;
+    int flags = O_RDONLY;
+
+    // 解析模式字符串
+    if (strcmp(mode, "r") == 0)
+        flags = O_RDONLY;
+    else if (strcmp(mode, "w") == 0)
+        flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (strcmp(mode, "a") == 0)
+        flags = O_WRONLY | O_CREAT | O_APPEND;
+
+    // 调用系统调用打开文件
+    fd = open(filename, flags, 0644);
+    if (fd == -1)
+        return NULL;
+
+    // 创建FILE结构
+    FILE* fp = malloc(sizeof(FILE));
+    fp->fd = fd;
+    fp->buffer = malloc(BUFSIZ);
+    fp->position = 0;
+
+    return fp;
+}
+```
+
+## 操作系统设计原则
+
+### 1. 抽象化
+
+**分层架构**
+```
+┌─────────────────────────────────────┐
+│           用户应用程序                │
+├─────────────────────────────────────┤
+│           系统调用接口                │
+├─────────────────────────────────────┤
+│           核心服务层                 │
+│  进程管理 │ 内存管理 │ 文件系统 │ I/O  │
+├─────────────────────────────────────┤
+│           硬件抽象层                 │
+├─────────────────────────────────────┤
+│             硬件                    │
+└─────────────────────────────────────┘
+```
+
+### 2. 模块化设计
+
+**内核模块**
+```c
+// 内核模块示例
+struct kernel_module {
+    char* name;                    // 模块名称
+    int (*init)(void);            // 初始化函数
+    void (*exit)(void);           // 退出函数
+    int (*ioctl)(int cmd, void* arg); // 控制接口
+    struct list_head list;        // 模块链表
+};
+
+// 注册模块
+int register_module(struct kernel_module* module) {
+    if (module->init() == 0) {
+        list_add(&module->list, &module_list);
+        return 0;
+    }
+    return -1;
+}
+```
+
+### 3. 性能优化
+
+**缓存策略**
+```c
+// 页面缓存实现
+struct page_cache {
+    struct page* pages;           // 页面数组
+    int size;                     // 缓存大小
+    struct list_head lru_list;    // LRU链表
+    struct hash_table* hash_table; // 哈希表
+
+    // 缓存操作
+    struct page* (*find_page)(int page_num);
+    int (*add_page)(struct page* page);
+    void (*evict_page)(void);
+};
+```
+
+### 4. 安全性
+
+**权限检查**
+```c
+// 访问控制检查
+int check_permission(struct file* file, int mode, struct process* proc) {
+    // 检查文件权限
+    if ((file->permissions & mode) != mode)
+        return -1;
+
+    // 检查用户权限
+    if (file->owner == proc->uid)
+        return 0;
+
+    // 检查组权限
+    if (file->group == proc->gid && (file->permissions & (mode << 3)))
+        return 0;
+
+    // 检查其他用户权限
+    if ((file->permissions & (mode << 6)) == 0)
+        return -1;
+
+    return 0;
+}
+```
+
+## 现代操作系统架构
+
+### 1. 宏内核架构
+
+**Linux内核架构**
+```
+┌─────────────────────────────────────┐
+│          Linux 内核                  │
+├─────────────┬─────────────┬──────────┤
+│   进程管理  │  内存管理   │ 文件系统 │
+├─────────────┼─────────────┼──────────┤
+│   网络协议  │  设备驱动   │ 安全模块 │
+├─────────────┴─────────────┴──────────┤
+│          硬件抽象层                   │
+└─────────────────────────────────────┘
+```
+
+**优点**：
+- 性能高，模块间通信开销小
+- 设计简单，易于理解和实现
+
+**缺点**：
+- 内核体积庞大
+- 模块间耦合度高
+- 稳定性受单个模块影响
+
+### 2. 微内核架构
+
+**MINIX 3架构**
+```
+┌─────────────────────────────────────┐
+│           用户空间                   │
+├─────────────┬─────────────┬──────────┤
+│   文件系统  │  网络服务   │ 设备驱动 │
+├─────────────┴─────────────┴──────────┤
+│           微内核                     │
+│  进程管理 │ 内存管理 │ IPC │ 调度    │
+├─────────────────────────────────────┤
+│             硬件                    │
+└─────────────────────────────────────┘
+```
+
+**优点**：
+- 内核小而稳定
+- 模块化程度高
+- 安全性和可靠性好
+
+**缺点**：
+- 性能开销较大
+- 设计复杂
+- 调试困难
+
+### 3. 混合内核架构
+
+**Windows NT架构**
+```
+┌─────────────────────────────────────┐
+│           用户空间                   │
+├─────────────┬─────────────┬──────────┤
+│   Win32子系统 │ POSIX子系统 │ OS/2子系统 │
+├─────────────┴─────────────┴──────────┤
+│           执行体                     │
+│  对象管理 │ 进程管理 │ 虚存管理 │ I/O │
+├─────────────┬─────────────┬──────────┤
+│           微内核                     │
+│  调度 │ IPC │ 中断 │ 内存管理        │
+├─────────────────────────────────────┤
+│           硬件抽象层                 │
+└─────────────────────────────────────┘
+```
+
+## 实践编程
+
+### 系统调用实验
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+
+int main() {
+    // 使用系统调用写入数据
+    const char* message = "Hello, Operating Systems!\n";
+    syscall(SYS_write, STDOUT_FILENO, message, strlen(message));
+
+    // 获取进程ID
+    pid_t pid = syscall(SYS_getpid);
+    printf("Process ID: %d\n", pid);
+
+    return 0;
+}
+```
+
+### 进程创建实验
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+
+int main() {
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // 子进程
+        printf("Child process: PID = %d\n", getpid());
+        printf("Parent PID: %d\n", getppid());
+        exit(0);
+    } else if (pid > 0) {
+        // 父进程
+        printf("Parent process: PID = %d\n", getpid());
+        printf("Child PID: %d\n", pid);
+        wait(NULL);  // 等待子进程结束
+    } else {
+        perror("fork failed");
+        return 1;
+    }
+
+    return 0;
+}
+```
+
+## 学习方法
+
+### 1. 理论学习
+- **阅读经典教材**：《操作系统概念》、《现代操作系统》
+- **学习架构设计**：理解不同操作系统架构的优缺点
+- **掌握核心概念**：进程、内存、文件系统、I/O管理
+
+### 2. 实践编程
+- **系统调用编程**：熟练使用Linux系统调用接口
+- **内核模块开发**：学习Linux内核模块编程
+- **调试技能**：掌握gdb、strace等调试工具
+
+### 3. 源码阅读
+- **Linux内核**：阅读核心模块的源码实现
+- **教学系统**：研究xv6、MINIX等教学操作系统
+- **开源项目**：参与开源操作系统项目
+
+## 课后练习
+
+1. **思考题**：比较宏内核和微内核架构的优缺点，分析它们在AI时代的适用性。
+
+2. **编程题**：实现一个简单的shell，支持基本命令执行和进程管理。
+
+3. **阅读题**：阅读《操作系统概念》第2章，深入理解操作系统架构。
+
+## 下一讲预告
+
+第3讲：进程与进程管理 - 进程的概念和表示、进程状态与转换、进程控制与调度。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第2讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect2.md](https://jyywiki.cn/OS/2025/lect2.md)*

@@ -1,0 +1,928 @@
+---
+title: "L02 - 排序算法"
+description: "深入理解各种排序算法的原理、实现和性能分析"
+---
+
+import { useState, useEffect } from 'react';
+import { CodeBlock } from '@/src/components/algorithm';
+import { AlgorithmVisualizer } from '@/src/components/algorithm';
+import { ArrayVisualizer } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L02 - 排序算法
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🔄 **掌握排序原理**：理解6种经典排序算法的核心思想
+- ⚡ **分析性能特征**：评估不同算法的时间复杂度和空间复杂度
+- 🎯 **选择最优算法**：根据数据特点选择最适合的排序方法
+- 🛠️ **实现优化策略**：应用各种优化技术提升排序性能
+
+## 🎯 排序算法分类
+
+### 比较排序 vs 非比较排序
+
+| 类型 | 算法 | 时间复杂度 | 稳定性 | 适用场景 |
+|------|------|------------|--------|----------|
+| **比较排序** | 插入排序 | O(n²) | ✅ 稳定 | 小规模/基本有序 |
+|  | 归并排序 | O(n log n) | ✅ 稳定 | 大规模数据 |
+|  | 快速排序 | O(n log n) 平均 | ❌ 不稳定 | 通用排序 |
+|  | 堆排序 | O(n log n) | ❌ 不稳定 | 内存受限 |
+| **非比较排序** | 计数排序 | O(n+k) | ✅ 稳定 | 小范围整数 |
+|  | 基数排序 | O(d(n+k)) | ✅ 稳定 | 固定长度数据 |
+
+## 🔧 比较排序算法
+
+### 1. 插入排序 (Insertion Sort)
+
+**核心思想**：将元素逐个插入到已排序部分的正确位置
+
+```python
+def insertion_sort(arr: list) -> list:
+    """
+    插入排序算法实现
+    时间复杂度: O(n²) 最坏和平均情况, O(n) 最好情况
+    空间复杂度: O(1) 原地排序
+    稳定性: 稳定
+    适用场景: 小规模数据或基本有序的数据
+    """
+    for i in range(1, len(arr)):           # 外层循环: n-1次
+        key = arr[i]                       # 当前要插入的元素
+        j = i - 1                          # 已排序部分的最后一个索引
+
+        # 将大于key的元素向后移动
+        while j >= 0 and arr[j] > key:     # 内层循环: 最多i次
+            arr[j + 1] = arr[j]            # 元素后移
+            j -= 1                          # 指针前移
+
+        arr[j + 1] = key                   # 插入key到正确位置
+
+    return arr
+
+# 优化版本：使用二分查找减少比较次数
+def binary_insertion_sort(arr: list) -> list:
+    """
+    二分插入排序 - 使用二分查找优化插入位置查找
+    比较次数: O(n log n)，移动次数仍为 O(n²)
+    """
+    for i in range(1, len(arr)):
+        key = arr[i]
+
+        # 使用二分查找找到插入位置
+        left, right = 0, i - 1
+        while left <= right:
+            mid = (left + right) // 2
+            if arr[mid] <= key:
+                left = mid + 1
+            else:
+                right = mid - 1
+
+        # 移动元素
+        for j in range(i - 1, left - 1, -1):
+            arr[j + 1] = arr[j]
+
+        arr[left] = key
+
+    return arr
+```
+
+### 2. 归并排序 (Merge Sort)
+
+**核心思想**：分治策略 - 先分割再合并
+
+```python
+def merge_sort(arr: list) -> list:
+    """
+    归并排序 - 分治策略的典型应用
+    时间复杂度: O(n log n) 所有情况
+    空间复杂度: O(n) 需要额外空间
+    稳定性: ✅ 稳定
+    """
+    if len(arr) <= 1:
+        return arr
+
+    # 分割阶段
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])      # 递归排序左半部分
+    right = merge_sort(arr[mid:])     # 递归排序右半部分
+
+    # 合并阶段
+    return merge(left, right)
+
+def merge(left: list, right: list) -> list:
+    """
+    合并两个已排序的数组
+    时间复杂度: O(n)，其中n = len(left) + len(right)
+    """
+    result = []
+    i = j = 0
+
+    # 比较两个数组的元素
+    while i < len(left) and j < len(right):
+        if left[i] <= right[j]:       # 保持稳定性
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+
+    # 添加剩余元素
+    result.extend(left[i:])           # 左数组剩余元素
+    result.extend(right[j:])          # 右数组剩余元素
+
+    return result
+
+# 原地归并排序 - 空间优化版本
+def in_place_merge_sort(arr: list) -> list:
+    """
+    原地归并排序 - 减少空间复杂度
+    但实现复杂度增加，实际应用中较少使用
+    """
+    def merge_in_place(arr: list, start: int, mid: int, end: int):
+        # 原地合并算法实现较为复杂
+        # 这里使用双指针和临时数组
+        temp = []
+        left, right = start, mid + 1
+
+        while left <= mid and right <= end:
+            if arr[left] <= arr[right]:
+                temp.append(arr[left])
+                left += 1
+            else:
+                temp.append(arr[right])
+                right += 1
+
+        while left <= mid:
+            temp.append(arr[left])
+            left += 1
+
+        while right <= end:
+            temp.append(arr[right])
+            right += 1
+
+        for i, val in enumerate(temp):
+            arr[start + i] = val
+
+    def sort_helper(arr: list, start: int, end: int):
+        if start < end:
+            mid = (start + end) // 2
+            sort_helper(arr, start, mid)
+            sort_helper(arr, mid + 1, end)
+            merge_in_place(arr, start, mid, end)
+
+    sort_helper(arr, 0, len(arr) - 1)
+    return arr
+```
+
+<ExerciseBlock
+  title="归并排序分析"
+  question="为什么归并排序的时间复杂度总是O(n log n)？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "因为它使用了原地排序",
+      correct: false,
+      explanation: "归并排序需要额外空间，不是原地排序"
+    },
+    {
+      id: "b",
+      text: "因为每次递归都将数组分成两半，合并是线性时间",
+      correct: true,
+      explanation: "正确！递归深度为log n，每层合并操作为O(n)，总复杂度为O(n log n)"
+    },
+    {
+      id: "c",
+      text: "因为它使用了二分查找",
+      correct: false,
+      explanation: "归并排序不使用二分查找"
+    },
+    {
+      id: "d",
+      text: "因为它是稳定的排序算法",
+      correct: false,
+      explanation: "稳定性不影响时间复杂度"
+    }
+  ]}
+  hint="考虑递归树的结构和每层的操作"
+/>
+
+### 3. 快速排序 (Quick Sort)
+
+**核心思想**：分区策略 - 选择基准元素将数组分割
+
+```python
+def quick_sort(arr: list) -> list:
+    """
+    快速排序 - 分区策略
+    时间复杂度: O(n log n) 平均情况, O(n²) 最坏情况
+    空间复杂度: O(log n) 递归栈空间
+    稳定性: ❌ 不稳定
+    """
+    def partition(arr: list, low: int, high: int) -> int:
+        """
+        分区函数 - 选择基准元素并分割数组
+        返回基准元素的最终位置
+        """
+        pivot = arr[high]              # 选择最后一个元素作为基准
+        i = low - 1                    # 小于基准的元素的边界
+
+        for j in range(low, high):
+            if arr[j] <= pivot:        # 将小于等于基准的元素移到左边
+                i += 1
+                arr[i], arr[j] = arr[j], arr[i]
+
+        # 将基准元素放到正确位置
+        arr[i + 1], arr[high] = arr[high], arr[i + 1]
+        return i + 1
+
+    def quick_sort_helper(arr: list, low: int, high: int):
+        if low < high:
+            # 分区操作
+            pi = partition(arr, low, high)
+
+            # 递归排序左右子数组
+            quick_sort_helper(arr, low, pi - 1)
+            quick_sort_helper(arr, pi + 1, high)
+
+    quick_sort_helper(arr, 0, len(arr) - 1)
+    return arr
+
+# 优化版本：三数取中法
+def quick_sort_optimized(arr: list) -> list:
+    """
+    优化的快速排序 - 使用三数取中法选择基准
+    避免最坏情况的发生
+    """
+    def median_of_three(arr: list, low: int, high: int) -> int:
+        """
+        三数取中法选择基准元素
+        减少最坏情况发生的概率
+        """
+        mid = (low + high) // 2
+
+        # 比较三个元素并返回中值的索引
+        if arr[low] > arr[mid]:
+            arr[low], arr[mid] = arr[mid], arr[low]
+        if arr[low] > arr[high]:
+            arr[low], arr[high] = arr[high], arr[low]
+        if arr[mid] > arr[high]:
+            arr[mid], arr[high] = arr[high], arr[mid]
+
+        return mid
+
+    def partition(arr: list, low: int, high: int) -> int:
+        # 使用三数取中法选择基准
+        median_idx = median_of_three(arr, low, high)
+        arr[median_idx], arr[high] = arr[high], arr[median_idx]
+
+        pivot = arr[high]
+        i = low - 1
+
+        for j in range(low, high):
+            if arr[j] <= pivot:
+                i += 1
+                arr[i], arr[j] = arr[j], arr[i]
+
+        arr[i + 1], arr[high] = arr[high], arr[i + 1]
+        return i + 1
+
+    def quick_sort_helper(arr: list, low: int, high: int):
+        # 小数组使用插入排序优化
+        if high - low + 1 <= 10:
+            insertion_sort_range(arr, low, high)
+            return
+
+        if low < high:
+            pi = partition(arr, low, high)
+            quick_sort_helper(arr, low, pi - 1)
+            quick_sort_helper(arr, pi + 1, high)
+
+    def insertion_sort_range(arr: list, low: int, high: int):
+        """对指定范围内的数组进行插入排序"""
+        for i in range(low + 1, high + 1):
+            key = arr[i]
+            j = i - 1
+            while j >= low and arr[j] > key:
+                arr[j + 1] = arr[j]
+                j -= 1
+            arr[j + 1] = key
+
+    quick_sort_helper(arr, 0, len(arr) - 1)
+    return arr
+```
+
+### 4. 堆排序 (Heap Sort)
+
+**核心思想**：利用堆数据结构的特性进行排序
+
+```python
+def heap_sort(arr: list) -> list:
+    """
+    堆排序 - 使用二叉堆
+    时间复杂度: O(n log n) 所有情况
+    空间复杂度: O(1) 原地排序
+    稳定性: ❌ 不稳定
+    """
+    def heapify(arr: list, n: int, i: int):
+        """
+        堆化函数 - 维护堆的性质
+        时间复杂度: O(log n)
+        """
+        largest = i                    # 初始化最大元素为根节点
+        left = 2 * i + 1               # 左子节点
+        right = 2 * i + 2              # 右子节点
+
+        # 找出根节点、左子节点、右子节点中的最大值
+        if left < n and arr[left] > arr[largest]:
+            largest = left
+
+        if right < n and arr[right] > arr[largest]:
+            largest = right
+
+        # 如果最大值不是根节点，交换并递归堆化
+        if largest != i:
+            arr[i], arr[largest] = arr[largest], arr[i]
+            heapify(arr, n, largest)
+
+    n = len(arr)
+
+    # 构建最大堆
+    # 从最后一个非叶子节点开始堆化
+    for i in range(n // 2 - 1, -1, -1):
+        heapify(arr, n, i)
+
+    # 逐个提取元素
+    for i in range(n - 1, 0, -1):
+        # 将当前根节点（最大值）移到数组末尾
+        arr[0], arr[i] = arr[i], arr[0]
+
+        # 对剩余元素重新堆化
+        heapify(arr, i, 0)
+
+    return arr
+```
+
+## 🎯 非比较排序算法
+
+### 1. 计数排序 (Counting Sort)
+
+**核心思想**：统计每个元素出现的次数，然后重建有序数组
+
+```python
+def counting_sort(arr: list) -> list:
+    """
+    计数排序 - 适用于小范围整数
+    时间复杂度: O(n + k)，其中k是数据范围
+    空间复杂度: O(n + k)
+    稳定性: ✅ 稳定
+    局限性: 只适用于整数，且k不能过大
+    """
+    if not arr:
+        return arr
+
+    # 找出最大值和最小值
+    max_val = max(arr)
+    min_val = min(arr)
+    range_val = max_val - min_val + 1
+
+    # 初始化计数数组
+    count = [0] * range_val
+
+    # 统计每个元素出现的次数
+    for num in arr:
+        count[num - min_val] += 1
+
+    # 计算累积计数
+    for i in range(1, range_val):
+        count[i] += count[i - 1]
+
+    # 构建结果数组（从后向前保持稳定性）
+    result = [0] * len(arr)
+    for num in reversed(arr):
+        index = count[num - min_val] - 1
+        result[index] = num
+        count[num - min_val] -= 1
+
+    return result
+
+# 优化版本：减少空间使用
+def counting_sort_optimized(arr: list) -> list:
+    """
+    优化的计数排序 - 减少空间复杂度
+    当知道数据范围较小时特别有效
+    """
+    if not arr:
+        return arr
+
+    max_val = max(arr)
+    min_val = min(arr)
+    range_val = max_val - min_val + 1
+
+    # 如果数据范围过大，退回到其他排序算法
+    if range_val > len(arr) * 2:
+        return quick_sort_optimized(arr.copy())
+
+    count = [0] * range_val
+
+    # 统计频率
+    for num in arr:
+        count[num - min_val] += 1
+
+    # 直接根据频率重建结果数组
+    result = []
+    for i in range(range_val):
+        result.extend([i + min_val] * count[i])
+
+    return result
+```
+
+### 2. 基数排序 (Radix Sort)
+
+**核心思想**：按位排序，从低位到高位或从高位到低位
+
+```python
+def radix_sort(arr: list) -> list:
+    """
+    基数排序 - 按位排序
+    时间复杂度: O(d(n + k))，其中d是位数，k是基数
+    空间复杂度: O(n + k)
+    稳定性: ✅ 稳定
+    适用场景: 固定长度的整数或字符串
+    """
+    if not arr:
+        return arr
+
+    # 找出最大值，确定位数
+    max_val = max(abs(num) for num in arr)
+
+    # 处理负数 - 将所有数转换为非负数
+    min_val = min(arr)
+    if min_val < 0:
+        offset = -min_val
+        arr = [num + offset for num in arr]
+        max_val += offset
+
+    exp = 1
+    while max_val // exp > 0:
+        counting_sort_by_digit(arr, exp)
+        exp *= 10
+
+    # 恢复原始数值
+    if min_val < 0:
+        arr = [num - offset for num in arr]
+
+    return arr
+
+def counting_sort_by_digit(arr: list, exp: int):
+    """
+    按指定位进行计数排序
+    这是基数排序的核心辅助函数
+    """
+    n = len(arr)
+    output = [0] * n
+    count = [0] * 10  # 十进制数字0-9
+
+    # 统计每个数字出现的次数
+    for i in range(n):
+        digit = (arr[i] // exp) % 10
+        count[digit] += 1
+
+    # 计算累积计数
+    for i in range(1, 10):
+        count[i] += count[i - 1]
+
+    # 构建输出数组
+    for i in range(n - 1, -1, -1):
+        digit = (arr[i] // exp) % 10
+        output[count[digit] - 1] = arr[i]
+        count[digit] -= 1
+
+    # 复制回原数组
+    for i in range(n):
+        arr[i] = output[i]
+```
+
+<ExerciseBlock
+  title="算法选择"
+  question="对于包含100万个元素的随机整数数组，应该选择哪种排序算法？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "插入排序",
+      correct: false,
+      explanation: "O(n²)对于大数据太慢"
+    },
+    {
+      id: "b",
+      text: "快速排序",
+      correct: true,
+      explanation: "正确！平均O(n log n)且常数因子较小，是通用场景的最佳选择"
+    },
+    {
+      id: "c",
+      text: "冒泡排序",
+      correct: false,
+      explanation: "O(n²)完全不适合大数据"
+    },
+    {
+      id: "d",
+      text: "计数排序",
+      correct: false,
+      explanation: "如果整数范围很大，计数排序的k值会过大"
+    }
+  ]}
+  hint="考虑数据规模和算法的平均性能"
+/>
+
+## 🎯 交互式排序演示
+
+<ArrayVisualizer
+  array={[5, 3, 8, 4, 2, 7, 1, 6]}
+  title="原始数组"
+/>
+
+### 排序过程可视化
+
+```python
+# 生成排序步骤的演示数据
+def generate_sorting_steps(arr: list, algorithm: str = 'quick') -> list:
+    """
+    生成排序过程的步骤数据，用于可视化演示
+    """
+    steps = []
+    arr_copy = arr.copy()
+
+    def record_step(description: str, highlighted: list = None):
+        steps.append({
+            description: description,
+            array: arr_copy.copy(),
+            highlighted: highlighted or []
+        })
+
+    record_step("开始排序")
+
+    if algorithm == 'quick':
+        def quick_sort_visual(arr: list, low: int, high: int):
+            if low < high:
+                # 选择基准元素
+                pivot = arr[high]
+                record_step(f"选择基准元素 {pivot}", [high])
+
+                # 分区过程
+                i = low - 1
+                for j in range(low, high):
+                    if arr[j] <= pivot:
+                        i += 1
+                        arr[i], arr[j] = arr[j], arr[i]
+                        record_step(f"交换 {arr[j]} 和 {arr[i]}", [i, j])
+
+                arr[i + 1], arr[high] = arr[high], arr[i + 1]
+                record_step(f"将基准元素放到位置 {i + 1}", [i + 1])
+
+                # 递归排序
+                quick_sort_visual(arr, low, i)
+                quick_sort_visual(arr, i + 2, high)
+
+        quick_sort_visual(arr_copy, 0, len(arr_copy) - 1)
+
+    record_step("排序完成")
+    return steps
+
+# 生成演示步骤
+demo_steps = generate_sorting_steps([5, 3, 8, 4, 2, 7, 1, 6], 'quick')
+```
+
+<AlgorithmVisualizer
+  algorithm="快速排序演示"
+  steps={demo_steps}
+  speed={800}
+  customRenderer={(data, highlighted) => (
+    <ArrayVisualizer
+      array={data.array}
+      highlightedIndices={highlighted}
+      title={data.description}
+    />
+  )}
+/>
+
+## 📊 性能对比分析
+
+### 复杂度总结
+
+| 算法 | 最好情况 | 平均情况 | 最坏情况 | 空间复杂度 | 稳定性 |
+|------|----------|----------|----------|------------|--------|
+| 插入排序 | O(n) | O(n²) | O(n²) | O(1) | ✅ |
+| 归并排序 | O(n log n) | O(n log n) | O(n log n) | O(n) | ✅ |
+| 快速排序 | O(n log n) | O(n log n) | O(n²) | O(log n) | ❌ |
+| 堆排序 | O(n log n) | O(n log n) | O(n log n) | O(1) | ❌ |
+| 计数排序 | O(n+k) | O(n+k) | O(n+k) | O(n+k) | ✅ |
+| 基数排序 | O(d(n+k)) | O(d(n+k)) | O(d(n+k)) | O(n+k) | ✅ |
+
+### 实际性能测试数据
+
+```python
+# 性能测试函数
+def performance_comparison():
+    """
+    不同排序算法的性能对比测试
+    """
+    import time
+    import random
+
+    algorithms = {
+        '插入排序': insertion_sort,
+        '归并排序': merge_sort,
+        '快速排序': quick_sort_optimized,
+        '堆排序': heap_sort,
+        '计数排序': counting_sort,
+        '内置排序': sorted
+    }
+
+    test_sizes = [100, 1000, 5000, 10000]
+    results = {}
+
+    for size in test_sizes:
+        # 生成测试数据
+        random_data = [random.randint(1, 1000) for _ in range(size)]
+        sorted_data = sorted(random_data)
+        reverse_data = sorted_data[::-1]
+
+        results[size] = {}
+        for name, func in algorithms.items():
+            try:
+                # 测试随机数据
+                start = time.time()
+                func(random_data.copy())
+                random_time = time.time() - start
+
+                results[size][name] = random_time
+            except Exception as e:
+                results[size][name] = f"Error: {e}"
+
+    return results
+
+# 模拟性能数据
+performance_data = [
+    {"n": 100, "time": 0.001, "algorithm": "快速排序"},
+    {"n": 1000, "time": 0.012, "algorithm": "快速排序"},
+    {"n": 5000, "time": 0.068, "algorithm": "快速排序"},
+    {"n": 10000, "time": 0.145, "algorithm": "快速排序"}
+]
+```
+
+<ComplexityAnalyzer
+  title="快速排序实际性能"
+  algorithm="快速排序优化版本"
+  theoreticalComplexity="O(n log n)"
+  data={performance_data}
+  color="rgb(16, 185, 129)"
+/>
+
+## 🎯 实际应用场景
+
+### 1. 数据库排序优化
+
+```python
+class DatabaseSorter:
+    """
+    数据库系统中的排序策略
+    """
+    def __init__(self):
+        self.memory_limit = 1000000  # 1MB内存限制
+        self.disk_buffer = []
+
+    def external_sort(self, large_dataset: list) -> list:
+        """
+        外部排序 - 处理超出内存限制的大数据集
+        使用归并排序的变种
+        """
+        chunk_size = self.memory_limit // 4  # 安全边界
+
+        # 分块排序
+        chunks = []
+        for i in range(0, len(large_dataset), chunk_size):
+            chunk = large_dataset[i:i + chunk_size]
+            sorted_chunk = quick_sort_optimized(chunk)
+            chunks.append(sorted_chunk)
+
+        # 多路归并
+        return self.k_way_merge(chunks)
+
+    def k_way_merge(self, chunks: list) -> list:
+        """K路归并算法"""
+        import heapq
+
+        # 初始化最小堆
+        heap = []
+        for i, chunk in enumerate(chunks):
+            if chunk:
+                heapq.heappush(heap, (chunk[0], i, 0))
+
+        result = []
+        while heap:
+            val, chunk_idx, element_idx = heapq.heappop(heap)
+            result.append(val)
+
+            # 从同一个块中取出下一个元素
+            if element_idx + 1 < len(chunks[chunk_idx]):
+                next_val = chunks[chunk_idx][element_idx + 1]
+                heapq.heappush(heap, (next_val, chunk_idx, element_idx + 1))
+
+        return result
+```
+
+### 2. 实时数据流排序
+
+```python
+class StreamingSorter:
+    """
+    实时数据流排序器
+    适用于不能一次性获取所有数据的场景
+    """
+    def __init__(self, window_size: int = 1000):
+        self.window_size = window_size
+        self.buffer = []
+
+    def add_element(self, element):
+        """
+        添加新元素并维护排序状态
+        使用插入排序策略维护窗口的有序性
+        """
+        # 找到插入位置
+        insert_pos = 0
+        while insert_pos < len(self.buffer) and self.buffer[insert_pos] < element:
+            insert_pos += 1
+
+        # 插入元素
+        self.buffer.insert(insert_pos, element)
+
+        # 维护窗口大小
+        if len(self.buffer) > self.window_size:
+            self.buffer.pop(0)
+
+    def get_sorted_elements(self, k: int = None) -> list:
+        """
+        获取排序后的前k个元素
+        """
+        if k is None:
+            return self.buffer.copy()
+        return self.buffer[:min(k, len(self.buffer))]
+```
+
+<ExerciseBlock
+  title="综合应用"
+  question="设计一个系统来处理每天10亿条用户行为日志的排序。每条日志包含时间戳、用户ID和操作类型。需要按时间戳排序，但内存只能容纳100万条记录。最佳方案是？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "使用快速排序一次性排序所有数据",
+      correct: false,
+      explanation: "内存不足以容纳所有数据"
+    },
+    {
+      id: "b",
+      text: "使用外部排序：分块排序 + 多路归并",
+      correct: true,
+      explanation: "正确！外部排序专门处理超出内存的大数据集"
+    },
+    {
+      id: "c",
+      text: "使用计数排序按时间戳排序",
+      correct: false,
+      explanation: "时间戳范围太大，不适合计数排序"
+    },
+    {
+      id: "d",
+      text: "使用插入排序逐条处理",
+      correct: false,
+      explanation: "效率太低，O(n²)无法处理10亿数据"
+    }
+  ]}
+  hint="考虑内存限制和大数据处理的经典算法"
+/>
+
+## 📝 总结与最佳实践
+
+### 算法选择指南
+
+1. **小规模数据** (n < 100):
+   - 插入排序：简单高效，对于基本有序的数据表现优秀
+
+2. **中等规模数据** (100 < n < 100,000):
+   - 快速排序：平均性能最佳，常数因子小
+   - 归并排序：稳定性要求高时的选择
+
+3. **大规模数据** (n > 100,000):
+   - 快速排序或归并排序
+   - 考虑并行化优化
+
+4. **特殊数据类型**:
+   - 小范围整数：计数排序
+   - 固定长度数据：基数排序
+   - 超大数据集：外部排序
+
+### 性能优化技巧
+
+```python
+def hybrid_sort(arr: list) -> list:
+    """
+    混合排序策略 - 结合多种算法的优势
+    """
+    n = len(arr)
+
+    # 小数组使用插入排序
+    if n <= 20:
+        return insertion_sort(arr)
+
+    # 检查是否基本有序
+    is_nearly_sorted = all(arr[i] <= arr[i + 1] for i in range(n - 1))
+    if is_nearly_sorted:
+        return arr  # 已经排序
+
+    # 检查数据类型和范围
+    if all(isinstance(x, int) for x in arr):
+        data_range = max(arr) - min(arr)
+        if data_range <= n * 2:
+            return counting_sort_optimized(arr)
+
+    # 默认使用优化的快速排序
+    return quick_sort_optimized(arr)
+
+# 并行排序示例
+def parallel_sort(arr: list) -> list:
+    """
+    并行排序 - 利用多核处理器
+    """
+    import multiprocessing
+
+    def parallel_quick_sort(arr):
+        if len(arr) <= 1000:
+            return quick_sort_optimized(arr)
+
+        # 分割任务
+        mid = len(arr) // 2
+        left = arr[:mid]
+        right = arr[mid:]
+
+        # 并行处理
+        with multiprocessing.Pool(2) as pool:
+            sorted_left, sorted_right = pool.map(parallel_quick_sort, [left, right])
+
+        return merge(sorted_left, sorted_right)
+
+    return parallel_quick_sort(arr)
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question="以下哪种排序算法在数据已经基本有序时表现最好？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "快速排序",
+      correct: false,
+      explanation: "快速排序在已排序数据上可能退化为O(n²)"
+    },
+    {
+      id: "b",
+      text: "插入排序",
+      correct: true,
+      explanation: "正确！插入排序在基本有序数据上接近O(n)"
+    },
+    {
+      id: "c",
+      text: "堆排序",
+      correct: false,
+      explanation: "堆排序在已排序数据上仍为O(n log n)"
+    },
+    {
+      id: "d",
+      text: "归并排序",
+      correct: false,
+      explanation: "归并排序稳定但需要O(n log n)时间"
+    }
+  ]}
+  hint="考虑算法在最好情况下的性能"
+/>
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：实现所有排序算法并对比性能
+2. **进阶练习**：为特定数据特征优化排序算法
+3. **实战练习**：处理大规模数据集的外部排序
+4. **项目练习**：设计一个自适应排序系统
+
+**记住**：没有最好的排序算法，只有最适合的！理解每种算法的特性和适用场景是成为优秀工程师的关键。🎯

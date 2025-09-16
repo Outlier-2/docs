@@ -1,0 +1,978 @@
+---
+title: "第2讲：数字电路基础"
+description: "CMOS电路、布尔代数、逻辑门和数字电路设计基础"
+---
+
+# 第2讲：数字电路基础
+
+## 概述
+
+本讲介绍数字电路的基础知识，包括CMOS技术、布尔代数、基本逻辑门以及数字电路的设计方法。这些是构建复杂数字系统的基本模块。
+
+## CMOS技术基础
+
+### MOSFET晶体管
+
+#### 基本结构
+
+CMOS（Complementary Metal-Oxide-Semiconductor）是现代数字电路的主流技术。它使用互补的nMOS和pMOS晶体管。
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+// MOSFET晶体管模型
+typedef enum {
+    NMOS,  // n型MOSFET
+    PMOS   // p型MOSFET
+} MOS_Type;
+
+typedef struct {
+    MOS_Type type;
+    bool gate;      // 栅极电压
+    bool source;     // 源极电压
+    bool drain;      // 漏极电压
+    bool body;       // 衬底电压
+    bool conducting; // 是否导通
+} MOSFET;
+
+// MOSFET行为模拟
+void update_mosfet_state(MOSFET *mos) {
+    if (mos->type == NMOS) {
+        // nMOS: gate > threshold 时导通
+        mos->conducting = (mos->gate == 1) && (mos->source == 0);
+    } else {
+        // pMOS: gate < threshold 时导通
+        mos->conducting = (mos->gate == 0) && (mos->source == 1);
+    }
+}
+
+void mosfet_demo() {
+    printf("MOSFET晶体管行为演示\n");
+    printf("====================\n");
+
+    // nMOS演示
+    MOSFET nmos = {NMOS, 0, 0, 0, 0, false};
+    printf("nMOS 晶体管:\n");
+
+    for (int gate = 0; gate <= 1; gate++) {
+        for (int source = 0; source <= 1; source++) {
+            nmos.gate = gate;
+            nmos.source = source;
+            update_mosfet_state(&nmos);
+
+            printf("Gate=%d, Source=%d -> ", gate, source);
+            printf("Drain=%s", nmos.conducting ? "Source" : "High-Z");
+            printf(" (%s)\n", nmos.conducting ? "导通" : "截止");
+        }
+    }
+}
+```
+
+#### CMOS反相器
+
+```c
+// CMOS反相器
+typedef struct {
+    MOSFET nmos;  // 下拉网络
+    MOSFET pmos;  // 上拉网络
+    bool input;    // 输入
+    bool output;   // 输出
+} CMOS_Inverter;
+
+void update_inverter(CMOS_Inverter *inv) {
+    // 设置输入
+    inv->nmos.gate = inv->input;
+    inv->pmos.gate = inv->input;
+    inv->nmos.source = 0;  // 接地
+    inv->pmos.source = 1;  // 接电源
+
+    // 更新晶体管状态
+    update_mosfet_state(&inv->nmos);
+    update_mosfet_state(&inv->pmos);
+
+    // 计算输出
+    if (inv->nmos.conducting && !inv->pmos.conducting) {
+        inv->output = 0;  // nMOS导通，输出低电平
+    } else if (!inv->nmos.conducting && inv->pmos.conducting) {
+        inv->output = 1;  // pMOS导通，输出高电平
+    } else {
+        inv->output = -1;  // 高阻态（理论上不会发生）
+    }
+}
+
+void inverter_demo() {
+    printf("CMOS反相器演示\n");
+    printf("==============\n");
+
+    CMOS_Inverter inv = {
+        {NMOS, 0, 0, 0, 0, false},
+        {PMOS, 0, 1, 1, 1, false},
+        0, 0
+    };
+
+    for (int input = 0; input <= 1; input++) {
+        inv.input = input;
+        update_inverter(&inv);
+
+        printf("输入: %d -> 输出: %d", input, inv.output);
+        printf(" (nMOS: %s, pMOS: %s)\n",
+               inv.nmos.conducting ? "导通" : "截止",
+               inv.pmos.conducting ? "导通" : "截止");
+    }
+}
+```
+
+## 布尔代数基础
+
+### 基本运算
+
+```python
+class BooleanAlgebra:
+    """布尔代数运算类"""
+
+    @staticmethod
+    def AND(a, b):
+        """逻辑与"""
+        return a and b
+
+    @staticmethod
+    def OR(a, b):
+        """逻辑或"""
+        return a or b
+
+    @staticmethod
+    def NOT(a):
+        """逻辑非"""
+        return not a
+
+    @staticmethod
+    def XOR(a, b):
+        """异或"""
+        return a != b
+
+    @staticmethod
+    def NAND(a, b):
+        """与非"""
+        return not (a and b)
+
+    @staticmethod
+    def NOR(a, b):
+        """或非"""
+        return not (a or b)
+
+    @staticmethod
+    def XNOR(a, b):
+        """同或"""
+        return a == b
+
+    @staticmethod
+    def truth_table(operation, name):
+        """生成真值表"""
+        print(f"{name} 真值表:")
+        print("A B | Output")
+        print("----------")
+
+        for a in [False, True]:
+            for b in [False, True]:
+                result = operation(a, b)
+                print(f"{int(a)} {int(b)} | {int(result)}")
+        print()
+
+# 演示所有基本运算
+def boolean_demo():
+    ba = BooleanAlgebra()
+
+    operations = [
+        (ba.AND, "AND"),
+        (ba.OR, "OR"),
+        (ba.XOR, "XOR"),
+        (ba.NAND, "NAND"),
+        (ba.NOR, "NOR"),
+        (ba.XNOR, "XNOR")
+    ]
+
+    for op, name in operations:
+        ba.truth_table(op, name)
+
+# 运行演示
+boolean_demo()
+```
+
+### 布尔代数定律
+
+```python
+class BooleanLaws:
+    """布尔代数定律验证"""
+
+    @staticmethod
+    def verify_commutative_law(a, b):
+        """验证交换律"""
+        and_result1 = a and b
+        and_result2 = b and a
+
+        or_result1 = a or b
+        or_result2 = b or a
+
+        return (and_result1 == and_result2) and (or_result1 == or_result2)
+
+    @staticmethod
+    def verify_associative_law(a, b, c):
+        """验证结合律"""
+        and_result1 = (a and b) and c
+        and_result2 = a and (b and c)
+
+        or_result1 = (a or b) or c
+        or_result2 = a or (b or c)
+
+        return (and_result1 == and_result2) and (or_result1 == or_result2)
+
+    @staticmethod
+    def verify_distributive_law(a, b, c):
+        """验证分配律"""
+        result1 = a and (b or c)
+        result2 = (a and b) or (a and c)
+
+        return result1 == result2
+
+    @staticmethod
+    def verify_demorgan_laws(a, b):
+        """验证德摩根定律"""
+        law1 = not (a and b) == ((not a) or (not b))
+        law2 = not (a or b) == ((not a) and (not b))
+
+        return law1 and law2
+
+    @staticmethod
+    def verify_identity_laws(a):
+        """验证同一律"""
+        law1 = (a and True) == a
+        law2 = (a or False) == a
+
+        return law1 and law2
+
+    @staticmethod
+    def verify_complement_laws(a):
+        """验证互补律"""
+        law1 = (a and (not a)) == False
+        law2 = (a or (not a)) == True
+
+        return law1 and law2
+
+# 验证所有定律
+def verify_all_laws():
+    bl = BooleanLaws()
+
+    test_values = [False, True]
+
+    print("布尔代数定律验证:")
+    print("================")
+
+    # 测试所有可能的输入组合
+    for a in test_values:
+        for b in test_values:
+            for c in test_values:
+                commutative = bl.verify_commutative_law(a, b)
+                associative = bl.verify_associative_law(a, b, c)
+                distributive = bl.verify_distributive_law(a, b, c)
+                demorgan = bl.verify_demorgan_laws(a, b)
+                identity = bl.verify_identity_laws(a)
+                complement = bl.verify_complement_laws(a)
+
+                if not all([commutative, associative, distributive,
+                           demorgan, identity, complement]):
+                    print(f"验证失败: a={a}, b={b}, c={c}")
+                    return False
+
+    print("所有定律验证通过!")
+    return True
+
+verify_all_laws()
+```
+
+## 逻辑门设计
+
+### 基本逻辑门
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+// 基本逻辑门实现
+typedef struct {
+    bool (*func)(bool, bool);
+    char *name;
+    char symbol;
+} LogicGate;
+
+// AND门
+bool AND_gate(bool a, bool b) {
+    return a && b;
+}
+
+// OR门
+bool OR_gate(bool a, bool b) {
+    return a || b;
+}
+
+// NOT门
+bool NOT_gate(bool a) {
+    return !a;
+}
+
+// NAND门
+bool NAND_gate(bool a, bool b) {
+    return !(a && b);
+}
+
+// NOR门
+bool NOR_gate(bool a, bool b) {
+    return !(a || b);
+}
+
+// XOR门
+bool XOR_gate(bool a, bool b) {
+    return a != b;
+}
+
+// 逻辑门演示
+void logic_gates_demo() {
+    LogicGate gates[] = {
+        {AND_gate, "AND", '&'},
+        {OR_gate, "OR", '|'},
+        {NAND_gate, "NAND", '!'},
+        {NOR_gate, "NOR', '⊽'},
+        {XOR_gate, "XOR", '^'}
+    };
+
+    int num_gates = sizeof(gates) / sizeof(gates[0]);
+
+    printf("逻辑门真值表\n");
+    printf("============\n");
+
+    for (int i = 0; i < num_gates; i++) {
+        printf("\n%s 门 (%c):\n", gates[i].name, gates[i].symbol);
+        printf("A B | Output\n");
+        printf("----------\n");
+
+        for (int a = 0; a <= 1; a++) {
+            for (int b = 0; b <= 1; b++) {
+                bool result = gates[i].func(a, b);
+                printf("%d %d |   %d\n", a, b, result);
+            }
+        }
+    }
+
+    // NOT门单独演示
+    printf("\nNOT 门:\n");
+    printf("A | Output\n");
+    printf("---------\n");
+    for (int a = 0; a <= 1; a++) {
+        printf("%d |   %d\n", a, NOT_gate(a));
+    }
+}
+```
+
+### 通用逻辑门
+
+```c
+// 使用NAND门实现其他逻辑门
+bool nand_to_not(bool a) {
+    return NAND_gate(a, a);
+}
+
+bool nand_to_and(bool a, bool b) {
+    return nand_to_not(NAND_gate(a, b));
+}
+
+bool nand_to_or(bool a, bool b) {
+    return NAND_gate(nand_to_not(a), nand_to_not(b));
+}
+
+bool nand_to_xor(bool a, bool b) {
+    bool nand_ab = NAND_gate(a, b);
+    bool nand_a = NAND_gate(a, nand_ab);
+    bool nand_b = NAND_gate(b, nand_ab);
+    return NAND_gate(nand_a, nand_b);
+}
+
+// 通用逻辑门演示
+void universal_gates_demo() {
+    printf("\nNAND门作为通用逻辑门演示\n");
+    printf("========================\n");
+
+    printf("输入 A=1, B=1:\n");
+    printf("NOT(1) = %d\n", nand_to_not(1));
+    printf("AND(1,1) = %d\n", nand_to_and(1, 1));
+    printf("OR(1,1) = %d\n", nand_to_or(1, 1));
+    printf("XOR(1,1) = %d\n", nand_to_xor(1, 1));
+
+    printf("\n输入 A=1, B=0:\n");
+    printf("NOT(1) = %d\n", nand_to_not(1));
+    printf("AND(1,0) = %d\n", nand_to_and(1, 0));
+    printf("OR(1,0) = %d\n", nand_to_or(1, 0));
+    printf("XOR(1,0) = %d\n", nand_to_xor(1, 0));
+}
+```
+
+## 逻辑电路设计
+
+### 组合逻辑设计
+
+```python
+class CombinationalLogic:
+    """组合逻辑电路设计"""
+
+    def __init__(self):
+        self.inputs = []
+        self.outputs = []
+        self.gates = []
+
+    def add_input(self, name):
+        """添加输入信号"""
+        self.inputs.append(name)
+
+    def add_output(self, name):
+        """添加输出信号"""
+        self.outputs.append(name)
+
+    def add_gate(self, gate_type, inputs, output):
+        """添加逻辑门"""
+        self.gates.append({
+            'type': gate_type,
+            'inputs': inputs,
+            'output': output
+        })
+
+    def simulate(self, input_values):
+        """电路仿真"""
+        signals = {}
+
+        # 设置输入值
+        for i, input_name in enumerate(self.inputs):
+            signals[input_name] = input_values[i]
+
+        # 计算所有门电路
+        for gate in self.gates:
+            gate_type = gate['type']
+            input_names = gate['inputs']
+            output_name = gate['output']
+
+            # 获取输入值
+            input_vals = [signals[name] for name in input_names]
+
+            # 计算输出
+            if gate_type == 'AND':
+                result = all(input_vals)
+            elif gate_type == 'OR':
+                result = any(input_vals)
+            elif gate_type == 'NOT':
+                result = not input_vals[0]
+            elif gate_type == 'NAND':
+                result = not all(input_vals)
+            elif gate_type == 'NOR':
+                result = not any(input_vals)
+            elif gate_type == 'XOR':
+                result = input_vals.count(True) % 2 == 1
+            else:
+                raise ValueError(f"Unknown gate type: {gate_type}")
+
+            signals[output_name] = result
+
+        # 返回输出值
+        return [signals[name] for name in self.outputs]
+
+# 半加器设计
+def half_adder_design():
+    """设计半加器电路"""
+    ha = CombinationalLogic()
+
+    # 添加输入输出
+    ha.add_input('A')
+    ha.add_input('B')
+    ha.add_output('Sum')
+    ha.add_output('Carry')
+
+    # 添加门电路
+    ha.add_gate('XOR', ['A', 'B'], 'Sum')
+    ha.add_gate('AND', ['A', 'B'], 'Carry')
+
+    return ha
+
+# 全加器设计
+def full_adder_design():
+    """设计全加器电路"""
+    fa = CombinationalLogic()
+
+    # 添加输入输出
+    fa.add_input('A')
+    fa.add_input('B')
+    fa.add_input('Cin')
+    fa.add_output('Sum')
+    fa.add_output('Cout')
+
+    # 添加门电路
+    fa.add_gate('XOR', ['A', 'B'], 'XOR1')
+    fa.add_gate('XOR', ['XOR1', 'Cin'], 'Sum')
+    fa.add_gate('AND', ['A', 'B'], 'AND1')
+    fa.add_gate('AND', ['XOR1', 'Cin'], 'AND2')
+    fa.add_gate('OR', ['AND1', 'AND2'], 'Cout')
+
+    return fa
+
+# 演示加法器
+def adder_demo():
+    print("半加器演示:")
+    print("A B | Sum Carry")
+    print("---------------")
+    ha = half_adder_design()
+    for a in [False, True]:
+        for b in [False, True]:
+            result = ha.simulate([a, b])
+            print(f"{int(a)} {int(b)} |  {int(result[0])}   {int(result[1])}")
+
+    print("\n全加器演示:")
+    print("A B Cin | Sum Cout")
+    print("-------------------")
+    fa = full_adder_design()
+    for a in [False, True]:
+        for b in [False, True]:
+            for cin in [False, True]:
+                result = fa.simulate([a, b, cin])
+                print(f"{int(a)} {int(b)} {int(cin)} |  {int(result[0])}   {int(result[1])}")
+
+adder_demo()
+```
+
+### 多路选择器设计
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+// 2-to-1 多路选择器
+bool mux_2to1(bool data0, bool data1, bool select) {
+    if (select) {
+        return data1;
+    } else {
+        return data0;
+    }
+}
+
+// 4-to-1 多路选择器
+bool mux_4to1(bool data0, bool data1, bool data2, bool data3,
+             bool select1, bool select0) {
+    // 使用两级2-to-1 MUX实现
+    bool mux_upper = mux_2to1(data0, data1, select0);
+    bool mux_lower = mux_2to1(data2, data3, select0);
+    return mux_2to1(mux_upper, mux_lower, select1);
+}
+
+// 多路选择器演示
+void mux_demo() {
+    printf("2-to-1 多路选择器演示:\n");
+    printf("=====================\n");
+    printf("D0 D1 S | Output\n");
+    printf("----------------\n");
+
+    for (int d0 = 0; d0 <= 1; d0++) {
+        for (int d1 = 0; d1 <= 1; d1++) {
+            for (int s = 0; s <= 1; s++) {
+                bool output = mux_2to1(d0, d1, s);
+                printf("%d  %d  %d |   %d\n", d0, d1, s, output);
+            }
+        }
+    }
+
+    printf("\n4-to-1 多路选择器演示:\n");
+    printf("=====================\n");
+    printf("D0 D1 D2 D3 S1 S0 | Output\n");
+    printf("------------------------\n");
+
+    // 简化演示，只显示部分组合
+    bool data[4] = {0, 1, 0, 1};
+    for (int s1 = 0; s1 <= 1; s1++) {
+        for (int s0 = 0; s0 <= 1; s0++) {
+            bool output = mux_4to1(data[0], data[1], data[2], data[3], s1, s0);
+            printf("%d  %d  %d  %d  %d  %d |   %d\n",
+                   data[0], data[1], data[2], data[3], s1, s0, output);
+        }
+    }
+}
+```
+
+## 实验项目：数字电路仿真器
+
+### 项目概述
+
+创建一个数字电路仿真器，能够：
+1. 模拟基本逻辑门的行为
+2. 实现组合逻辑电路
+3. 生成电路的真值表
+4. 验证电路设计的正确性
+
+### 完整实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <ctype.h>
+
+#define MAX_INPUTS 10
+#define MAX_OUTPUTS 10
+#define MAX_GATES 100
+#define MAX_SIGNALS 50
+#define MAX_NAME_LEN 20
+
+typedef struct {
+    char name[MAX_NAME_LEN];
+    bool value;
+    bool is_input;
+} Signal;
+
+typedef struct {
+    char type[10];
+    char input_names[2][MAX_NAME_LEN];
+    char output_name[MAX_NAME_LEN];
+    bool computed;
+} Gate;
+
+typedef struct {
+    Signal signals[MAX_SIGNALS];
+    int signal_count;
+    Gate gates[MAX_GATES];
+    int gate_count;
+    char input_names[MAX_INPUTS][MAX_NAME_LEN];
+    char output_names[MAX_OUTPUTS][MAX_NAME_LEN];
+    int input_count;
+    int output_count;
+} Circuit;
+
+// 初始化电路
+void init_circuit(Circuit *circuit) {
+    circuit->signal_count = 0;
+    circuit->gate_count = 0;
+    circuit->input_count = 0;
+    circuit->output_count = 0;
+}
+
+// 查找或创建信号
+Signal* get_signal(Circuit *circuit, const char *name) {
+    for (int i = 0; i < circuit->signal_count; i++) {
+        if (strcmp(circuit->signals[i].name, name) == 0) {
+            return &circuit->signals[i];
+        }
+    }
+
+    if (circuit->signal_count >= MAX_SIGNALS) {
+        fprintf(stderr, "Error: Maximum signals exceeded\n");
+        return NULL;
+    }
+
+    Signal *sig = &circuit->signals[circuit->signal_count];
+    strncpy(sig->name, name, MAX_NAME_LEN - 1);
+    sig->name[MAX_NAME_LEN - 1] = '\0';
+    sig->value = false;
+    sig->is_input = false;
+    circuit->signal_count++;
+
+    return sig;
+}
+
+// 添加输入
+void add_input(Circuit *circuit, const char *name) {
+    if (circuit->input_count >= MAX_INPUTS) {
+        fprintf(stderr, "Error: Maximum inputs exceeded\n");
+        return;
+    }
+
+    strncpy(circuit->input_names[circuit->input_count], name, MAX_NAME_LEN - 1);
+    circuit->input_names[circuit->input_count][MAX_NAME_LEN - 1] = '\0';
+
+    Signal *sig = get_signal(circuit, name);
+    if (sig) sig->is_input = true;
+
+    circuit->input_count++;
+}
+
+// 添加输出
+void add_output(Circuit *circuit, const char *name) {
+    if (circuit->output_count >= MAX_OUTPUTS) {
+        fprintf(stderr, "Error: Maximum outputs exceeded\n");
+        return;
+    }
+
+    strncpy(circuit->output_names[circuit->output_count], name, MAX_NAME_LEN - 1);
+    circuit->output_names[circuit->output_count][MAX_NAME_LEN - 1] = '\0';
+
+    get_signal(circuit, name);
+
+    circuit->output_count++;
+}
+
+// 添加门
+void add_gate(Circuit *circuit, const char *type, const char *input1,
+              const char *input2, const char *output) {
+    if (circuit->gate_count >= MAX_GATES) {
+        fprintf(stderr, "Error: Maximum gates exceeded\n");
+        return;
+    }
+
+    Gate *gate = &circuit->gates[circuit->gate_count];
+    strncpy(gate->type, type, 9);
+    gate->type[9] = '\0';
+    strncpy(gate->input_names[0], input1, MAX_NAME_LEN - 1);
+    gate->input_names[0][MAX_NAME_LEN - 1] = '\0';
+    strncpy(gate->input_names[1], input2, MAX_NAME_LEN - 1);
+    gate->input_names[1][MAX_NAME_LEN - 1] = '\0';
+    strncpy(gate->output_name, output, MAX_NAME_LEN - 1);
+    gate->output_name[MAX_NAME_LEN - 1] = '\0';
+    gate->computed = false;
+
+    circuit->gate_count++;
+}
+
+// 计算门的输出
+bool compute_gate(Gate *gate, Circuit *circuit) {
+    Signal *input1 = get_signal(circuit, gate->input_names[0]);
+    Signal *input2 = get_signal(circuit, gate->input_names[1]);
+    Signal *output = get_signal(circuit, gate->output_name);
+
+    if (!input1 || !input2 || !output) return false;
+
+    if (strcmp(gate->type, "AND") == 0) {
+        output->value = input1->value && input2->value;
+    } else if (strcmp(gate->type, "OR") == 0) {
+        output->value = input1->value || input2->value;
+    } else if (strcmp(gate->type, "XOR") == 0) {
+        output->value = input1->value != input2->value;
+    } else if (strcmp(gate->type, "NAND") == 0) {
+        output->value = !(input1->value && input2->value);
+    } else if (strcmp(gate->type, "NOR") == 0) {
+        output->value = !(input1->value || input2->value);
+    } else if (strcmp(gate->type, "XNOR") == 0) {
+        output->value = input1->value == input2->value;
+    } else {
+        fprintf(stderr, "Error: Unknown gate type %s\n", gate->type);
+        return false;
+    }
+
+    gate->computed = true;
+    return true;
+}
+
+// 重置计算状态
+void reset_computation(Circuit *circuit) {
+    for (int i = 0; i < circuit->gate_count; i++) {
+        circuit->gates[i].computed = false;
+    }
+}
+
+// 仿真电路
+bool simulate_circuit(Circuit *circuit, bool *input_values) {
+    // 设置输入值
+    for (int i = 0; i < circuit->input_count; i++) {
+        Signal *sig = get_signal(circuit, circuit->input_names[i]);
+        if (sig) sig->value = input_values[i];
+    }
+
+    // 计算所有门电路
+    bool progress;
+    do {
+        progress = false;
+        for (int i = 0; i < circuit->gate_count; i++) {
+            if (!circuit->gates[i].computed) {
+                if (compute_gate(&circuit->gates[i], circuit)) {
+                    progress = true;
+                }
+            }
+        }
+    } while (progress);
+
+    // 检查是否所有门都计算完成
+    for (int i = 0; i < circuit->gate_count; i++) {
+        if (!circuit->gates[i].computed) {
+            fprintf(stderr, "Error: Circuit has combinational loop\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// 生成真值表
+void generate_truth_table(Circuit *circuit) {
+    printf("真值表:\n");
+
+    // 打印表头
+    for (int i = 0; i < circuit->input_count; i++) {
+        printf("%s ", circuit->input_names[i]);
+    }
+    printf("| ");
+    for (int i = 0; i < circuit->output_count; i++) {
+        printf("%s ", circuit->output_names[i]);
+    }
+    printf("\n");
+
+    // 打印分隔线
+    for (int i = 0; i < circuit->input_count; i++) {
+        printf("-- ");
+    }
+    printf("| ");
+    for (int i = 0; i < circuit->output_count; i++) {
+        printf("-- ");
+    }
+    printf("\n");
+
+    // 生成所有输入组合
+    int total_combinations = 1 << circuit->input_count;
+    for (int i = 0; i < total_combinations; i++) {
+        bool input_values[MAX_INPUTS];
+
+        // 生成输入组合
+        for (int j = 0; j < circuit->input_count; j++) {
+            input_values[j] = (i >> j) & 1;
+        }
+
+        // 仿真电路
+        reset_computation(circuit);
+        simulate_circuit(circuit, input_values);
+
+        // 打印输入值
+        for (int j = 0; j < circuit->input_count; j++) {
+            printf("%d  ", input_values[j]);
+        }
+        printf("| ");
+
+        // 打印输出值
+        for (int j = 0; j < circuit->output_count; j++) {
+            Signal *sig = get_signal(circuit, circuit->output_names[j]);
+            if (sig) {
+                printf("%d  ", sig->value);
+            } else {
+                printf("?  ");
+            }
+        }
+        printf("\n");
+    }
+}
+
+// 创建半加器电路
+void create_half_adder(Circuit *circuit) {
+    init_circuit(circuit);
+    add_input(circuit, "A");
+    add_input(circuit, "B");
+    add_output(circuit, "Sum");
+    add_output(circuit, "Carry");
+    add_gate(circuit, "XOR", "A", "B", "Sum");
+    add_gate(circuit, "AND", "A", "B", "Carry");
+}
+
+// 创建全加器电路
+void create_full_adder(Circuit *circuit) {
+    init_circuit(circuit);
+    add_input(circuit, "A");
+    add_input(circuit, "B");
+    add_input(circuit, "Cin");
+    add_output(circuit, "Sum");
+    add_output(circuit, "Cout");
+    add_gate(circuit, "XOR", "A", "B", "XOR1");
+    add_gate(circuit, "XOR", "XOR1", "Cin", "Sum");
+    add_gate(circuit, "AND", "A", "B", "AND1");
+    add_gate(circuit, "AND", "XOR1", "Cin", "AND2");
+    add_gate(circuit, "OR", "AND1", "AND2", "Cout");
+}
+
+int main() {
+    Circuit circuit;
+
+    printf("数字电路仿真器\n");
+    printf("==============\n\n");
+
+    while (1) {
+        printf("选择电路:\n");
+        printf("1. 半加器\n");
+        printf("2. 全加器\n");
+        printf("3. 退出\n");
+        printf("选择: ");
+
+        int choice;
+        scanf("%d", &choice);
+
+        switch (choice) {
+            case 1:
+                create_half_adder(&circuit);
+                printf("\n半加器电路:\n");
+                generate_truth_table(&circuit);
+                break;
+            case 2:
+                create_full_adder(&circuit);
+                printf("\n全加器电路:\n");
+                generate_truth_table(&circuit);
+                break;
+            case 3:
+                return 0;
+            default:
+                printf("无效选择!\n");
+        }
+
+        printf("\n");
+    }
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **CMOS技术**：
+   - 解释CMOS反相器的工作原理
+   - 为什么CMOS技术功耗低？
+
+2. **布尔代数**：
+   - 证明德摩根定律
+   - 化简布尔表达式：F = A·B·C + A·B·C + A·B·C + A·B·C
+
+3. **逻辑门**：
+   - 为什么NAND门是通用逻辑门？
+   - 使用NAND门实现一个2-to-1多路选择器
+
+4. **组合逻辑**：
+   - 设计一个4-bit比较器
+   - 分析电路中的冒险问题
+
+### 编程练习
+
+1. **逻辑门仿真器**：扩展上述仿真器，支持更多逻辑门
+
+2. **电路优化**：实现布尔表达式化简算法
+
+3. **图形界面**：创建图形化的电路设计工具
+
+4. **性能分析**：分析不同电路实现的延迟和功耗
+
+### 实验挑战
+
+1. **ALU设计**：设计一个简单的算术逻辑单元
+
+2. **乘法器**：实现4-bit乘法器电路
+
+3. **优先级编码器**：设计优先级编码器电路
+
+## 扩展阅读
+
+- **教材章节**：*Digital Design and Computer Architecture* 第2章
+- **在线资源**：
+  - [CMOS VLSI Design](https://pages.hmc.edu/harris/cmosvlsi/)
+  - [Boolean Algebra Calculator](https://www.dcode.fr/boolean-expressions-calculator)
+- **推荐视频**：
+  - [CMOS Transistors (YouTube)](https://www.youtube.com/watch?v=6d7SpSJbKXk)
+  - [Logic Gates (YouTube)](https://www.youtube.com/watch?v=gI-qXk7XojA)
+
+---
+
+*下一讲将深入探讨组合逻辑电路的设计和优化方法。*

@@ -1,0 +1,2462 @@
+---
+title: "Lecture 16: 缓存系统 - 分布式缓存的设计与实现"
+description: "深入理解分布式缓存系统的设计原理、实现技术和性能优化策略"
+---
+
+# Lecture 16: 缓存系统 - 分布式缓存的设计与实现
+
+## 本周内容
+
+- **缓存算法**：LRU、LFU、ARC算法的深入原理和实现
+- **分布式缓存架构**：Redis、Memcached的内部机制和集群模式
+- **一致性缓存**：缓存与数据库的一致性保证机制
+- **性能优化**：缓存预热、失效策略、内存管理和监控
+- **实践项目**：构建高性能分布式缓存系统
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/4c2y0z0iZ3g" title="分布式缓存系统" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 缓存系统概述
+
+缓存是提高系统性能的关键技术，通过在高速存储中保存常用数据副本，减少对低速存储的访问次数。
+
+**缓存的层次结构**
+```
+应用程序
+    ↓
+本地缓存 (进程内)
+    ↓
+分布式缓存 (Redis/Memcached)
+    ↓
+数据库/持久化存储
+```
+
+**性能指标**
+- **命中率**：缓存命中次数 / 总访问次数
+- **响应时间**：缓存访问的平均延迟
+- **吞吐量**：每秒处理的请求数
+- **内存使用率**：缓存占用的内存比例
+
+### 缓存算法详解
+
+#### 1. LRU (Least Recently Used) 算法
+
+LRU算法淘汰最近最少使用的数据，基于时间局部性原理。
+
+```go
+// LRU缓存实现
+type LRUCache struct {
+    capacity int
+    size     int
+    cache    map[int]*Node
+    head     *Node
+    tail     *Node
+    mu       sync.RWMutex
+}
+
+type Node struct {
+    key   int
+    value interface{}
+    prev  *Node
+    next  *Node
+}
+
+// 创建LRU缓存
+func NewLRUCache(capacity int) *LRUCache {
+    cache := &LRUCache{
+        capacity: capacity,
+        cache:    make(map[int]*Node),
+    }
+
+    // 初始化头尾节点
+    cache.head = &Node{}
+    cache.tail = &Node{}
+    cache.head.next = cache.tail
+    cache.tail.prev = cache.head
+
+    return cache
+}
+
+// 获取缓存值
+func (lru *LRUCache) Get(key int) interface{} {
+    lru.mu.RLock()
+    defer lru.mu.RUnlock()
+
+    if node, exists := lru.cache[key]; exists {
+        // 移动到头部
+        lru.moveToHead(node)
+        return node.value
+    }
+    return nil
+}
+
+// 设置缓存值
+func (lru *LRUCache) Put(key int, value interface{}) {
+    lru.mu.Lock()
+    defer lru.mu.Unlock()
+
+    if node, exists := lru.cache[key]; exists {
+        // 更新值并移动到头部
+        node.value = value
+        lru.moveToHead(node)
+        return
+    }
+
+    // 创建新节点
+    node := &Node{
+        key:   key,
+        value: value,
+    }
+
+    lru.cache[key] = node
+    lru.addToHead(node)
+    lru.size++
+
+    // 检查容量
+    if lru.size > lru.capacity {
+        lru.removeTail()
+    }
+}
+
+// 移动节点到头部
+func (lru *LRUCache) moveToHead(node *Node) {
+    lru.removeNode(node)
+    lru.addToHead(node)
+}
+
+// 添加节点到头部
+func (lru *LRUCache) addToHead(node *Node) {
+    node.prev = lru.head
+    node.next = lru.head.next
+    lru.head.next.prev = node
+    lru.head.next = node
+}
+
+// 移除节点
+func (lru *LRUCache) removeNode(node *Node) {
+    node.prev.next = node.next
+    node.next.prev = node.prev
+}
+
+// 移除尾部节点
+func (lru *LRUCache) removeTail() {
+    if lru.size == 0 {
+        return
+    }
+
+    node := lru.tail.prev
+    lru.removeNode(node)
+    delete(lru.cache, node.key)
+    lru.size--
+}
+```
+
+#### 2. LFU (Least Frequently Used) 算法
+
+LFU算法淘汰最不经常使用的数据，基于频率局部性原理。
+
+```go
+// LFU缓存实现
+type LFUCache struct {
+    capacity    int
+    size        int
+    minFreq     int
+    cache       map[int]*LFUNode
+    freqMap     map[int]*LinkedList
+    mu          sync.RWMutex
+}
+
+type LFUNode struct {
+    key   int
+    value interface{}
+    freq  int
+    prev  *LFUNode
+    next  *LFUNode
+}
+
+type LinkedList struct {
+    head *LFUNode
+    tail *LFUNode
+}
+
+func NewLFUCache(capacity int) *LFUCache {
+    return &LFUCache{
+        capacity: capacity,
+        cache:    make(map[int]*LFUNode),
+        freqMap:  make(map[int]*LinkedList),
+    }
+}
+
+func (lfu *LFUCache) Get(key int) interface{} {
+    lfu.mu.RLock()
+    defer lru.mu.RUnlock()
+
+    if node, exists := lfu.cache[key]; exists {
+        lfu.updateFreq(node)
+        return node.value
+    }
+    return nil
+}
+
+func (lfu *LFUCache) Put(key int, value interface{}) {
+    lfu.mu.Lock()
+    defer lfu.mu.Unlock()
+
+    if node, exists := lfu.cache[key]; exists {
+        node.value = value
+        lfu.updateFreq(node)
+        return
+    }
+
+    if lfu.size >= lfu.capacity {
+        lfu.evict()
+    }
+
+    node := &LFUNode{
+        key:   key,
+        value: value,
+        freq:  1,
+    }
+
+    lfu.cache[key] = node
+    lfu.addToFreqList(node, 1)
+    lfu.minFreq = 1
+    lfu.size++
+}
+
+// 更新节点频率
+func (lfu *LFUCache) updateFreq(node *LFUNode) {
+    oldFreq := node.freq
+    lfu.removeFromFreqList(node, oldFreq)
+
+    node.freq++
+    newFreq := node.freq
+    lfu.addToFreqList(node, newFreq)
+
+    // 更新最小频率
+    if oldFreq == lfu.minFreq && len(lfu.freqMap[oldFreq].nodes) == 0 {
+        lfu.minFreq = newFreq
+    }
+}
+
+// 淘汰最少使用的节点
+func (lfu *LFUCache) evict() {
+    if lfu.size == 0 {
+        return
+    }
+
+    list := lfu.freqMap[lfu.minFreq]
+    node := list.tail.prev
+
+    lfu.removeFromFreqList(node, lfu.minFreq)
+    delete(lfu.cache, node.key)
+    lfu.size--
+}
+```
+
+#### 3. ARC (Adaptive Replacement Cache) 算法
+
+ARC算法自适应地在LRU和LFU之间切换，结合两者的优点。
+
+```go
+// ARC缓存实现
+type ARCCache struct {
+    capacity int
+    size     int
+    p        int // 调整参数
+
+    // 两个LRU列表
+    t1 map[int]*ARCNode  // 最近访问的数据
+    t2 map[int]*ARCNode  // 频繁访问的数据
+
+    // 两个幽灵列表
+    b1 map[int]struct{}  // 最近被淘汰的t1数据
+    b2 map[int]struct{}  // 最近被淘汰的t2数据
+
+    mu sync.RWMutex
+}
+
+type ARCNode struct {
+    key   int
+    value interface{}
+    prev  *ARCNode
+    next  *ARCNode
+}
+
+func NewARCCache(capacity int) *ARCCache {
+    return &ARCCache{
+        capacity: capacity,
+        t1:       make(map[int]*ARCNode),
+        t2:       make(map[int]*ARCNode),
+        b1:       make(map[int]struct{}),
+        b2:       make(map[int]struct{}),
+    }
+}
+
+func (arc *ARCCache) Get(key int) interface{} {
+    arc.mu.RLock()
+    defer arc.mu.RUnlock()
+
+    // 在t1中找到
+    if node, exists := arc.t1[key]; exists {
+        // 移到t2
+        delete(arc.t1, key)
+        arc.t2[key] = node
+        return node.value
+    }
+
+    // 在t2中找到
+    if node, exists := arc.t2[key]; exists {
+        return node.value
+    }
+
+    return nil
+}
+
+func (arc *ARCCache) Put(key int, value interface{}) {
+    arc.mu.Lock()
+    defer arc.mu.Unlock()
+
+    // 如果已在缓存中
+    if arc.Get(key) != nil {
+        if node, exists := arc.t2[key]; exists {
+            node.value = value
+        }
+        return
+    }
+
+    // 在幽灵列表中找到
+    if _, inB1 := arc.b1[key]; inB1 {
+        arc.replace(true)
+        arc.p = min(arc.p+1, arc.capacity)
+        delete(arc.b1, key)
+    } else if _, inB2 := arc.b2[key]; inB2 {
+        arc.replace(false)
+        arc.p = max(arc.p-1, 0)
+        delete(arc.b2, key)
+    }
+
+    // 检查容量
+    if arc.size >= arc.capacity {
+        arc.replace(false)
+    }
+
+    // 添加到t1
+    node := &ARCNode{
+        key:   key,
+        value: value,
+    }
+    arc.t1[key] = node
+    arc.size++
+}
+
+// 替换策略
+func (arc *ARCCache) replace(inB1 bool) {
+    if arc.size < arc.capacity {
+        return
+    }
+
+    // 确定从哪个列表替换
+    if len(arc.t1) > 0 && (len(arc.t1) > arc.p || (inB1 && len(arc.t1) == arc.p)) {
+        // 从t1替换
+        for key := range arc.t1 {
+            delete(arc.t1, key)
+            arc.b1[key] = struct{}{}
+            arc.size--
+            break
+        }
+    } else {
+        // 从t2替换
+        for key := range arc.t2 {
+            delete(arc.t2, key)
+            arc.b2[key] = struct{}{}
+            arc.size--
+            break
+        }
+    }
+}
+```
+
+### 分布式缓存系统
+
+#### 1. Redis 架构与实现
+
+Redis是一个功能丰富的数据结构服务器，支持多种数据类型。
+
+```go
+// Redis客户端封装
+type RedisClient struct {
+    pool     *redis.Pool
+    servers  []string
+    hashFunc HashFunction
+    mu       sync.RWMutex
+}
+
+type HashFunction func(key string) int
+
+// 创建Redis客户端
+func NewRedisClient(servers []string, poolSize int) *RedisClient {
+    return &RedisClient{
+        servers: servers,
+        pool: &redis.Pool{
+            MaxIdle:     poolSize,
+            IdleTimeout: 240 * time.Second,
+            Dial: func() (redis.Conn, error) {
+                return redis.Dial("tcp", servers[0])
+            },
+        },
+        hashFunc: func(key string) int {
+            h := fnv.New32a()
+            h.Write([]byte(key))
+            return int(h.Sum32())
+        },
+    }
+}
+
+// 一致性哈希实现
+type ConsistentHash struct {
+    virtualNodes int
+    ring        map[int]string
+    nodes       []string
+    mu          sync.RWMutex
+}
+
+func NewConsistentHash(virtualNodes int) *ConsistentHash {
+    return &ConsistentHash{
+        virtualNodes: virtualNodes,
+        ring:        make(map[int]string),
+        nodes:       make([]string, 0),
+    }
+}
+
+// 添加节点
+func (ch *ConsistentHash) AddNode(node string) {
+    ch.mu.Lock()
+    defer ch.mu.Unlock()
+
+    ch.nodes = append(ch.nodes, node)
+
+    // 添加虚拟节点
+    for i := 0; i < ch.virtualNodes; i++ {
+        virtualKey := ch.hash(fmt.Sprintf("%s-%d", node, i))
+        ch.ring[virtualKey] = node
+    }
+}
+
+// 获取节点
+func (ch *ConsistentHash) GetNode(key string) string {
+    ch.mu.RLock()
+    defer ch.mu.RUnlock()
+
+    if len(ch.ring) == 0 {
+        return ""
+    }
+
+    hash := ch.hash(key)
+
+    // 顺时针查找最近的节点
+    keys := make([]int, 0, len(ch.ring))
+    for k := range ch.ring {
+        keys = append(keys, k)
+    }
+    sort.Ints(keys)
+
+    for _, k := range keys {
+        if k >= hash {
+            return ch.ring[k]
+        }
+    }
+
+    return ch.ring[keys[0]]
+}
+
+// 哈希函数
+func (ch *ConsistentHash) hash(key string) int {
+    h := fnv.New32a()
+    h.Write([]byte(key))
+    return int(h.Sum32())
+}
+```
+
+#### 2. Redis 集群模式
+
+Redis集群支持数据分片和高可用性。
+
+```go
+// Redis集群客户端
+type RedisCluster struct {
+    nodes       []*RedisNode
+    slots       [16384]*RedisNode
+    consistent  *ConsistentHash
+    mu          sync.RWMutex
+}
+
+type RedisNode struct {
+    ID     string
+    Addr   string
+    Master bool
+    Client *redis.Client
+    Slots  []int
+}
+
+// 创建Redis集群
+func NewRedisCluster(nodes []string) *RedisCluster {
+    cluster := &RedisCluster{
+        consistent: NewConsistentHash(160),
+    }
+
+    // 初始化节点
+    for _, addr := range nodes {
+        node := &RedisNode{
+            Addr:   addr,
+            Master: true,
+            Client: redis.NewClient(&redis.Options{
+                Addr: addr,
+            }),
+        }
+        cluster.nodes = append(cluster.nodes, node)
+        cluster.consistent.AddNode(addr)
+    }
+
+    // 初始化槽位分配
+    cluster.initSlots()
+
+    return cluster
+}
+
+// 初始化槽位分配
+func (rc *RedisCluster) initSlots() {
+    slotsPerNode := 16384 / len(rc.nodes)
+
+    for i, node := range rc.nodes {
+        start := i * slotsPerNode
+        end := (i + 1) * slotsPerNode
+        if i == len(rc.nodes)-1 {
+            end = 16384
+        }
+
+        for slot := start; slot < end; slot++ {
+            rc.slots[slot] = node
+            node.Slots = append(node.Slots, slot)
+        }
+    }
+}
+
+// 根据键获取节点
+func (rc *RedisCluster) GetNodeByKey(key string) *RedisNode {
+    // 计算槽位
+    slot := crc16.Checksum([]byte(key)) % 16384
+    return rc.slots[slot]
+}
+
+// 集群GET操作
+func (rc *RedisCluster) Get(key string) (string, error) {
+    node := rc.GetNodeByKey(key)
+    return node.Client.Get(context.Background(), key).Result()
+}
+
+// 集群SET操作
+func (rc *RedisCluster) Set(key, value string) error {
+    node := rc.GetNodeByKey(key)
+    return node.Client.Set(context.Background(), key, value, 0).Err()
+}
+```
+
+#### 3. Memcached 架构
+
+Memcached是一个简单高效的内存缓存系统。
+
+```go
+// Memcached客户端
+type MemcachedClient struct {
+    servers    []string
+    pool       sync.Pool
+    consistent *ConsistentHash
+    mu         sync.RWMutex
+}
+
+type MemcachedConnection struct {
+    conn net.Conn
+    addr string
+}
+
+// 创建Memcached客户端
+func NewMemcachedClient(servers []string) *MemcachedClient {
+    client := &MemcachedClient{
+        servers:    servers,
+        consistent: NewConsistentHash(160),
+    }
+
+    for _, server := range servers {
+        client.consistent.AddNode(server)
+    }
+
+    client.pool.New = func() interface{} {
+        return client.createConnection()
+    }
+
+    return client
+}
+
+// 创建连接
+func (mc *MemcachedClient) createConnection() *MemcachedConnection {
+    server := mc.servers[0] // 简化实现
+    conn, err := net.Dial("tcp", server)
+    if err != nil {
+        return nil
+    }
+
+    return &MemcachedConnection{
+        conn: conn,
+        addr: server,
+    }
+}
+
+// 获取连接
+func (mc *MemcachedClient) getConnection() *MemcachedConnection {
+    return mc.pool.Get().(*MemcachedConnection)
+}
+
+// 释放连接
+func (mc *MemcachedClient) putConnection(conn *MemcachedConnection) {
+    mc.pool.Put(conn)
+}
+
+// Memcached GET命令
+func (mc *MemcachedClient) Get(key string) ([]byte, error) {
+    node := mc.consistent.GetNode(key)
+    conn := mc.getConnection()
+    defer mc.putConnection(conn)
+
+    // 发送GET命令
+    command := fmt.Sprintf("get %s\r\n", key)
+    _, err := conn.conn.Write([]byte(command))
+    if err != nil {
+        return nil, err
+    }
+
+    // 读取响应
+    reader := bufio.NewReader(conn.conn)
+    response, err := reader.ReadString('\n')
+    if err != nil {
+        return nil, err
+    }
+
+    // 解析响应
+    if strings.HasPrefix(response, "VALUE") {
+        // 读取值
+        parts := strings.Split(response, " ")
+        if len(parts) >= 4 {
+            length, _ := strconv.Atoi(parts[3])
+            value := make([]byte, length)
+            _, err := io.ReadFull(reader, value)
+            if err != nil {
+                return nil, err
+            }
+            // 读取结束标记
+            reader.ReadString('\n')
+            return value, nil
+        }
+    }
+
+    return nil, fmt.Errorf("key not found")
+}
+
+// Memcached SET命令
+func (mc *MemcachedClient) Set(key string, value []byte, ttl int) error {
+    node := mc.consistent.GetNode(key)
+    conn := mc.getConnection()
+    defer mc.putConnection(conn)
+
+    // 发送SET命令
+    command := fmt.Sprintf("set %s 0 %d %d\r\n", key, ttl, len(value))
+    _, err := conn.conn.Write([]byte(command))
+    if err != nil {
+        return err
+    }
+
+    // 发送值
+    _, err = conn.conn.Write(value)
+    if err != nil {
+        return err
+    }
+
+    // 发送结束标记
+    _, err = conn.conn.Write([]byte("\r\n"))
+    if err != nil {
+        return err
+    }
+
+    // 读取响应
+    reader := bufio.NewReader(conn.conn)
+    response, err := reader.ReadString('\n')
+    if err != nil {
+        return err
+    }
+
+    if strings.TrimSpace(response) == "STORED" {
+        return nil
+    }
+
+    return fmt.Errorf("set failed: %s", response)
+}
+```
+
+### 缓存一致性机制
+
+#### 1. Cache-Aside 模式
+
+```go
+// Cache-Aside模式实现
+type CacheAside struct {
+    cache  Cache
+    db     Database
+    logger *log.Logger
+}
+
+type Cache interface {
+    Get(key string) (interface{}, bool)
+    Set(key string, value interface{}, ttl time.Duration)
+    Delete(key string)
+}
+
+type Database interface {
+    Get(key string) (interface{}, error)
+    Set(key string, value interface{}) error
+}
+
+// 获取数据
+func (ca *CacheAside) Get(key string) (interface{}, error) {
+    // 1. 先查缓存
+    if value, found := ca.cache.Get(key); found {
+        ca.logger.Printf("Cache hit for key: %s", key)
+        return value, nil
+    }
+
+    // 2. 缓存未命中，查数据库
+    ca.logger.Printf("Cache miss for key: %s", key)
+    value, err := ca.db.Get(key)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 写入缓存
+    ca.cache.Set(key, value, 5*time.Minute)
+
+    return value, nil
+}
+
+// 设置数据
+func (ca *CacheAside) Set(key string, value interface{}) error {
+    // 1. 先写数据库
+    err := ca.db.Set(key, value)
+    if err != nil {
+        return err
+    }
+
+    // 2. 删除缓存
+    ca.cache.Delete(key)
+
+    return nil
+}
+
+// 批量获取数据
+func (ca *CacheAside) MGet(keys []string) (map[string]interface{}, error) {
+    results := make(map[string]interface{})
+    missedKeys := make([]string, 0)
+
+    // 1. 批量查缓存
+    for _, key := range keys {
+        if value, found := ca.cache.Get(key); found {
+            results[key] = value
+        } else {
+            missedKeys = append(missedKeys, key)
+        }
+    }
+
+    // 2. 批量查数据库
+    if len(missedKeys) > 0 {
+        dbResults, err := ca.db.MGet(missedKeys)
+        if err != nil {
+            return nil, err
+        }
+
+        // 3. 写入缓存
+        for key, value := range dbResults {
+            ca.cache.Set(key, value, 5*time.Minute)
+            results[key] = value
+        }
+    }
+
+    return results, nil
+}
+```
+
+#### 2. Write-Through 模式
+
+```go
+// Write-Through模式实现
+type WriteThrough struct {
+    cache  Cache
+    db     Database
+    logger *log.Logger
+}
+
+// 写入数据
+func (wt *WriteThrough) Set(key string, value interface{}) error {
+    // 1. 写入缓存
+    wt.cache.Set(key, value, 5*time.Minute)
+
+    // 2. 同步写入数据库
+    err := wt.db.Set(key, value)
+    if err != nil {
+        // 数据库写入失败，回滚缓存
+        wt.cache.Delete(key)
+        return err
+    }
+
+    return nil
+}
+
+// 读取数据
+func (wt *WriteThrough) Get(key string) (interface{}, error) {
+    // 1. 先查缓存
+    if value, found := wt.cache.Get(key); found {
+        return value, nil
+    }
+
+    // 2. 缓存未命中，查数据库
+    value, err := wt.db.Get(key)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 写入缓存
+    wt.cache.Set(key, value, 5*time.Minute)
+
+    return value, nil
+}
+```
+
+#### 3. Write-Behind 模式
+
+```go
+// Write-Behind模式实现
+type WriteBehind struct {
+    cache        Cache
+    db           Database
+    queue        chan *WriteRequest
+    batchSize    int
+    flushTimeout time.Duration
+    logger       *log.Logger
+    stopChan     chan struct{}
+}
+
+type WriteRequest struct {
+    Key   string
+    Value interface{}
+    Op    string // "SET" or "DELETE"
+}
+
+// 创建Write-Behind缓存
+func NewWriteBehind(cache Cache, db Database, batchSize int, flushTimeout time.Duration) *WriteBehind {
+    wb := &WriteBehind{
+        cache:        cache,
+        db:           db,
+        queue:        make(chan *WriteRequest, 1000),
+        batchSize:    batchSize,
+        flushTimeout: flushTimeout,
+        logger:       log.New(os.Stdout, "[WriteBehind] ", log.LstdFlags),
+        stopChan:     make(chan struct{}),
+    }
+
+    // 启动异步写入协程
+    go wb.writeLoop()
+
+    return wb
+}
+
+// 写入数据
+func (wb *WriteBehind) Set(key string, value interface{}) error {
+    // 1. 立即写入缓存
+    wb.cache.Set(key, value, 5*time.Minute)
+
+    // 2. 异步写入队列
+    req := &WriteRequest{
+        Key:   key,
+        Value: value,
+        Op:    "SET",
+    }
+
+    select {
+    case wb.queue <- req:
+        return nil
+    default:
+        // 队列满，同步写入
+        return wb.db.Set(key, value)
+    }
+}
+
+// 异步写入循环
+func (wb *WriteBehind) writeLoop() {
+    batch := make([]*WriteRequest, 0, wb.batchSize)
+    timer := time.NewTimer(wb.flushTimeout)
+
+    for {
+        select {
+        case req := <-wb.queue:
+            batch = append(batch, req)
+
+            if len(batch) >= wb.batchSize {
+                wb.flushBatch(batch)
+                batch = batch[:0]
+                timer.Reset(wb.flushTimeout)
+            }
+
+        case <-timer.C:
+            if len(batch) > 0 {
+                wb.flushBatch(batch)
+                batch = batch[:0]
+            }
+            timer.Reset(wb.flushTimeout)
+
+        case <-wb.stopChan:
+            // 停止前刷新剩余数据
+            if len(batch) > 0 {
+                wb.flushBatch(batch)
+            }
+            return
+        }
+    }
+}
+
+// 刷新批量数据
+func (wb *WriteBehind) flushBatch(batch []*WriteRequest) {
+    wb.logger.Printf("Flushing batch of %d writes", len(batch))
+
+    for _, req := range batch {
+        var err error
+
+        switch req.Op {
+        case "SET":
+            err = wb.db.Set(req.Key, req.Value)
+        case "DELETE":
+            err = wb.db.Delete(req.Key)
+        }
+
+        if err != nil {
+            wb.logger.Printf("Failed to write key %s: %v", req.Key, err)
+        }
+    }
+}
+
+// 停止服务
+func (wb *WriteBehind) Stop() {
+    close(wb.stopChan)
+}
+```
+
+### 缓存问题与解决方案
+
+#### 1. 缓存穿透
+
+```go
+// 缓存穿透防护
+type CachePenetrationProtection struct {
+    cache      Cache
+    db         Database
+    bloomFilter *BloomFilter
+    nullCache  *NullCache
+    logger     *log.Logger
+}
+
+// 布隆过滤器实现
+type BloomFilter struct {
+    bitSet []bool
+    size   int
+    hash   []HashFunction
+}
+
+func NewBloomFilter(size int, hashFunctions []HashFunction) *BloomFilter {
+    return &BloomFilter{
+        bitSet: make([]bool, size),
+        size:   size,
+        hash:   hashFunctions,
+    }
+}
+
+func (bf *BloomFilter) Add(key string) {
+    for _, hashFunc := range bf.hash {
+        index := hashFunc(key) % bf.size
+        bf.bitSet[index] = true
+    }
+}
+
+func (bf *BloomFilter) MightContain(key string) bool {
+    for _, hashFunc := range bf.hash {
+        index := hashFunc(key) % bf.size
+        if !bf.bitSet[index] {
+            return false
+        }
+    }
+    return true
+}
+
+// 空值缓存
+type NullCache struct {
+    cache map[string]time.Time
+    ttl   time.Duration
+    mu    sync.RWMutex
+}
+
+func NewNullCache(ttl time.Duration) *NullCache {
+    return &NullCache{
+        cache: make(map[string]time.Time),
+        ttl:   ttl,
+    }
+}
+
+func (nc *NullCache) SetNull(key string) {
+    nc.mu.Lock()
+    defer nc.mu.Unlock()
+
+    nc.cache[key] = time.Now()
+}
+
+func (nc *NullCache) IsNull(key string) bool {
+    nc.mu.RLock()
+    defer nc.mu.RUnlock()
+
+    if expireTime, exists := nc.cache[key]; exists {
+        if time.Since(expireTime) < nc.ttl {
+            return true
+        }
+        delete(nc.cache, key)
+    }
+
+    return false
+}
+
+// 带防护的获取
+func (cpp *CachePenetrationProtection) Get(key string) (interface{}, error) {
+    // 1. 检查布隆过滤器
+    if !cpp.bloomFilter.MightContain(key) {
+        return nil, fmt.Errorf("key does not exist")
+    }
+
+    // 2. 检查空值缓存
+    if cpp.nullCache.IsNull(key) {
+        return nil, fmt.Errorf("key does not exist")
+    }
+
+    // 3. 查缓存
+    if value, found := cpp.cache.Get(key); found {
+        return value, nil
+    }
+
+    // 4. 查数据库
+    value, err := cpp.db.Get(key)
+    if err != nil {
+        // 数据库中没有，记录到布隆过滤器和空值缓存
+        cpp.bloomFilter.Add(key)
+        cpp.nullCache.SetNull(key)
+        return nil, fmt.Errorf("key does not exist")
+    }
+
+    // 5. 写入缓存
+    cpp.cache.Set(key, value, 5*time.Minute)
+
+    return value, nil
+}
+```
+
+#### 2. 缓存雪崩
+
+```go
+// 缓存雪崩防护
+type CacheAvalancheProtection struct {
+    cache         Cache
+    db            Database
+    randomTTL     bool
+    baseTTL       time.Duration
+    jitterRange   time.Duration
+    refreshLocks  *LockManager
+    logger        *log.Logger
+}
+
+// 分布式锁管理器
+type LockManager struct {
+    locks map[string]*DistributedLock
+    mu    sync.RWMutex
+}
+
+type DistributedLock struct {
+    key        string
+    acquired   bool
+    expireTime time.Time
+}
+
+func NewLockManager() *LockManager {
+    return &LockManager{
+        locks: make(map[string]*DistributedLock),
+    }
+}
+
+func (lm *LockManager) AcquireLock(key string, ttl time.Duration) bool {
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+
+    if lock, exists := lm.locks[key]; exists {
+        if time.Now().Before(lock.expireTime) {
+            return false
+        }
+    }
+
+    lm.locks[key] = &DistributedLock{
+        key:        key,
+        acquired:   true,
+        expireTime: time.Now().Add(ttl),
+    }
+
+    return true
+}
+
+func (lm *LockManager) ReleaseLock(key string) {
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+
+    delete(lm.locks, key)
+}
+
+// 带防护的获取
+func (cap *CacheAvalancheProtection) Get(key string) (interface{}, error) {
+    // 1. 先查缓存
+    if value, found := cap.cache.Get(key); found {
+        // 异步刷新
+        go cap.asyncRefresh(key)
+        return value, nil
+    }
+
+    // 2. 获取分布式锁，防止缓存击穿
+    if !cap.refreshLocks.AcquireLock(key, 10*time.Second) {
+        // 获取锁失败，可能是其他节点正在刷新
+        // 返回过期数据或直接查数据库
+        return cap.db.Get(key)
+    }
+    defer cap.refreshLocks.ReleaseLock(key)
+
+    // 3. 双重检查，避免重复加载
+    if value, found := cap.cache.Get(key); found {
+        return value, nil
+    }
+
+    // 4. 查数据库
+    value, err := cap.db.Get(key)
+    if err != nil {
+        return nil, err
+    }
+
+    // 5. 计算随机TTL
+    ttl := cap.calculateTTL()
+
+    // 6. 写入缓存
+    cap.cache.Set(key, value, ttl)
+
+    return value, nil
+}
+
+// 计算随机TTL
+func (cap *CacheAvalancheProtection) calculateTTL() time.Duration {
+    if !cap.randomTTL {
+        return cap.baseTTL
+    }
+
+    jitter := time.Duration(rand.Int63n(int64(cap.jitterRange)))
+    return cap.baseTTL + jitter
+}
+
+// 异步刷新缓存
+func (cap *CacheAvalancheProtection) asyncRefresh(key string) {
+    if value, found := cap.cache.Get(key); found {
+        // 检查是否需要刷新
+        if cap.shouldRefresh(key) {
+            if cap.refreshLocks.AcquireLock(key, 5*time.Second) {
+                defer cap.refreshLocks.ReleaseLock(key)
+
+                // 异步查询数据库
+                newValue, err := cap.db.Get(key)
+                if err == nil {
+                    ttl := cap.calculateTTL()
+                    cap.cache.Set(key, newValue, ttl)
+                }
+            }
+        }
+    }
+}
+
+// 判断是否需要刷新
+func (cap *CacheAvalancheProtection) shouldRefresh(key string) bool {
+    // 这里可以根据业务逻辑判断是否需要刷新
+    // 例如：缓存即将过期、数据更新频率等
+    return true
+}
+```
+
+### 性能优化与监控
+
+#### 1. 缓存预热
+
+```go
+// 缓存预热器
+type CacheWarmer struct {
+    cache    Cache
+    db       Database
+    hotKeys  []string
+    strategy WarmupStrategy
+    logger   *log.Logger
+}
+
+type WarmupStrategy int
+
+const (
+    StrategyFull    WarmupStrategy = iota // 全量预热
+    StrategyPartial                       // 部分预热
+    StrategyDynamic                       // 动态预热
+)
+
+// 创建缓存预热器
+func NewCacheWarmer(cache Cache, db Database, strategy WarmupStrategy) *CacheWarmer {
+    return &CacheWarmer{
+        cache:    cache,
+        db:       db,
+        strategy: strategy,
+        logger:   log.New(os.Stdout, "[CacheWarmer] ", log.LstdFlags),
+    }
+}
+
+// 预热缓存
+func (cw *CacheWarmer) Warmup() error {
+    switch cw.strategy {
+    case StrategyFull:
+        return cw.fullWarmup()
+    case StrategyPartial:
+        return cw.partialWarmup()
+    case StrategyDynamic:
+        return cw.dynamicWarmup()
+    default:
+        return cw.fullWarmup()
+    }
+}
+
+// 全量预热
+func (cw *CacheWarmer) fullWarmup() error {
+    cw.logger.Println("Starting full cache warmup...")
+
+    // 从数据库获取所有热数据
+    keys, err := cw.getAllHotKeys()
+    if err != nil {
+        return err
+    }
+
+    // 批量加载数据
+    batch := make(map[string]interface{})
+    batchSize := 100
+
+    for i, key := range keys {
+        value, err := cw.db.Get(key)
+        if err != nil {
+            cw.logger.Printf("Failed to load key %s: %v", key, err)
+            continue
+        }
+
+        batch[key] = value
+
+        if len(batch) >= batchSize || i == len(keys)-1 {
+            // 批量写入缓存
+            for k, v := range batch {
+                cw.cache.Set(k, v, 30*time.Minute)
+            }
+
+            cw.logger.Printf("Loaded %d keys into cache", len(batch))
+            batch = make(map[string]interface{})
+        }
+    }
+
+    cw.logger.Println("Full cache warmup completed")
+    return nil
+}
+
+// 部分预热
+func (cw *CacheWarmer) partialWarmup() error {
+    cw.logger.Println("Starting partial cache warmup...")
+
+    // 只预热最热的数据
+    hotKeys, err := cw.getTopHotKeys(1000)
+    if err != nil {
+        return err
+    }
+
+    for _, key := range hotKeys {
+        value, err := cw.db.Get(key)
+        if err != nil {
+            continue
+        }
+
+        cw.cache.Set(key, value, 30*time.Minute)
+    }
+
+    cw.logger.Printf("Partial cache warmup completed, loaded %d keys", len(hotKeys))
+    return nil
+}
+
+// 动态预热
+func (cw *CacheWarmer) dynamicWarmup() error {
+    cw.logger.Println("Starting dynamic cache warmup...")
+
+    // 根据访问模式动态预热
+    accessPatterns := cw.analyzeAccessPatterns()
+
+    for key, priority := range accessPatterns {
+        if priority > 0.8 { // 高优先级数据
+            value, err := cw.db.Get(key)
+            if err == nil {
+                cw.cache.Set(key, value, 30*time.Minute)
+            }
+        }
+    }
+
+    cw.logger.Println("Dynamic cache warmup completed")
+    return nil
+}
+
+// 分析访问模式
+func (cw *CacheWarmer) analyzeAccessPatterns() map[string]float64 {
+    // 这里可以实现复杂的访问模式分析
+    // 例如：基于历史访问频率、时间模式等
+    patterns := make(map[string]float64)
+
+    // 简化的示例
+    patterns["hot_key_1"] = 0.9
+    patterns["hot_key_2"] = 0.8
+    patterns["hot_key_3"] = 0.7
+
+    return patterns
+}
+
+// 获取所有热键
+func (cw *CacheWarmer) getAllHotKeys() ([]string, error) {
+    // 实际实现需要从数据库或配置中获取
+    return []string{
+        "hot_key_1", "hot_key_2", "hot_key_3",
+        "user:1", "user:2", "user:3",
+        "product:1", "product:2", "product:3",
+    }, nil
+}
+
+// 获取Top热键
+func (cw *CacheWarmer) getTopHotKeys(limit int) ([]string, error) {
+    // 实际实现需要从数据库或配置中获取
+    allKeys, _ := cw.getAllHotKeys()
+    if len(allKeys) > limit {
+        return allKeys[:limit], nil
+    }
+    return allKeys, nil
+}
+```
+
+#### 2. 缓存监控
+
+```go
+// 缓存监控器
+type CacheMonitor struct {
+    cache            Cache
+    metrics          *CacheMetrics
+    alertManager     *AlertManager
+    healthChecker    *HealthChecker
+    logger           *log.Logger
+    stopChan         chan struct{}
+}
+
+// 缓存指标
+type CacheMetrics struct {
+    HitCount      int64
+    MissCount     int64
+    ErrorCount    int64
+    LatencySum    time.Duration
+    RequestCount  int64
+    MemoryUsage   int64
+    HitRate       float64
+    AvgLatency    time.Duration
+    mu            sync.RWMutex
+}
+
+// 告警管理器
+type AlertManager struct {
+    alerts      []*Alert
+    rules       []*AlertRule
+    notifiers   []Notifier
+    logger      *log.Logger
+}
+
+type Alert struct {
+    ID        string
+    Type      AlertType
+    Message   string
+    Severity  AlertSeverity
+    Timestamp time.Time
+}
+
+type AlertRule struct {
+    Name        string
+    Condition   func(*CacheMetrics) bool
+    Threshold   float64
+    Duration    time.Duration
+    LastTrigger time.Time
+}
+
+type AlertType int
+type AlertSeverity int
+
+const (
+    AlertTypeHitRateLow AlertType = iota
+    AlertTypeLatencyHigh
+    AlertTypeMemoryHigh
+    AlertTypeErrorRate
+)
+
+const (
+    SeverityLow AlertSeverity = iota
+    SeverityMedium
+    SeverityHigh
+    SeverityCritical
+)
+
+// 通知器接口
+type Notifier interface {
+    Send(alert *Alert) error
+}
+
+// 创建缓存监控器
+func NewCacheMonitor(cache Cache) *CacheMonitor {
+    monitor := &CacheMonitor{
+        cache:         cache,
+        metrics:       &CacheMetrics{},
+        alertManager:  NewAlertManager(),
+        healthChecker: NewHealthChecker(),
+        logger:        log.New(os.Stdout, "[CacheMonitor] ", log.LstdFlags),
+        stopChan:      make(chan struct{}),
+    }
+
+    // 启动监控
+    go monitor.startMonitoring()
+
+    return monitor
+}
+
+// 启动监控
+func (cm *CacheMonitor) startMonitoring() {
+    ticker := time.NewTicker(10 * time.Second)
+
+    for {
+        select {
+        case <-ticker.C:
+            cm.collectMetrics()
+            cm.checkHealth()
+            cm.checkAlerts()
+
+        case <-cm.stopChan:
+            return
+        }
+    }
+}
+
+// 收集指标
+func (cm *CacheMonitor) collectMetrics() {
+    // 收集缓存命中率
+    hitRate := cm.calculateHitRate()
+
+    // 收集延迟指标
+    avgLatency := cm.calculateAvgLatency()
+
+    // 收集内存使用
+    memoryUsage := cm.getMemoryUsage()
+
+    // 更新指标
+    cm.metrics.mu.Lock()
+    cm.metrics.HitRate = hitRate
+    cm.metrics.AvgLatency = avgLatency
+    cm.metrics.MemoryUsage = memoryUsage
+    cm.metrics.mu.Unlock()
+
+    cm.logger.Printf("Metrics: HitRate=%.2f%%, Latency=%v, Memory=%dMB",
+        hitRate*100, avgLatency, memoryUsage/1024/1024)
+}
+
+// 计算命中率
+func (cm *CacheMonitor) calculateHitRate() float64 {
+    cm.metrics.mu.RLock()
+    defer cm.metrics.mu.RUnlock()
+
+    total := cm.metrics.HitCount + cm.metrics.MissCount
+    if total == 0 {
+        return 0
+    }
+
+    return float64(cm.metrics.HitCount) / float64(total)
+}
+
+// 计算平均延迟
+func (cm *CacheMonitor) calculateAvgLatency() time.Duration {
+    cm.metrics.mu.RLock()
+    defer cm.metrics.mu.RUnlock()
+
+    if cm.metrics.RequestCount == 0 {
+        return 0
+    }
+
+    return cm.metrics.LatencySum / time.Duration(cm.metrics.RequestCount)
+}
+
+// 获取内存使用
+func (cm *CacheMonitor) getMemoryUsage() int64 {
+    // 实际实现需要获取缓存的实际内存使用量
+    return 1024 * 1024 * 100 // 示例值
+}
+
+// 检查健康状态
+func (cm *CacheMonitor) checkHealth() {
+    health := cm.healthChecker.Check(cm.cache)
+
+    if !health.Healthy {
+        cm.logger.Printf("Cache health check failed: %s", health.Message)
+    }
+}
+
+// 检查告警
+func (cm *CacheMonitor) checkAlerts() {
+    alerts := cm.alertManager.CheckRules(cm.metrics)
+
+    for _, alert := range alerts {
+        cm.logger.Printf("Alert triggered: %s - %s", alert.Type, alert.Message)
+
+        // 发送通知
+        for _, notifier := range cm.alertManager.notifiers {
+            go func(n Notifier, a *Alert) {
+                if err := n.Send(a); err != nil {
+                    cm.logger.Printf("Failed to send alert: %v", err)
+                }
+            }(notifier, alert)
+        }
+    }
+}
+
+// 记录请求
+func (cm *CacheMonitor) RecordRequest(hit bool, latency time.Duration) {
+    cm.metrics.mu.Lock()
+    defer cm.metrics.mu.Unlock()
+
+    if hit {
+        cm.metrics.HitCount++
+    } else {
+        cm.metrics.MissCount++
+    }
+
+    cm.metrics.RequestCount++
+    cm.metrics.LatencySum += latency
+}
+
+// 停止监控
+func (cm *CacheMonitor) Stop() {
+    close(cm.stopChan)
+}
+```
+
+### 完整的分布式缓存系统
+
+```go
+// 分布式缓存系统
+type DistributedCache struct {
+    nodes          []*CacheNode
+    consistent     *ConsistentHash
+    strategy       CacheStrategy
+    monitor        *CacheMonitor
+    warmer         *CacheWarmer
+    replication    int
+    config         *CacheConfig
+    logger         *log.Logger
+}
+
+// 缓存节点
+type CacheNode struct {
+    ID       string
+    Address  string
+    Cache    Cache
+    Health   bool
+    LastPing time.Time
+}
+
+// 缓存策略
+type CacheStrategy interface {
+    Get(key string) (interface{}, bool)
+    Set(key string, value interface{}, ttl time.Duration)
+    Delete(key string)
+    GetNodes() []*CacheNode
+}
+
+// 缓存配置
+type CacheConfig struct {
+    NodeCount      int
+    Replication    int
+    MemoryLimit    int64
+    TTL            time.Duration
+    EvictionPolicy string
+    WarmupStrategy WarmupStrategy
+}
+
+// 创建分布式缓存
+func NewDistributedCache(config *CacheConfig) *DistributedCache {
+    dc := &DistributedCache{
+        consistent:  NewConsistentHash(160),
+        replication: config.Replication,
+        config:      config,
+        logger:      log.New(os.Stdout, "[DistributedCache] ", log.LstdFlags),
+    }
+
+    // 初始化节点
+    for i := 0; i < config.NodeCount; i++ {
+        node := &CacheNode{
+            ID:      fmt.Sprintf("node-%d", i),
+            Address: fmt.Sprintf("cache-%d:6379", i),
+            Cache:   NewLRUCache(10000),
+            Health:  true,
+        }
+        dc.nodes = append(dc.nodes, node)
+        dc.consistent.AddNode(node.Address)
+    }
+
+    // 初始化策略
+    dc.strategy = NewReplicatedStrategy(dc.nodes, dc.replication)
+
+    // 初始化监控
+    dc.monitor = NewCacheMonitor(dc)
+
+    // 初始化预热器
+    dc.warmer = NewCacheWarmer(dc, nil, config.WarmupStrategy)
+
+    return dc
+}
+
+// 获取数据
+func (dc *DistributedCache) Get(key string) (interface{}, error) {
+    start := time.Now()
+
+    value, found := dc.strategy.Get(key)
+
+    // 记录监控指标
+    dc.monitor.RecordRequest(found, time.Since(start))
+
+    if !found {
+        return nil, fmt.Errorf("key not found")
+    }
+
+    return value, nil
+}
+
+// 设置数据
+func (dc *DistributedCache) Set(key string, value interface{}, ttl time.Duration) error {
+    dc.strategy.Set(key, value, ttl)
+    return nil
+}
+
+// 删除数据
+func (dc *DistributedCache) Delete(key string) error {
+    dc.strategy.Delete(key)
+    return nil
+}
+
+// 批量获取
+func (dc *DistributedCache) MGet(keys []string) (map[string]interface{}, error) {
+    results := make(map[string]interface{})
+    errors := make(map[string]error)
+
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+
+    for _, key := range keys {
+        wg.Add(1)
+        go func(k string) {
+            defer wg.Done()
+
+            value, err := dc.Get(k)
+            if err != nil {
+                mu.Lock()
+                errors[k] = err
+                mu.Unlock()
+                return
+            }
+
+            mu.Lock()
+            results[k] = value
+            mu.Unlock()
+        }(key)
+    }
+
+    wg.Wait()
+
+    if len(errors) > 0 {
+        return results, fmt.Errorf("some keys failed: %v", errors)
+    }
+
+    return results, nil
+}
+
+// 预热缓存
+func (dc *DistributedCache) Warmup() error {
+    return dc.warmer.Warmup()
+}
+
+// 健康检查
+func (dc *DistributedCache) HealthCheck() {
+    for _, node := range dc.nodes {
+        if err := dc.pingNode(node); err != nil {
+            dc.logger.Printf("Node %s is unhealthy: %v", node.ID, err)
+            node.Health = false
+        } else {
+            node.Health = true
+        }
+        node.LastPing = time.Now()
+    }
+}
+
+// 节点心跳
+func (dc *DistributedCache) pingNode(node *CacheNode) error {
+    // 实现节点健康检查
+    return nil
+}
+
+// 复制策略实现
+type ReplicatedStrategy struct {
+    nodes       []*CacheNode
+    replication int
+    consistent  *ConsistentHash
+}
+
+func NewReplicatedStrategy(nodes []*CacheNode, replication int) *ReplicatedStrategy {
+    rs := &ReplicatedStrategy{
+        nodes:       nodes,
+        replication: replication,
+        consistent:  NewConsistentHash(160),
+    }
+
+    for _, node := range nodes {
+        rs.consistent.AddNode(node.Address)
+    }
+
+    return rs
+}
+
+func (rs *ReplicatedStrategy) Get(key string) (interface{}, bool) {
+    // 获取主节点
+    primaryNode := rs.getPrimaryNode(key)
+    if primaryNode != nil {
+        if value, found := primaryNode.Cache.Get(key); found {
+            return value, true
+        }
+    }
+
+    // 主节点未命中，尝试从节点
+    replicaNodes := rs.getReplicaNodes(key)
+    for _, node := range replicaNodes {
+        if value, found := node.Cache.Get(key); found {
+            return value, true
+        }
+    }
+
+    return nil, false
+}
+
+func (rs *ReplicatedStrategy) Set(key string, value interface{}, ttl time.Duration) {
+    // 写入主节点
+    primaryNode := rs.getPrimaryNode(key)
+    if primaryNode != nil {
+        primaryNode.Cache.Set(key, value, ttl)
+    }
+
+    // 复制到从节点
+    replicaNodes := rs.getReplicaNodes(key)
+    for _, node := range replicaNodes {
+        node.Cache.Set(key, value, ttl)
+    }
+}
+
+func (rs *ReplicatedStrategy) Delete(key string) {
+    // 从主节点删除
+    primaryNode := rs.getPrimaryNode(key)
+    if primaryNode != nil {
+        primaryNode.Cache.Delete(key)
+    }
+
+    // 从从节点删除
+    replicaNodes := rs.getReplicaNodes(key)
+    for _, node := range replicaNodes {
+        node.Cache.Delete(key)
+    }
+}
+
+func (rs *ReplicatedStrategy) GetNodes() []*CacheNode {
+    return rs.nodes
+}
+
+func (rs *ReplicatedStrategy) getPrimaryNode(key string) *CacheNode {
+    address := rs.consistent.GetNode(key)
+    for _, node := range rs.nodes {
+        if node.Address == address {
+            return node
+        }
+    }
+    return nil
+}
+
+func (rs *ReplicatedStrategy) getReplicaNodes(key string) []*CacheNode {
+    primary := rs.getPrimaryNode(key)
+    if primary == nil {
+        return nil
+    }
+
+    var replicas []*CacheNode
+    count := 0
+
+    for _, node := range rs.nodes {
+        if node != primary && count < rs.replication {
+            replicas = append(replicas, node)
+            count++
+        }
+    }
+
+    return replicas
+}
+```
+
+## 实践项目：构建高性能分布式缓存系统
+
+### 项目概述
+
+构建一个完整的分布式缓存系统，包含缓存算法、分布式架构、一致性保证和监控功能。
+
+### 系统架构
+
+```
+客户端
+    ↓
+负载均衡器
+    ↓
+缓存集群 (主从复制)
+    ↓
+持久化存储
+    ↓
+监控系统
+```
+
+### 核心功能实现
+
+```go
+package main
+
+import (
+    "context"
+    "flag"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+)
+
+func main() {
+    // 解析命令行参数
+    var (
+        port        = flag.Int("port", 8080, "HTTP server port")
+        cacheNodes  = flag.String("nodes", "localhost:6379", "Comma-separated cache nodes")
+        configPath  = flag.String("config", "config.yaml", "Configuration file path")
+        environment = flag.String("env", "development", "Environment (development/production)")
+    )
+    flag.Parse()
+
+    // 加载配置
+    config, err := LoadConfig(*configPath)
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    // 创建分布式缓存
+    cache := NewDistributedCache(&CacheConfig{
+        NodeCount:      config.Cache.NodeCount,
+        Replication:    config.Cache.Replication,
+        MemoryLimit:    config.Cache.MemoryLimit,
+        TTL:            config.Cache.TTL,
+        EvictionPolicy: config.Cache.EvictionPolicy,
+        WarmupStrategy: StrategyFull,
+    })
+
+    // 创建HTTP服务器
+    server := &CacheServer{
+        cache:    cache,
+        port:    *port,
+        logger:   log.New(os.Stdout, "[CacheServer] ", log.LstdFlags),
+    }
+
+    // 启动预热
+    if config.Cache.WarmupOnStart {
+        go func() {
+            if err := cache.Warmup(); err != nil {
+                log.Printf("Cache warmup failed: %v", err)
+            }
+        }()
+    }
+
+    // 启动HTTP服务器
+    go func() {
+        log.Printf("Starting cache server on port %d", *port)
+        if err := server.Start(); err != nil {
+            log.Fatalf("Server failed: %v", err)
+        }
+    }()
+
+    // 等待信号
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+
+    // 优雅关闭
+    log.Println("Shutting down cache server...")
+    server.Stop()
+    cache.monitor.Stop()
+}
+
+// 缓存服务器
+type CacheServer struct {
+    cache  *DistributedCache
+    port   int
+    server *http.Server
+    logger *log.Logger
+}
+
+// 启动服务器
+func (cs *CacheServer) Start() error {
+    mux := http.NewServeMux()
+
+    // 注册路由
+    mux.HandleFunc("/get", cs.handleGet)
+    mux.HandleFunc("/set", cs.handleSet)
+    mux.HandleFunc("/delete", cs.handleDelete)
+    mux.HandleFunc("/mget", cs.handleMGet)
+    mux.HandleFunc("/health", cs.handleHealth)
+    mux.HandleFunc("/metrics", cs.handleMetrics)
+
+    // 中间件
+    handler := cs.withMiddleware(mux)
+
+    cs.server = &http.Server{
+        Addr:    fmt.Sprintf(":%d", cs.port),
+        Handler: handler,
+    }
+
+    return cs.server.ListenAndServe()
+}
+
+// 停止服务器
+func (cs *CacheServer) Stop() {
+    if cs.server != nil {
+        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+
+        if err := cs.server.Shutdown(ctx); err != nil {
+            cs.logger.Printf("Server shutdown error: %v", err)
+        }
+    }
+}
+
+// 中间件
+func (cs *CacheServer) withMiddleware(handler http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+
+        // 记录请求
+        cs.logger.Printf("%s %s", r.Method, r.URL.Path)
+
+        // 调用处理器
+        handler.ServeHTTP(w, r)
+
+        // 记录响应时间
+        duration := time.Since(start)
+        cs.logger.Printf("Request completed in %v", duration)
+    })
+}
+
+// 处理GET请求
+func (cs *CacheServer) handleGet(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    key := r.URL.Query().Get("key")
+    if key == "" {
+        http.Error(w, "Key is required", http.StatusBadRequest)
+        return
+    }
+
+    value, err := cs.cache.Get(key)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "key":   key,
+        "value": value,
+    })
+}
+
+// 处理SET请求
+func (cs *CacheServer) handleSet(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    var req struct {
+        Key   string      `json:"key"`
+        Value interface{} `json:"value"`
+        TTL   int         `json:"ttl"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+
+    ttl := time.Duration(req.TTL) * time.Second
+    if ttl == 0 {
+        ttl = 5 * time.Minute
+    }
+
+    if err := cs.cache.Set(req.Key, req.Value, ttl); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{
+        "status": "success",
+    })
+}
+
+// 处理DELETE请求
+func (cs *CacheServer) handleDelete(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodDelete {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    key := r.URL.Query().Get("key")
+    if key == "" {
+        http.Error(w, "Key is required", http.StatusBadRequest)
+        return
+    }
+
+    if err := cs.cache.Delete(key); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(map[string]string{
+        "status": "success",
+    })
+}
+
+// 处理批量GET请求
+func (cs *CacheServer) handleMGet(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    keys := r.URL.Query()["key"]
+    if len(keys) == 0 {
+        http.Error(w, "Keys are required", http.StatusBadRequest)
+        return
+    }
+
+    results, err := cs.cache.MGet(keys)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(results)
+}
+
+// 处理健康检查
+func (cs *CacheServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+    cs.cache.HealthCheck()
+
+    healthy := true
+    for _, node := range cs.cache.nodes {
+        if !node.Health {
+            healthy = false
+            break
+        }
+    }
+
+    status := map[string]interface{}{
+        "healthy": healthy,
+        "nodes":   cs.cache.nodes,
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(status)
+}
+
+// 处理指标
+func (cs *CacheServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+    metrics := cs.cache.monitor.metrics
+
+    metrics.mu.RLock()
+    defer metrics.mu.RUnlock()
+
+    status := map[string]interface{}{
+        "hit_rate":    metrics.HitRate,
+        "hit_count":   metrics.HitCount,
+        "miss_count":  metrics.MissCount,
+        "error_count": metrics.ErrorCount,
+        "avg_latency": metrics.AvgLatency.String(),
+        "memory_usage": metrics.MemoryUsage,
+    }
+
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(status)
+}
+
+// 配置结构
+type Config struct {
+    Cache struct {
+        NodeCount      int           `yaml:"node_count"`
+        Replication    int           `yaml:"replication"`
+        MemoryLimit    int64         `yaml:"memory_limit"`
+        TTL            time.Duration `yaml:"ttl"`
+        EvictionPolicy string        `yaml:"eviction_policy"`
+        WarmupOnStart  bool          `yaml:"warmup_on_start"`
+    } `yaml:"cache"`
+
+    Server struct {
+        Port         int           `yaml:"port"`
+        ReadTimeout  time.Duration `yaml:"read_timeout"`
+        WriteTimeout time.Duration `yaml:"write_timeout"`
+    } `yaml:"server"`
+
+    Monitoring struct {
+        Enabled      bool          `yaml:"enabled"`
+        Interval     time.Duration `yaml:"interval"`
+        AlertEnabled bool          `yaml:"alert_enabled"`
+    } `yaml:"monitoring"`
+}
+
+// 加载配置
+func LoadConfig(path string) (*Config, error) {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+
+    var config Config
+    if err := yaml.Unmarshal(data, &config); err != nil {
+        return nil, err
+    }
+
+    return &config, nil
+}
+```
+
+### 测试用例
+
+```go
+package cache
+
+import (
+    "testing"
+    "time"
+)
+
+func TestLRUCache(t *testing.T) {
+    cache := NewLRUCache(3)
+
+    // 测试基本操作
+    cache.Put(1, "one")
+    cache.Put(2, "two")
+    cache.Put(3, "three")
+
+    if cache.Get(1) != "one" {
+        t.Error("Expected value 'one' for key 1")
+    }
+
+    // 测试LRU淘汰
+    cache.Put(4, "four")
+
+    if cache.Get(2) != nil {
+        t.Error("Key 2 should have been evicted")
+    }
+}
+
+func TestDistributedCache(t *testing.T) {
+    config := &CacheConfig{
+        NodeCount:      3,
+        Replication:    2,
+        MemoryLimit:    1024 * 1024,
+        TTL:            5 * time.Minute,
+        EvictionPolicy: "lru",
+        WarmupStrategy: StrategyFull,
+    }
+
+    cache := NewDistributedCache(config)
+
+    // 测试基本操作
+    err := cache.Set("key1", "value1", 5*time.Minute)
+    if err != nil {
+        t.Errorf("Failed to set key1: %v", err)
+    }
+
+    value, err := cache.Get("key1")
+    if err != nil {
+        t.Errorf("Failed to get key1: %v", err)
+    }
+    if value != "value1" {
+        t.Errorf("Expected 'value1', got %v", value)
+    }
+
+    // 测试批量操作
+    keys := []string{"key1", "key2", "key3"}
+    results, err := cache.MGet(keys)
+    if err != nil {
+        t.Errorf("Failed to MGet: %v", err)
+    }
+
+    if len(results) != 1 {
+        t.Errorf("Expected 1 result, got %d", len(results))
+    }
+}
+
+func TestCacheAvalancheProtection(t *testing.T) {
+    cache := NewLRUCache(1000)
+    db := &MockDatabase{}
+
+    protection := NewCacheAvalancheProtection(cache, db, true, 5*time.Minute, 30*time.Second)
+
+    // 测试并发访问
+    var wg sync.WaitGroup
+    for i := 0; i < 100; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+
+            key := fmt.Sprintf("key%d", id)
+            _, err := protection.Get(key)
+            if err != nil {
+                t.Errorf("Failed to get key %s: %v", key, err)
+            }
+        }(i)
+    }
+
+    wg.Wait()
+}
+
+func TestCachePenetrationProtection(t *testing.T) {
+    cache := NewLRUCache(1000)
+    db := &MockDatabase{}
+
+    hashFunctions := []HashFunction{
+        func(key string) int {
+            h := fnv.New32a()
+            h.Write([]byte(key))
+            return int(h.Sum32())
+        },
+    }
+
+    bloomFilter := NewBloomFilter(1000, hashFunctions)
+    nullCache := NewNullCache(5 * time.Minute)
+
+    protection := &CachePenetrationProtection{
+        cache:       cache,
+        db:          db,
+        bloomFilter: bloomFilter,
+        nullCache:   nullCache,
+    }
+
+    // 测试不存在的键
+    _, err := protection.Get("nonexistent_key")
+    if err == nil {
+        t.Error("Expected error for nonexistent key")
+    }
+
+    // 再次查询，应该从布隆过滤器返回
+    _, err = protection.Get("nonexistent_key")
+    if err == nil {
+        t.Error("Expected error for nonexistent key (bloom filter)")
+    }
+}
+
+// MockDatabase for testing
+type MockDatabase struct {
+    data map[string]interface{}
+    mu   sync.RWMutex
+}
+
+func (m *MockDatabase) Get(key string) (interface{}, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    if value, exists := m.data[key]; exists {
+        return value, nil
+    }
+    return nil, fmt.Errorf("key not found")
+}
+
+func (m *MockDatabase) Set(key string, value interface{}) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    if m.data == nil {
+        m.data = make(map[string]interface{})
+    }
+
+    m.data[key] = value
+    return nil
+}
+
+func (m *MockDatabase) Delete(key string) error {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    delete(m.data, key)
+    return nil
+}
+
+func (m *MockDatabase) MGet(keys []string) (map[string]interface{}, error) {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+
+    results := make(map[string]interface{})
+    for _, key := range keys {
+        if value, exists := m.data[key]; exists {
+            results[key] = value
+        }
+    }
+
+    return results, nil
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **缓存算法比较**：比较LRU、LFU和ARC算法的优缺点和适用场景。
+
+2. **一致性模式**：分析Cache-Aside、Write-Through和Write-Behind模式的区别。
+
+3. **缓存问题**：解释缓存穿透、缓存雪崩和缓存击穿的原因和解决方案。
+
+4. **分布式缓存**：讨论一致性哈希在分布式缓存中的作用和优势。
+
+### 编程题
+
+1. **实现ARC算法**：完成完整的ARC缓存实现，包括自适应调整机制。
+
+2. **构建监控告警系统**：实现一个完整的缓存监控和告警系统。
+
+3. **优化缓存性能**：针对特定的业务场景，优化缓存策略和配置。
+
+4. **实现多级缓存**：构建本地缓存 + 分布式缓存的多级缓存系统。
+
+### 设计题
+
+1. **大规模缓存架构**：设计一个支持千万级QPS的缓存架构。
+
+2. **跨机房缓存**：设计支持跨机房部署的分布式缓存系统。
+
+3. **缓存与数据库一致性**：设计保证缓存与数据库强一致性的方案。
+
+4. **缓存迁移方案**：设计缓存集群平滑迁移和扩容方案。
+
+## 常见问题
+
+### Q: 如何选择合适的缓存算法？
+
+A: 选择缓存算法需要考虑访问模式：
+- **LRU**：适合时间局部性强的场景，如Web页面缓存
+- **LFU**：适合热点数据明显的场景，如商品详情页
+- **ARC**：适合访问模式动态变化的场景，自适应调整
+
+### Q: 缓存和数据库的一致性如何保证？
+
+A: 根据业务需求选择合适的一致性级别：
+- **最终一致性**：使用Cache-Aside + 异步更新
+- **强一致性**：使用Write-Through + 分布式事务
+- **读写分离**：主库写入，从库读取，缓存同步更新
+
+### Q: 如何处理缓存雪崩问题？
+
+A: 多层次防护：
+1. **随机TTL**：避免大量缓存同时过期
+2. **异步刷新**：缓存过期前主动刷新
+3. **多级缓存**：本地缓存 + 分布式缓存
+4. **降级策略**：缓存故障时降级到数据库
+
+### Q: 分布式缓存的扩容策略？
+
+A: 扩容策略：
+1. **一致性哈希**：支持平滑扩容，数据迁移少
+2. **数据分片**：按key哈希分片，扩容时重新分配
+3. **渐进迁移**：逐步迁移数据，避免服务中断
+4. **读写分离**：新节点作为从库，逐步切换为从库
+
+## 扩展资源
+
+### 必读论文
+
+1. **[Web Caching and Zipf-like Distributions](https://www.cs.purdue.edu/homes/ninghui/papers/2003_sigcomm.pdf)** - Web缓存访问模式分析
+2. **[Distributed Caching in LinkedIn](https://www.linkedin.com/pulse/distributed-caching-linkedin-venkatesh-prasad-ramanathan)** - LinkedIn的分布式缓存实践
+3. **[Facebook's Distributed Datastore](https://www.facebook.com/notes/facebook-engineering/tao-the-power-of-the-graph/10151525983993920)** - Facebook的分布式数据存储
+
+### 实践项目
+
+1. **[Redis](https://github.com/redis/redis)** - 高性能内存数据库
+2. **[Memcached](https://github.com/memcached/memcached)** - 分布式内存缓存系统
+3. **[Groupcache](https://github.com/golang/groupcache)** - Go语言的分布式缓存库
+4. **[Caffeine](https://github.com/ben-manes/caffeine)** - Java高性能缓存库
+
+### 在线课程
+
+1. **[High Performance Web Sites](https://www.udacity.com/course/high-performance-web-sites--ud889)** - 高性能网站优化
+2. **[Database Systems](https://www.coursera.org/learn/database-systems)** - 数据库系统课程
+3. **[Distributed Systems](https://www.edx.org/course/distributed-systems)** - 分布式系统课程
+
+## 下一步学习
+
+在完成本课程后，你应该继续：
+
+1. **深入研究**：特定缓存系统的源码实现
+2. **性能调优**：针对实际业务场景的性能优化
+3. **监控运维**：缓存系统的监控、告警和运维
+4. **架构设计**：大规模分布式缓存系统的架构设计
+
+---
+
+*分布式缓存系统是构建高性能应用的关键基础设施。通过理解缓存算法、分布式架构和一致性机制，你可以设计出既高性能又可靠的缓存系统，为应用提供强大的性能支撑。*

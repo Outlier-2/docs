@@ -1,0 +1,363 @@
+---
+title: "Week 2：可靠性传输与TCP"
+description: "CS144 Week 2 - 可靠性原理、TCP协议、服务抽象"
+---
+
+# Week 2：可靠性传输与TCP
+
+## 课程概述
+
+Week 2 focuses on reliability in computer networks and the Transmission Control Protocol (TCP).
+
+## 可靠性传输原理
+
+### 为什么需要可靠性？
+
+在不可靠的网络上实现可靠数据传输面临的挑战：
+- **数据包丢失** (Packet Loss)
+- **数据包乱序** (Out-of-order Delivery)
+- **数据包重复** (Packet Duplication)
+- **数据包损坏** (Packet Corruption)
+
+### 可靠性机制
+
+#### 1. 确认机制 (Acknowledgment)
+```cpp
+// 发送方等待接收方的确认
+Sender: Send packet 1 → Receiver
+Receiver: ACK packet 1 → Sender
+```
+
+#### 2. 超时重传 (Timeout and Retransmission)
+```cpp
+Sender: Send packet 1
+Timer: Start timeout counter
+If timeout expires and no ACK:
+    Sender: Retransmit packet 1
+```
+
+#### 3. 序列号 (Sequence Numbers)
+```
+Packet 1: Seq=100, Data="Hello"
+Packet 2: Seq=105, Data="World"
+```
+
+#### 4. 校验和 (Checksum)
+```cpp
+uint16_t calculate_checksum(const void* data, size_t length) {
+    uint32_t sum = 0;
+    const uint16_t* ptr = (const uint16_t*)data;
+
+    while (length > 1) {
+        sum += *ptr++;
+        length -= 2;
+    }
+
+    if (length > 0) {
+        sum += *(uint8_t*)ptr;
+    }
+
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return ~sum;
+}
+```
+
+## TCP协议详解
+
+### TCP头部结构
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Source Port          |       Destination Port        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Sequence Number                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Acknowledgment Number                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Data |           |U|A|P|R|S|F|                               |
+| Offset| Reserved  |R|C|S|S|Y|I|            Window             |
+|       |           |G|K|H|T|N|N|                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|           Checksum            |         Urgent Pointer        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Options                    |    Padding    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             data                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+### TCP标志位
+
+- **SYN**: 同步序列号，建立连接
+- **ACK**: 确认号有效
+- **FIN**: 结束连接
+- **RST**: 重置连接
+- **PSH**: 推送数据
+- **URG**: 紧急指针有效
+
+### TCP状态机
+
+```
+CLOSED → SYN_SENT → ESTABLISHED
+   ↑        ↓           ↓
+   └─ LISTEN ← SYN_RECEIVED
+```
+
+### TCP连接建立（三次握手）
+
+```cpp
+Step 1: Client → Server
+    SYN=1, Seq=x
+
+Step 2: Server → Client
+    SYN=1, ACK=1, Seq=y, Ack=x+1
+
+Step 3: Client → Server
+    ACK=1, Seq=x+1, Ack=y+1
+```
+
+### TCP连接断开（四次挥手）
+
+```cpp
+Step 1: Client → Server
+    FIN=1, Seq=x
+
+Step 2: Server → Client
+    ACK=1, Ack=x+1
+
+Step 3: Server → Client
+    FIN=1, Seq=y, Ack=x+1
+
+Step 4: Client → Server
+    ACK=1, Ack=y+1
+```
+
+## 实现可靠传输
+
+### 滑动窗口协议
+
+```cpp
+class SlidingWindow {
+private:
+    uint32_t base;       // 窗口起始位置
+    uint32_t next_seq;   // 下一个序列号
+    uint32_t window_size;// 窗口大小
+    std::queue<Packet> buffer; // 缓冲区
+
+public:
+    void send_data(const std::string& data) {
+        if (next_seq < base + window_size) {
+            Packet pkt(next_seq, data);
+            buffer.push(pkt);
+            transmit_packet(pkt);
+            next_seq += data.size();
+        }
+    }
+
+    void receive_ack(uint32_t ack_num) {
+        while (base < ack_num && !buffer.empty()) {
+            buffer.pop();
+            base = ack_num;
+        }
+    }
+};
+```
+
+### 超时计算
+
+```cpp
+class TimeoutManager {
+private:
+    double estimated_rtt;    // 估计RTT
+    double dev_rtt;         // RTT偏差
+    double timeout_interval;// 超时间隔
+
+public:
+    void update_rtt(double measured_rtt) {
+        // Jacobson/Karels算法
+        estimated_rtt = 0.875 * estimated_rtt + 0.125 * measured_rtt;
+        dev_rtt = 0.75 * dev_rtt + 0.25 * abs(measured_rtt - estimated_rtt);
+        timeout_interval = estimated_rtt + 4 * dev_rtt;
+    }
+};
+```
+
+## 实验项目：Checkpoint 1
+
+### 目标
+- 实现基本的可靠数据传输
+- 理解TCP的工作原理
+- 实现简单的重传机制
+
+### 实现步骤
+
+#### 1. 定义数据包结构
+```cpp
+struct Packet {
+    uint32_t seq_num;
+    uint32_t ack_num;
+    uint16_t checksum;
+    bool syn;
+    bool ack;
+    bool fin;
+    std::string data;
+
+    std::vector<uint8_t> serialize() const {
+        // 序列化数据包
+    }
+
+    static Packet deserialize(const std::vector<uint8_t>& data) {
+        // 反序列化数据包
+    }
+};
+```
+
+#### 2. 实现发送方
+```cpp
+class TCPSender {
+private:
+    uint32_t next_seq;
+    uint32_t base;
+    std::queue<Packet> outstanding_packets;
+    TimeoutManager timeout_mgr;
+
+public:
+    void send(const std::string& data) {
+        if (window_not_full()) {
+            Packet pkt(next_seq, data);
+            outstanding_packets.push(pkt);
+            transmit_packet(pkt);
+            next_seq += data.size();
+
+            if (base == next_seq - data.size()) {
+                start_timer();
+            }
+        }
+    }
+
+    void receive_ack(uint32_t ack_num) {
+        if (ack_num > base) {
+            base = ack_num;
+            remove_acked_packets();
+
+            if (base == next_seq) {
+                stop_timer();
+            } else {
+                restart_timer();
+            }
+        }
+    }
+};
+```
+
+#### 3. 实现接收方
+```cpp
+class TCPReceiver {
+private:
+    uint32_t expected_seq;
+    std::map<uint32_t, Packet> reorder_buffer;
+
+public:
+    void receive_packet(const Packet& pkt) {
+        if (pkt.seq_num == expected_seq) {
+            deliver_data(pkt.data);
+            expected_seq += pkt.data.size();
+
+            // 检查缓冲区
+            while (reorder_buffer.count(expected_seq)) {
+                deliver_data(reorder_buffer[expected_seq].data);
+                expected_seq += reorder_buffer[expected_seq].data.size();
+                reorder_buffer.erase(expected_seq);
+            }
+        } else if (pkt.seq_num > expected_seq) {
+            reorder_buffer[pkt.seq_num] = pkt;
+        }
+
+        send_ack(expected_seq);
+    }
+};
+```
+
+## 性能优化
+
+### 选择性重传 (Selective Repeat)
+```cpp
+class SelectiveRepeat {
+private:
+    std::map<uint32_t, bool> ack_received;
+    std::map<uint32_t, Packet> sent_packets;
+
+public:
+    void receive_ack(uint32_t ack_num) {
+        ack_received[ack_num] = true;
+        sent_packets.erase(ack_num);
+    }
+
+    void timeout_handler() {
+        for (auto& [seq, pkt] : sent_packets) {
+            if (!ack_received[seq]) {
+                retransmit_packet(pkt);
+            }
+        }
+    }
+};
+```
+
+### 快速重传 (Fast Retransmit)
+```cpp
+class FastRetransmit {
+private:
+    std::map<uint32_t, int> dup_ack_count;
+
+public:
+    void receive_ack(uint32_t ack_num) {
+        if (ack_num == last_ack) {
+            dup_ack_count[ack_num]++;
+            if (dup_ack_count[ack_num] >= 3) {
+                retransmit_packet(ack_num);
+            }
+        } else {
+            dup_ack_count.clear();
+            last_ack = ack_num;
+        }
+    }
+};
+```
+
+## 调试技巧
+
+### 使用Wireshark分析TCP
+1. 过滤TCP流量：`tcp`
+2. 分析TCP序列号和确认号
+3. 观察重传和超时
+4. 分析窗口大小变化
+
+### 常见问题排查
+1. **连接建立失败**：检查防火墙和端口
+2. **数据包丢失**：检查网络质量
+3. **重传过多**：调整超时参数
+4. **性能低下**：优化窗口大小
+
+## 课后练习
+
+### 理论问题
+1. 解释TCP三次握手的过程
+2. 比较GBN和选择性重传的优缺点
+3. 什么是拥塞窗口？它如何工作？
+
+### 实践练习
+1. 实现基本的TCP可靠传输
+2. 使用Wireshark分析TCP连接
+3. 实现快速重传机制
+
+## 下周预告
+
+Week 3将完成TCP的实现，包括流量控制和状态管理。
+
+---
+*继续学习：[Week 3：TCP进阶](./week3)*

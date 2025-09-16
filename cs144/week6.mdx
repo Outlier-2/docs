@@ -1,0 +1,740 @@
+---
+title: "Week 6：拥塞控制与家庭网络"
+description: "CS144 Week 6 - 高级拥塞控制、家庭网络技术、NAT、DHCP、DNS"
+---
+
+# Week 6：拥塞控制与家庭网络
+
+## 课程概述
+
+Week 6继续深入拥塞控制的实现，并介绍家庭网络技术，包括NAT、DHCP和DNS。
+
+## 高级拥塞控制主题
+
+### 拥塞控制的公平性
+
+公平性是指多个流共享网络资源时，每个流都能获得合理的带宽分配。
+
+#### 公平性指数 (Jain's Fairness Index)
+
+```cpp
+class FairnessCalculator {
+public:
+    static double calculate_fairness(const std::vector<double>& throughputs) {
+        if (throughputs.empty()) return 0.0;
+
+        double sum = 0.0;
+        double sum_squares = 0.0;
+
+        for (double throughput : throughputs) {
+            sum += throughput;
+            sum_squares += throughput * throughput;
+        }
+
+        if (sum_squares == 0.0) return 0.0;
+
+        return (sum * sum) / (throughputs.size() * sum_squares);
+    }
+};
+
+// 使用示例
+std::vector<double> flows = {10.0, 10.0, 10.0, 10.0};  // 完全公平
+double fairness = FairnessCalculator::calculate_fairness(flows);  // 1.0
+
+std::vector<double> unfair_flows = {20.0, 5.0, 5.0, 5.0};  // 不公平
+double unfair_fairness = FairnessCalculator::calculate_fairness(unfair_flows);  // 0.64
+```
+
+### 带宽估计
+
+准确估计可用带宽对于拥塞控制至关重要。
+
+#### 包对探测
+
+```cpp
+class BandwidthEstimator {
+private:
+    std::vector<std::chrono::steady_clock::time_point> packet_times;
+    std::vector<size_t> packet_sizes;
+    static const size_t WINDOW_SIZE = 10;
+
+public:
+    void add_packet(size_t size) {
+        auto now = std::chrono::steady_clock::now();
+        packet_times.push_back(now);
+        packet_sizes.push_back(size);
+
+        if (packet_times.size() > WINDOW_SIZE) {
+            packet_times.erase(packet_times.begin());
+            packet_sizes.erase(packet_sizes.begin());
+        }
+    }
+
+    double estimate_bandwidth() {
+        if (packet_times.size() < 2) return 0.0;
+
+        auto time_diff = packet_times.back() - packet_times.front();
+        auto duration = std::chrono::duration<double>(time_diff).count();
+
+        size_t total_bytes = 0;
+        for (size_t size : packet_sizes) {
+            total_bytes += size;
+        }
+
+        return (total_bytes * 8) / duration;  // bits per second
+    }
+};
+```
+
+### 显式拥塞通知 (ECN)
+
+ECN允许路由器显式地通知发送方网络拥塞，而不需要丢包。
+
+```cpp
+class ECNHandler {
+public:
+    enum ECNCodePoint {
+        ECN_NON_ECT = 0,    // Non-ECN Capable Transport
+        ECN_ECT_0 = 1,      // ECN Capable Transport (0)
+        ECN_ECT_1 = 2,      // ECN Capable Transport (1)
+        ECN_CE = 3          // Congestion Experienced
+    };
+
+    void set_ecn_bits(IPPacket& packet, ECNCodePoint ecn) {
+        // 在IP头部设置ECN位
+        uint8_t tos = packet.get_tos();
+        tos = (tos & 0xFC) | (ecn & 0x03);
+        packet.set_tos(tos);
+    }
+
+    ECNCodePoint get_ecn_bits(const IPPacket& packet) {
+        uint8_t tos = packet.get_tos();
+        return static_cast<ECNCodePoint>(tos & 0x03);
+    }
+
+    void handle_ecn_marking(const IPPacket& packet) {
+        if (get_ecn_bits(packet) == ECN_CE) {
+            // 网络拥塞，减少发送速率
+            on_congestion_detected();
+        }
+    }
+};
+```
+
+## 家庭网络技术
+
+### 家庭网络架构
+
+典型的家庭网络包含以下组件：
+1. **调制解调器** (Modem)：连接ISP
+2. **路由器** (Router)：连接内网和外网
+3. **交换机** (Switch)：连接多个设备
+4. **无线接入点** (AP)：提供WiFi连接
+5. **终端设备** (Devices)：电脑、手机、IoT设备
+
+### 网络地址转换 (NAT)
+
+NAT允许多个内部设备共享一个公共IP地址。
+
+#### NAT工作原理
+
+```cpp
+class NATRouter {
+private:
+    struct NATEntry {
+        IPAddress internal_ip;
+        uint16_t internal_port;
+        IPAddress external_ip;
+        uint16_t external_port;
+        std::chrono::steady_clock::time_point last_used;
+    };
+
+    std::vector<NATEntry> nat_table;
+    IPAddress public_ip;
+    uint16_t next_port = 1024;
+
+public:
+    std::optional<NATEntry> translate_outgoing(const IPPacket& packet) {
+        // 查找或创建NAT条目
+        for (auto& entry : nat_table) {
+            if (entry.internal_ip == packet.source_ip &&
+                entry.internal_port == packet.source_port) {
+                entry.last_used = std::chrono::steady_clock::now();
+                return entry;
+            }
+        }
+
+        // 创建新条目
+        NATEntry new_entry;
+        new_entry.internal_ip = packet.source_ip;
+        new_entry.internal_port = packet.source_port;
+        new_entry.external_ip = public_ip;
+        new_entry.external_port = next_port++;
+        new_entry.last_used = std::chrono::steady_clock::now();
+
+        nat_table.push_back(new_entry);
+        return new_entry;
+    }
+
+    std::optional<NATEntry> translate_incoming(const IPPacket& packet) {
+        // 查找对应的内部地址
+        for (const auto& entry : nat_table) {
+            if (entry.external_ip == packet.destination_ip &&
+                entry.external_port == packet.destination_port) {
+                return entry;
+            }
+        }
+        return std::nullopt;
+    }
+
+    void cleanup_old_entries() {
+        auto now = std::chrono::steady_clock::now();
+        nat_table.erase(
+            std::remove_if(nat_table.begin(), nat_table.end(),
+                [now](const NATEntry& entry) {
+                    return now - entry.last_used > std::chrono::minutes(30);
+                }),
+            nat_table.end());
+    }
+};
+```
+
+#### NAT类型
+
+1. **静态NAT**：一对一映射
+2. **动态NAT**：地址池映射
+3. **PAT (NAPT)**：端口地址转换（最常见）
+4. **Cone NAT**：锥形NAT
+5. **Symmetric NAT**：对称NAT
+
+### 动态主机配置协议 (DHCP)
+
+DHCP自动分配IP地址和其他网络配置。
+
+```cpp
+class DHCPServer {
+private:
+    struct Lease {
+        IPAddress ip;
+        MACAddress mac;
+        std::chrono::steady_clock::time_point start_time;
+        std::chrono::seconds duration;
+    };
+
+    IPAddress network;
+    IPAddress netmask;
+    IPAddress gateway;
+    IPAddress dns_server;
+    std::vector<Lease> leases;
+    std::vector<IPAddress> available_ips;
+
+public:
+    DHCPServer(const IPAddress& net, const IPAddress& mask,
+               const IPAddress& gw, const IPAddress& dns)
+        : network(net), netmask(mask), gateway(gw), dns_server(dns) {
+        // 初始化可用IP地址池
+        uint32_t net_addr = network.address;
+        uint32_t mask_addr = netmask.address;
+        uint32_t broadcast = net_addr | ~mask_addr;
+
+        for (uint32_t ip = net_addr + 1; ip < broadcast; ip++) {
+            available_ips.push_back(IPAddress(ip));
+        }
+    }
+
+    DHCPMessage handle_discover(const DHCPMessage& discover) {
+        // 创建DHCPOFFER消息
+        DHCPMessage offer;
+        offer.opcode = DHCPOFFER;
+        offer.server_ip = network;
+        offer.your_ip = allocate_ip(discover.client_mac);
+        offer.gateway_ip = gateway;
+        offer.dns_server = dns_server;
+        offer.lease_time = 3600;  // 1小时
+
+        return offer;
+    }
+
+    DHCPMessage handle_request(const DHCPMessage& request) {
+        // 创建DHCPACK消息
+        DHCPMessage ack;
+        ack.opcode = DHCPACK;
+        ack.your_ip = request.requested_ip;
+        ack.server_ip = network;
+        ack.lease_time = 3600;
+
+        // 记录租约
+        Lease lease;
+        lease.ip = request.requested_ip;
+        lease.mac = request.client_mac;
+        lease.start_time = std::chrono::steady_clock::now();
+        lease.duration = std::chrono::seconds(3600);
+        leases.push_back(lease);
+
+        return ack;
+    }
+
+private:
+    IPAddress allocate_ip(const MACAddress& mac) {
+        // 检查是否已有租约
+        for (const auto& lease : leases) {
+            if (lease.mac == mac) {
+                // 延长租约
+                lease.start_time = std::chrono::steady_clock::now();
+                return lease.ip;
+            }
+        }
+
+        // 分配新IP
+        if (!available_ips.empty()) {
+            IPAddress ip = available_ips.back();
+            available_ips.pop_back();
+            return ip;
+        }
+
+        // 没有可用IP
+        return IPAddress(0);
+    }
+};
+```
+
+### 域名系统 (DNS)
+
+DNS将域名转换为IP地址。
+
+```cpp
+class DNSServer {
+private:
+    struct DNSRecord {
+        std::string name;
+        IPAddress ip;
+        uint32_t ttl;
+        std::chrono::steady_clock::time_point created;
+    };
+
+    std::vector<DNSRecord> records;
+    std::map<std::string, IPAddress> cache;
+
+public:
+    void add_record(const std::string& name, const IPAddress& ip, uint32_t ttl) {
+        DNSRecord record;
+        record.name = name;
+        record.ip = ip;
+        record.ttl = ttl;
+        record.created = std::chrono::steady_clock::now();
+        records.push_back(record);
+    }
+
+    IPAddress resolve(const std::string& name) {
+        // 检查缓存
+        auto it = cache.find(name);
+        if (it != cache.end()) {
+            return it->second;
+        }
+
+        // 查找记录
+        for (const auto& record : records) {
+            if (record.name == name) {
+                cache[name] = record.ip;
+                return record.ip;
+            }
+        }
+
+        // 递归查询其他DNS服务器
+        return recursive_query(name);
+    }
+
+private:
+    IPAddress recursive_query(const std::string& name) {
+        // 1. 查询根服务器
+        // 2. 查询TLD服务器
+        // 3. 查询权威服务器
+        // 返回最终结果
+        return IPAddress(0);
+    }
+};
+```
+
+## 家庭网络实践
+
+### 家庭路由器配置
+
+```cpp
+class HomeRouter {
+private:
+    NATRouter nat;
+    DHCPServer dhcp;
+    DNSServer dns;
+    Firewall firewall;
+
+public:
+    HomeRouter(const IPAddress& public_ip, const IPAddress& private_network) {
+        // 初始化NAT
+        nat.set_public_ip(public_ip);
+
+        // 初始化DHCP服务器
+        dhcp = DHCPServer(private_network, IPAddress("255.255.255.0"),
+                         private_network, IPAddress("8.8.8.8"));
+
+        // 初始化DNS服务器
+        dns.add_record("router.local", private_network, 3600);
+        dns.add_record("home.local", private_network, 3600);
+    }
+
+    void handle_packet(const IPPacket& packet) {
+        // 检查防火墙规则
+        if (!firewall.allow_packet(packet)) {
+            drop_packet(packet);
+            return;
+        }
+
+        // 处理DHCP请求
+        if (packet.is_dhcp()) {
+            handle_dhcp_packet(packet);
+            return;
+        }
+
+        // 处理DNS请求
+        if (packet.is_dns()) {
+            handle_dns_packet(packet);
+            return;
+        }
+
+        // NAT转换
+        if (packet.source_ip.is_private()) {
+            // 出站包
+            auto nat_entry = nat.translate_outgoing(packet);
+            if (nat_entry) {
+                forward_packet(nat_entry->external_ip, packet);
+            }
+        } else {
+            // 入站包
+            auto nat_entry = nat.translate_incoming(packet);
+            if (nat_entry) {
+                forward_packet(nat_entry->internal_ip, packet);
+            }
+        }
+    }
+};
+```
+
+### 网络安全设置
+
+```cpp
+class HomeNetworkSecurity {
+private:
+    Firewall firewall;
+    MACFilter mac_filter;
+    ParentalControl parental_control;
+
+public:
+    void setup_default_security() {
+        // 基本防火墙规则
+        firewall.add_rule(FirewallRule::block_external_ports({22, 23, 3389}));
+        firewall.add_rule(FirewallRule::allow_established());
+        firewall.add_rule(FirewallRule::allow_dhcp());
+        firewall.add_rule(FirewallRule::allow_dns());
+
+        // MAC地址过滤
+        mac_filter.enable_whitelist();
+        mac_filter.add_allowed_mac("00:11:22:33:44:55");
+
+        // 家长控制
+        parental_control.block_websites({"facebook.com", "twitter.com"});
+        parental_control.set_time_limits(18, 0, 22, 0);  // 6PM-10PM
+    }
+
+    void setup_guest_network() {
+        // 客户网络隔离
+        firewall.add_rule(FirewallRule::isolate_guest_network());
+
+        // 客户网络带宽限制
+        firewall.add_rule(FirewallRule::limit_bandwidth("guest", 10 * 1024 * 1024));  // 10Mbps
+    }
+};
+```
+
+## 实验项目：Checkpoint 5 & 6
+
+### 目标
+- 实现完整的拥塞控制算法
+- 配置家庭网络环境
+- 实现NAT、DHCP、DNS服务
+- 测试网络性能和安全性
+
+### 实现步骤
+
+#### 1. 拥塞控制测试环境
+
+```cpp
+class CongestionControlTestbed {
+private:
+    NetworkSimulator simulator;
+    std::vector<AdvancedCongestionControl> senders;
+    AdvancedCongestionControl receiver;
+
+public:
+    void setup_topology() {
+        // 创建网络拓扑
+        auto router1 = simulator.create_router();
+        auto router2 = simulator.create_router();
+        auto bottleneck_link = simulator.create_link(router1, router2, 10 * 1024 * 1024, 0.05);  // 10Mbps, 50ms
+
+        // 创建发送方和接收方
+        for (int i = 0; i < 4; i++) {
+            auto sender = simulator.create_host();
+            auto receiver_host = simulator.create_host();
+
+            simulator.connect(sender, router1);
+            simulator.connect(receiver_host, router2);
+
+            senders.push_back(AdvancedCongestionControl(AlgorithmType::CUBIC));
+        }
+    }
+
+    void run_experiment() {
+        std::cout << "Running congestion control experiment..." << std::endl;
+
+        // 运行测试
+        for (int time = 0; time < EXPERIMENT_DURATION; time++) {
+            // 每个发送方发送数据
+            for (auto& sender : senders) {
+                uint32_t window = sender.get_window_size();
+                simulator.send_data(sender, window);
+            }
+
+            // 模拟网络传输
+            simulator.simulate_step();
+
+            // 处理ACK
+            for (auto& sender : senders) {
+                auto ack = simulator.get_ack(sender);
+                if (ack) {
+                    sender.on_ack_received(ack->bytes_acked);
+                }
+            }
+
+            // 记录统计
+            if (time % 100 == 0) {
+                record_statistics();
+            }
+        }
+
+        generate_report();
+    }
+};
+```
+
+#### 2. 家庭网络模拟
+
+```cpp
+class HomeNetworkSimulator {
+private:
+    HomeRouter router;
+    std::vector<Device> devices;
+    Internet internet;
+
+public:
+    void setup_home_network() {
+        // 创建路由器
+        router = HomeRouter(IPAddress("203.0.113.1"), IPAddress("192.168.1.1"));
+
+        // 创建设备
+        devices = {
+            Device("laptop", "192.168.1.100", "00:11:22:33:44:55"),
+            Device("phone", "192.168.1.101", "00:11:22:33:44:56"),
+            Device("smart_tv", "192.168.1.102", "00:11:22:33:44:57"),
+            Device("iot_device", "192.168.1.103", "00:11:22:33:44:58")
+        };
+
+        // 连接设备到路由器
+        for (auto& device : devices) {
+            router.connect_device(device);
+        }
+
+        // 连接路由器到互联网
+        internet.connect(router);
+    }
+
+    void test_network_functionality() {
+        std::cout << "Testing home network functionality..." << std::endl;
+
+        // 测试DHCP
+        test_dhcp_functionality();
+
+        // 测试NAT
+        test_nat_functionality();
+
+        // 测试DNS
+        test_dns_functionality();
+
+        // 测试网络隔离
+        test_network_isolation();
+
+        // 测试安全性
+        test_security_features();
+    }
+
+private:
+    void test_dhcp_functionality() {
+        std::cout << "Testing DHCP..." << std::endl;
+
+        // 模拟设备获取IP地址
+        for (auto& device : devices) {
+            auto dhcp_offer = router.handle_dhcp_discover(device);
+            auto dhcp_ack = router.handle_dhcp_request(device, dhcp_offer);
+
+            assert(dhcp_ack.your_ip == device.ip);
+        }
+    }
+
+    void test_nat_functionality() {
+        std::cout << "Testing NAT..." << std::endl;
+
+        // 模拟内网设备访问外网
+        for (auto& device : devices) {
+            IPPacket packet;
+            packet.source_ip = device.ip;
+            packet.destination_ip = IPAddress("8.8.8.8");
+
+            auto nat_entry = router.translate_outgoing(packet);
+            assert(nat_entry->external_ip == IPAddress("203.0.113.1"));
+        }
+    }
+};
+```
+
+## 性能优化
+
+### 家庭网络优化策略
+
+```cpp
+class HomeNetworkOptimizer {
+private:
+    HomeRouter router;
+    std::vector<QoSRule> qos_rules;
+
+public:
+    void optimize_for_gaming() {
+        // 游戏流量优先级
+        qos_rules.push_back(QoSRule::priority_traffic("game", {80, 443, 3478, 3479}));
+        qos_rules.push_back(QoSRule::low_latency("voice_chat"));
+
+        // 限制后台流量
+        qos_rules.push_back(QoSRule::limit_bandwidth("background", 2 * 1024 * 1024));
+
+        // 启用QoS
+        router.enable_qos(qos_rules);
+    }
+
+    void optimize_for_streaming() {
+        // 视频流优先级
+        qos_rules.push_back(QoSRule::priority_traffic("streaming", {80, 443, 1935, 1936}));
+        qos_rules.push_back(QoSRule::guaranteed_bandwidth("streaming", 5 * 1024 * 1024));
+
+        // 启用QoS
+        router.enable_qos(qos_rules);
+    }
+
+    void optimize_for_work_from_home() {
+        // VPN和视频会议优先级
+        qos_rules.push_back(QoSRule::priority_traffic("vpn", {443, 1194}));
+        qos_rules.push_back(QoSRule::priority_traffic("video_conference", {80, 443, 3478, 3479}));
+
+        // 邮件和网页浏览
+        qos_rules.push_back(QoSRule::normal_priority("web"));
+
+        // 启用QoS
+        router.enable_qos(qos_rules);
+    }
+};
+```
+
+## 调试和故障排除
+
+### 家庭网络问题诊断
+
+```cpp
+class HomeNetworkDiagnostic {
+public:
+    void diagnose_connectivity_issues() {
+        std::cout << "=== Network Connectivity Diagnostic ===" << std::endl;
+
+        // 检查互联网连接
+        if (!check_internet_connectivity()) {
+            std::cout << "❌ No internet connection" << std::endl;
+            diagnose_internet_issues();
+        } else {
+            std::cout << "✅ Internet connection OK" << std::endl;
+        }
+
+        // 检查DHCP服务
+        if (!check_dhcp_service()) {
+            std::cout << "❌ DHCP service not working" << std::endl;
+            diagnose_dhcp_issues();
+        } else {
+            std::cout << "✅ DHCP service OK" << std::endl;
+        }
+
+        // 检查DNS服务
+        if (!check_dns_service()) {
+            std::cout << "❌ DNS service not working" << std::endl;
+            diagnose_dns_issues();
+        } else {
+            std::cout << "✅ DNS service OK" << std::endl;
+        }
+
+        // 检查NAT功能
+        if (!check_nat_functionality()) {
+            std::cout << "❌ NAT not working" << std::endl;
+            diagnose_nat_issues();
+        } else {
+            std::cout << "✅ NAT functionality OK" << std::endl;
+        }
+    }
+
+    void measure_network_performance() {
+        std::cout << "=== Network Performance Measurement ===" << std::endl;
+
+        // 测量带宽
+        double bandwidth = measure_bandwidth();
+        std::cout << "Bandwidth: " << bandwidth << " Mbps" << std::endl;
+
+        // 测量延迟
+        double latency = measure_latency();
+        std::cout << "Latency: " << latency << " ms" << std::endl;
+
+        // 测量丢包率
+        double loss_rate = measure_packet_loss();
+        std::cout << "Packet Loss: " << loss_rate << "%" << std::endl;
+
+        // 测量抖动
+        double jitter = measure_jitter();
+        std::cout << "Jitter: " << jitter << " ms" << std::endl;
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 解释NAT的工作原理和类型
+2. DHCP如何分配IP地址？
+3. DNS解析的完整过程是什么？
+
+### 实践练习
+1. 实现简单的NAT路由器
+2. 配置DHCP服务器
+3. 设置DNS缓存服务器
+
+### 挑战项目
+1. 实现完整的家庭网络模拟器
+2. 添加网络监控和告警功能
+3. 实现智能QoS管理
+
+## 下周预告
+
+Week 7将学习NAT穿越技术，包括端口转发、UPnP和P2P通信。
+
+---
+*继续学习：[Week 7：NAT穿越](./week7)*

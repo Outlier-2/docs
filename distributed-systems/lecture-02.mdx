@@ -1,0 +1,1110 @@
+---
+title: "Lecture 2: RPC和线程"
+description: "分布式系统中的远程过程调用(RPC)机制和Go语言并发编程"
+---
+
+# Lecture 2: RPC和线程
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/mit-6.824/lecture-2" title="MIT 6.824 Lecture 2" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 本周内容
+
+- **RPC机制**：远程过程调用的原理和实现
+- **Go并发编程**：Goroutine、Channel和Select
+- **线程安全**：互斥锁、原子操作和并发模式
+- **网络编程**：Socket、HTTP和RPC框架
+- **实践项目**：Lab 1 - MapReduce实现
+
+## 核心概念
+
+### RPC (Remote Procedure Call)
+
+RPC是一种让程序能够调用远程计算机上函数的机制，隐藏了网络通信的复杂性。
+
+#### RPC的工作原理
+
+```text
+客户端调用：                    服务端处理：
+1. 调用本地函数                1. 接收网络请求
+2. 编码参数                    2. 解码参数
+3. 发送网络请求                3. 调用实际函数
+4. 等待响应                    4. 编码返回值
+5. 接收响应                    5. 发送响应
+6. 解码响应                    6. 等待下一个请求
+7. 返回结果给调用者
+```
+
+#### RPC的主要组件
+
+```go
+// RPC接口定义
+type Service interface {
+    Method1(args ArgsType1, reply *ReplyType1) error
+    Method2(args ArgsType2, reply *ReplyType2) error
+}
+
+// 存根(Stub) - 客户端
+type ClientStub struct {
+    network string
+    address string
+}
+
+func (s *ClientStub) Method1(args ArgsType1) (*ReplyType1, error) {
+    // 编码参数
+    data := encode(args)
+
+    // 发送请求
+    response, err := sendRequest(s.network, s.address, "Service.Method1", data)
+    if err != nil {
+        return nil, err
+    }
+
+    // 解码响应
+    reply := decode(response)
+    return reply, nil
+}
+
+// 存根(Stub) - 服务端
+type ServerStub struct {
+    service Service
+}
+
+func (s *ServerStub) HandleRequest(method string, args []byte) ([]byte, error) {
+    switch method {
+    case "Service.Method1":
+        var args ArgsType1
+        decode(args, &args)
+        var reply ReplyType1
+        err := s.service.Method1(args, &reply)
+        if err != nil {
+            return nil, err
+        }
+        return encode(reply), nil
+    default:
+        return nil, fmt.Errorf("unknown method: %s", method)
+    }
+}
+```
+
+#### RPC的挑战
+
+1. **网络延迟和故障**
+   - 请求可能丢失或延迟
+   - 需要超时和重试机制
+   - 网络分区处理
+
+2. **参数编解码**
+   - 不同机器间的数据表示
+   - 字节序问题
+   - 复杂数据类型序列化
+
+3. **异常处理**
+   - 网络错误
+   - 服务端错误
+   - 超时处理
+
+### Go语言并发编程
+
+Go语言提供了强大的并发编程支持，非常适合构建分布式系统。
+
+#### Goroutine
+
+Goroutine是Go语言的轻量级线程，由Go运行时管理。
+
+```go
+// 基本的Goroutine示例
+func main() {
+    // 启动一个Goroutine
+    go sayHello()
+
+    // 启动带参数的Goroutine
+    go sayHelloTo("Alice")
+    go sayHelloTo("Bob")
+
+    // 等待一段时间
+    time.Sleep(1 * time.Second)
+}
+
+func sayHello() {
+    fmt.Println("Hello, World!")
+}
+
+func sayHelloTo(name string) {
+    fmt.Printf("Hello, %s!\n", name)
+}
+
+// 带匿名函数的Goroutine
+func main() {
+    for i := 0; i < 5; i++ {
+        go func(id int) {
+            fmt.Printf("Goroutine %d\n", id)
+        }(i)
+    }
+    time.Sleep(1 * time.Second)
+}
+```
+
+#### Channel
+
+Channel是Goroutine间通信的主要机制。
+
+```go
+// 基本的Channel使用
+func main() {
+    // 创建一个无缓冲Channel
+    ch := make(chan int)
+
+    // 启动发送者Goroutine
+    go sender(ch)
+
+    // 启动接收者Goroutine
+    go receiver(ch)
+
+    time.Sleep(2 * time.Second)
+}
+
+func sender(ch chan<- int) {
+    for i := 1; i <= 5; i++ {
+        fmt.Printf("发送: %d\n", i)
+        ch <- i
+        time.Sleep(500 * time.Millisecond)
+    }
+    close(ch)
+}
+
+func receiver(ch <-chan int) {
+    for value := range ch {
+        fmt.Printf("接收: %d\n", value)
+    }
+}
+
+// 带缓冲的Channel
+func bufferedChannelExample() {
+    ch := make(chan int, 3) // 缓冲大小为3
+
+    // 可以连续发送3个数据而不会阻塞
+    ch <- 1
+    ch <- 2
+    ch <- 3
+
+    // 接收数据
+    fmt.Println(<-ch) // 1
+    fmt.Println(<-ch) // 2
+    fmt.Println(<-ch) // 3
+}
+```
+
+#### Select语句
+
+Select语句可以同时等待多个Channel操作。
+
+```go
+// Select基本用法
+func selectExample() {
+    ch1 := make(chan string)
+    ch2 := make(chan string)
+
+    go func() {
+        time.Sleep(1 * time.Second)
+        ch1 <- "来自ch1的消息"
+    }()
+
+    go func() {
+        time.Sleep(2 * time.Second)
+        ch2 <- "来自ch2的消息"
+    }()
+
+    for i := 0; i < 2; i++ {
+        select {
+        case msg1 := <-ch1:
+            fmt.Println("接收到:", msg1)
+        case msg2 := <-ch2:
+            fmt.Println("接收到:", msg2)
+        case <-time.After(3 * time.Second):
+            fmt.Println("超时")
+        }
+    }
+}
+
+// 带default的Select
+func selectWithDefault() {
+    ch := make(chan int)
+
+    for {
+        select {
+        case value := <-ch:
+            fmt.Println("接收到:", value)
+        default:
+            fmt.Println("没有数据，继续其他工作")
+            time.Sleep(500 * time.Millisecond)
+        }
+    }
+}
+```
+
+#### 并发模式
+
+1. **Worker Pool模式**
+```go
+// Worker Pool模式
+func workerPool() {
+    const numWorkers = 4
+    const numJobs = 10
+
+    jobs := make(chan int, numJobs)
+    results := make(chan int, numJobs)
+
+    // 启动Worker
+    for i := 1; i <= numWorkers; i++ {
+        go worker(i, jobs, results)
+    }
+
+    // 发送任务
+    for j := 1; j <= numJobs; j++ {
+        jobs <- j
+    }
+    close(jobs)
+
+    // 收集结果
+    for a := 1; a <= numJobs; a++ {
+        result := <-results
+        fmt.Printf("结果: %d\n", result)
+    }
+}
+
+func worker(id int, jobs <-chan int, results chan<- int) {
+    for j := range jobs {
+        fmt.Printf("Worker %d 处理任务 %d\n", id, j)
+        time.Sleep(time.Second)
+        results <- j * 2
+    }
+}
+```
+
+2. **Fan-in/Fan-out模式**
+```go
+// Fan-out: 将任务分发到多个Worker
+func fanOut() {
+    input := make(chan int)
+    results := make(chan int)
+
+    // 启动多个Worker
+    for i := 0; i < 3; i++ {
+        go func(id int) {
+            for value := range input {
+                result := process(value)
+                results <- result
+            }
+        }(i)
+    }
+
+    // 发送输入数据
+    for i := 1; i <= 10; i++ {
+        input <- i
+    }
+    close(input)
+
+    // 收集结果
+    for i := 0; i < 10; i++ {
+        fmt.Println(<-results)
+    }
+}
+
+// Fan-in: 合并多个Channel的结果
+func fanIn() {
+    ch1 := make(chan int)
+    ch2 := make(chan int)
+    ch3 := make(chan int)
+
+    // 启动生产者
+    go producer(ch1, 1, 5)
+    go producer(ch2, 6, 10)
+    go producer(ch3, 11, 15)
+
+    // 合并结果
+    for i := 0; i < 15; i++ {
+        select {
+        case val := <-ch1:
+            fmt.Println("从ch1:", val)
+        case val := <-ch2:
+            fmt.Println("从ch2:", val)
+        case val := <-ch3:
+            fmt.Println("从ch3:", val)
+        }
+    }
+}
+
+func producer(ch chan int, start, end int) {
+    for i := start; i <= end; i++ {
+        ch <- i
+        time.Sleep(100 * time.Millisecond)
+    }
+}
+
+func process(value int) int {
+    time.Sleep(500 * time.Millisecond)
+    return value * 2
+}
+```
+
+### 线程安全
+
+在并发编程中，确保数据的安全性至关重要。
+
+#### 互斥锁
+
+```go
+// 互斥锁示例
+type Counter struct {
+    mu    sync.Mutex
+    count int
+}
+
+func (c *Counter) Increment() {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.count++
+}
+
+func (c *Counter) Get() int {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    return c.count
+}
+
+// 使用示例
+func mutexExample() {
+    counter := &Counter{}
+    var wg sync.WaitGroup
+
+    for i := 0; i < 10; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            counter.Increment()
+        }()
+    }
+
+    wg.Wait()
+    fmt.Println("最终计数:", counter.Get())
+}
+```
+
+#### 读写锁
+
+```go
+// 读写锁示例
+type DataStore struct {
+    mu    sync.RWMutex
+    data map[string]string
+}
+
+func (ds *DataStore) Get(key string) (string, bool) {
+    ds.mu.RLock()
+    defer ds.mu.RUnlock()
+    value, exists := ds.data[key]
+    return value, exists
+}
+
+func (ds *DataStore) Set(key, value string) {
+    ds.mu.Lock()
+    defer ds.mu.Unlock()
+    ds.data[key] = value
+}
+
+func (ds *DataStore) Delete(key string) {
+    ds.mu.Lock()
+    defer ds.mu.Unlock()
+    delete(ds.data, key)
+}
+```
+
+#### 原子操作
+
+```go
+// 原子操作示例
+type AtomicCounter struct {
+    count int64
+}
+
+func (ac *AtomicCounter) Increment() {
+    atomic.AddInt64(&ac.count, 1)
+}
+
+func (ac *AtomicCounter) Get() int64 {
+    return atomic.LoadInt64(&ac.count)
+}
+
+// 原子操作比互斥锁更轻量级
+// 适用于简单的计数器等场景
+```
+
+## 代码示例
+
+### 简单的RPC框架
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net"
+    "sync"
+)
+
+// RPC消息格式
+type RPCMessage struct {
+    Method   string          `json:"method"`
+    Args     json.RawMessage `json:"args"`
+    RequestID string          `json:"request_id"`
+}
+
+type RPCResponse struct {
+    Result   json.RawMessage `json:"result,omitempty"`
+    Error    string          `json:"error,omitempty"`
+    RequestID string          `json:"request_id"`
+}
+
+// RPC服务端
+type RPCServer struct {
+    listeners map[string]net.Listener
+    services  map[string]interface{}
+    mu        sync.RWMutex
+}
+
+func NewRPCServer() *RPCServer {
+    return &RPCServer{
+        listeners: make(map[string]net.Listener),
+        services:  make(map[string]interface{}),
+    }
+}
+
+func (s *RPCServer) RegisterService(name string, service interface{}) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.services[name] = service
+}
+
+func (s *RPCServer) Listen(network, address string) error {
+    listener, err := net.Listen(network, address)
+    if err != nil {
+        return err
+    }
+
+    s.mu.Lock()
+    s.listeners[address] = listener
+    s.mu.Unlock()
+
+    go s.acceptConnections(listener)
+    return nil
+}
+
+func (s *RPCServer) acceptConnections(listener net.Listener) {
+    for {
+        conn, err := listener.Accept()
+        if err != nil {
+            fmt.Printf("接受连接失败: %v\n", err)
+            continue
+        }
+
+        go s.handleConnection(conn)
+    }
+}
+
+func (s *RPCServer) handleConnection(conn net.Conn) {
+    defer conn.Close()
+
+    decoder := json.NewDecoder(conn)
+    encoder := json.NewEncoder(conn)
+
+    for {
+        var msg RPCMessage
+        if err := decoder.Decode(&msg); err != nil {
+            fmt.Printf("解码消息失败: %v\n", err)
+            return
+        }
+
+        response := s.handleMessage(&msg)
+        if err := encoder.Encode(response); err != nil {
+            fmt.Printf("编码响应失败: %v\n", err)
+            return
+        }
+    }
+}
+
+func (s *RPCServer) handleMessage(msg *RPCMessage) *RPCResponse {
+    // 解析服务名和方法名
+    // 这里简化处理，实际应该根据msg.Method来路由
+    // 返回一个示例响应
+    return &RPCResponse{
+        Result:   []byte(`{"status": "success"}`),
+        RequestID: msg.RequestID,
+    }
+}
+
+// RPC客户端
+type RPCClient struct {
+    conn net.Conn
+    mu   sync.Mutex
+}
+
+func NewRPCClient(network, address string) (*RPCClient, error) {
+    conn, err := net.Dial(network, address)
+    if err != nil {
+        return nil, err
+    }
+
+    return &RPCClient{conn: conn}, nil
+}
+
+func (c *RPCClient) Call(method string, args interface{}, reply interface{}) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    // 编码参数
+    argsData, err := json.Marshal(args)
+    if err != nil {
+        return err
+    }
+
+    // 构造请求
+    msg := RPCMessage{
+        Method:   method,
+        Args:     argsData,
+        RequestID: generateRequestID(),
+    }
+
+    // 发送请求
+    encoder := json.NewEncoder(c.conn)
+    if err := encoder.Encode(msg); err != nil {
+        return err
+    }
+
+    // 接收响应
+    decoder := json.NewDecoder(c.conn)
+    var response RPCResponse
+    if err := decoder.Decode(&response); err != nil {
+        return err
+    }
+
+    if response.Error != "" {
+        return fmt.Errorf("RPC错误: %s", response.Error)
+    }
+
+    // 解码结果
+    if reply != nil {
+        return json.Unmarshal(response.Result, reply)
+    }
+
+    return nil
+}
+
+func generateRequestID() string {
+    return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// 示例服务
+type MathService struct{}
+
+func (m *MathService) Add(args struct{ A, B int }, reply *int) error {
+    *reply = args.A + args.B
+    return nil
+}
+
+func (m *MathService) Multiply(args struct{ A, B int }, reply *int) error {
+    *reply = args.A * args.B
+    return nil
+}
+
+func main() {
+    // 启动RPC服务端
+    server := NewRPCServer()
+    server.RegisterService("math", &MathService{})
+
+    go func() {
+        if err := server.Listen("tcp", ":8080"); err != nil {
+            fmt.Printf("服务端启动失败: %v\n", err)
+        }
+    }()
+
+    // 等待服务端启动
+    time.Sleep(1 * time.Second)
+
+    // 创建客户端
+    client, err := NewRPCClient("tcp", "localhost:8080")
+    if err != nil {
+        fmt.Printf("客户端连接失败: %v\n", err)
+        return
+    }
+
+    // 调用RPC方法
+    var result int
+
+    // 加法
+    err = client.Call("math.Add", struct{ A, B int }{5, 3}, &result)
+    if err != nil {
+        fmt.Printf("RPC调用失败: %v\n", err)
+        return
+    }
+    fmt.Printf("5 + 3 = %d\n", result)
+
+    // 乘法
+    err = client.Call("math.Multiply", struct{ A, B int }{4, 6}, &result)
+    if err != nil {
+        fmt.Printf("RPC调用失败: %v\n", err)
+        return
+    }
+    fmt.Printf("4 * 6 = %d\n", result)
+}
+```
+
+### 并发的Web爬虫
+
+```go
+package main
+
+import (
+    "fmt"
+    "io/ioutil"
+    "net/http"
+    "regexp"
+    "strings"
+    "sync"
+    "time"
+)
+
+// 网页爬虫
+type WebCrawler struct {
+    visited    map[string]bool
+    queue      chan string
+    results    chan string
+    workers    int
+    maxDepth   int
+    mu         sync.RWMutex
+    wg         sync.WaitGroup
+}
+
+func NewWebCrawler(workers, maxDepth int) *WebCrawler {
+    return &WebCrawler{
+        visited:  make(map[string]bool),
+        queue:    make(chan string, 1000),
+        results:  make(chan string, 1000),
+        workers:  workers,
+        maxDepth: maxDepth,
+    }
+}
+
+func (wc *WebCrawler) Start(seedURLs []string) {
+    // 启动Worker
+    for i := 0; i < wc.workers; i++ {
+        wc.wg.Add(1)
+        go wc.worker(i)
+    }
+
+    // 启动结果收集器
+    go wc.resultCollector()
+
+    // 添加种子URL
+    for _, url := range seedURLs {
+        wc.queue <- url
+    }
+}
+
+func (wc *WebCrawler) worker(id int) {
+    defer wc.wg.Done()
+
+    for url := range wc.queue {
+        if wc.shouldVisit(url) {
+            fmt.Printf("Worker %d 爬取: %s\n", id, url)
+
+            links, err := wc.crawl(url)
+            if err != nil {
+                fmt.Printf("Worker %d 爬取失败: %v\n", id, err)
+                continue
+            }
+
+            // 将新链接加入队列
+            for _, link := range links {
+                wc.queue <- link
+            }
+        }
+    }
+}
+
+func (wc *WebCrawler) shouldVisit(url string) bool {
+    wc.mu.RLock()
+    defer wc.mu.RUnlock()
+
+    if wc.visited[url] {
+        return false
+    }
+
+    wc.visited[url] = true
+    return true
+}
+
+func (wc *WebCrawler) crawl(url string) ([]string, error) {
+    // 模拟网络延迟
+    time.Sleep(100 * time.Millisecond)
+
+    // 发送HTTP请求
+    resp, err := http.Get(url)
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return nil, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+    }
+
+    // 读取页面内容
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+
+    // 提取链接
+    links := wc.extractLinks(string(body))
+
+    // 发送结果
+    wc.results <- fmt.Sprintf("%s (%d 个链接)", url, len(links))
+
+    return links, nil
+}
+
+func (wc *WebCrawler) extractLinks(content string) []string {
+    // 简单的链接提取正则表达式
+    linkRegex := regexp.MustCompile(`href=["']([^"']+)["']`)
+    matches := linkRegex.FindAllStringSubmatch(content, -1)
+
+    var links []string
+    for _, match := range matches {
+        if len(match) > 1 {
+            link := match[1]
+            // 过滤和处理链接
+            if strings.HasPrefix(link, "http") {
+                links = append(links, link)
+            }
+        }
+    }
+
+    return links
+}
+
+func (wc *WebCrawler) resultCollector() {
+    for result := range wc.results {
+        fmt.Println("结果:", result)
+    }
+}
+
+func (wc *WebCrawler) Stop() {
+    close(wc.queue)
+    wc.wg.Wait()
+    close(wc.results)
+}
+
+func main() {
+    // 创建爬虫
+    crawler := NewWebCrawler(5, 3)
+
+    // 启动爬虫
+    seedURLs := []string{
+        "https://example.com",
+        "https://example.org",
+    }
+
+    crawler.Start(seedURLs)
+
+    // 运行一段时间后停止
+    time.Sleep(10 * time.Second)
+    crawler.Stop()
+
+    fmt.Println("爬虫完成")
+}
+```
+
+## 练习题与答案
+
+### 1. RPC设计
+
+**问题：** 设计一个支持超时和重试机制的RPC客户端。
+
+**答案：**
+```go
+// 带超时和重试的RPC客户端
+type RetryableRPCClient struct {
+    client    *RPCClient
+    maxRetries int
+    timeout   time.Duration
+}
+
+func NewRetryableRPCClient(network, address string, maxRetries int, timeout time.Duration) *RetryableRPCClient {
+    return &RetryableRPCClient{
+        client:     &RPCClient{conn: nil},
+        maxRetries: maxRetries,
+        timeout:    timeout,
+    }
+}
+
+func (rc *RetryableRPCClient) Call(method string, args interface{}, reply interface{}) error {
+    var lastErr error
+
+    for i := 0; i < rc.maxRetries; i++ {
+        // 创建带超时的context
+        ctx, cancel := context.WithTimeout(context.Background(), rc.timeout)
+        defer cancel()
+
+        // 在新的goroutine中执行RPC调用
+        done := make(chan error, 1)
+        go func() {
+            err := rc.client.Call(method, args, reply)
+            done <- err
+        }()
+
+        // 等待结果或超时
+        select {
+        case err := <-done:
+            if err == nil {
+                return nil
+            }
+            lastErr = err
+            fmt.Printf("RPC调用失败 (尝试 %d/%d): %v\n", i+1, rc.maxRetries, err)
+
+        case <-ctx.Done():
+            lastErr = fmt.Errorf("RPC调用超时")
+            fmt.Printf("RPC调用超时 (尝试 %d/%d)\n", i+1, rc.maxRetries)
+        }
+
+        // 指数退避
+        if i < rc.maxRetries-1 {
+            sleepTime := time.Duration(math.Pow(2, float64(i))) * time.Second
+            time.Sleep(sleepTime)
+        }
+    }
+
+    return fmt.Errorf("RPC调用失败，已重试 %d 次，最后错误: %v", rc.maxRetries, lastErr)
+}
+```
+
+### 2. 并发模式
+
+**问题：** 实现一个并行的MapReduce框架，使用Goroutine和Channel。
+
+**答案：**
+```go
+// 并行MapReduce框架
+type ParallelMapReduce struct {
+    numMappers  int
+    numReducers int
+}
+
+func (pmr *ParallelMapReduce) Execute(data []string, mapper func(string) []KeyValue, reducer func(string, []string) string) map[string]string {
+    // Map阶段
+    mapResults := make(chan []KeyValue, len(data))
+
+    // 启动Mapper
+    for i := 0; i < pmr.numMappers; i++ {
+        go func() {
+            for _, item := range data {
+                result := mapper(item)
+                mapResults <- result
+            }
+        }()
+    }
+
+    // 收集Map结果
+    var allResults []KeyValue
+    for i := 0; i < len(data); i++ {
+        result := <-mapResults
+        allResults = append(allResults, result...)
+    }
+    close(mapResults)
+
+    // Shuffle阶段
+    shuffled := pmr.shuffle(allResults)
+
+    // Reduce阶段
+    reduceResults := make(chan struct {
+        key   string
+        value string
+    }, len(shuffled))
+
+    // 启动Reducer
+    for i := 0; i < pmr.numReducers; i++ {
+        go func() {
+            for key, values := range shuffled {
+                result := reducer(key, values)
+                reduceResults <- struct {
+                    key   string
+                    value string
+                }{key, result}
+            }
+        }()
+    }
+
+    // 收集Reduce结果
+    finalResults := make(map[string]string)
+    for i := 0; i < len(shuffled); i++ {
+        result := <-reduceResults
+        finalResults[result.key] = result.value
+    }
+
+    return finalResults
+}
+
+func (pmr *ParallelMapReduce) shuffle(results []KeyValue) map[string][]string {
+    shuffled := make(map[string][]string)
+
+    for _, kv := range results {
+        shuffled[kv.Key] = append(shuffled[kv.Key], kv.Value)
+    }
+
+    return shuffled
+}
+```
+
+### 3. 死锁检测
+
+**问题：** 如何检测和避免Go中的死锁？
+
+**答案：**
+死锁检测和避免策略：
+
+1. **避免循环等待**
+   - 按照固定的顺序获取锁
+   - 使用超时机制
+
+2. **使用工具检测**
+   - `go run -race main.go` 检测竞态条件
+   - 使用 `sync/atomic` 进行原子操作
+
+3. **使用Channel替代锁**
+   - 通过消息传递而非共享内存
+   - 减少锁的使用
+
+示例：
+```go
+// 按顺序获取锁避免死锁
+type SafeAccount struct {
+    mu    sync.Mutex
+    id    int
+    balance float64
+}
+
+func transfer(from, to *SafeAccount, amount float64) error {
+    // 按照ID顺序获取锁，避免死锁
+    if from.id < to.id {
+        from.mu.Lock()
+        to.mu.Lock()
+    } else {
+        to.mu.Lock()
+        from.mu.Lock()
+    }
+    defer from.mu.Unlock()
+    defer to.mu.Unlock()
+
+    if from.balance < amount {
+        return fmt.Errorf("余额不足")
+    }
+
+    from.balance -= amount
+    to.balance += amount
+
+    return nil
+}
+```
+
+### 4. 性能优化
+
+**问题：** 如何优化Go程序的性能？
+
+**答案：**
+Go程序性能优化策略：
+
+1. **减少内存分配**
+   - 使用对象池
+   - 避免频繁的字符串拼接
+
+2. **并发优化**
+   - 合理设置Worker数量
+   - 使用带缓冲的Channel
+
+3. **I/O优化**
+   - 使用批量操作
+   - 实现连接池
+
+示例：
+```go
+// 对象池优化
+type ObjectPool struct {
+    pool sync.Pool
+}
+
+func NewObjectPool() *ObjectPool {
+    return &ObjectPool{
+        pool: sync.Pool{
+            New: func() interface{} {
+                return make([]byte, 1024)
+            },
+        },
+    }
+}
+
+func (op *ObjectPool) Get() []byte {
+    return op.pool.Get().([]byte)
+}
+
+func (op *ObjectPool) Put(data []byte) {
+    op.pool.Put(data)
+}
+```
+
+## 学习建议
+
+1. **深入理解Goroutine**：掌握Goroutine的调度原理
+2. **熟练使用Channel**：理解不同类型的Channel和模式
+3. **学习并发模式**：掌握常用的并发设计模式
+4. **实践RPC框架**：动手实现简单的RPC系统
+5. **性能分析**：使用pprof工具分析程序性能
+
+## 扩展资源
+
+### 学习材料
+- [Go语言官方文档](https://golang.org/doc/)
+- [Concurrency in Go](https://go.dev/blog/concurrency-is-not-parallelism)
+- [Advanced Go Concurrency Patterns](https://go.dev/talks/2012/concurrency.slide)
+
+### 工具和框架
+- [gRPC](https://grpc.io/) - 高性能RPC框架
+- [net/rpc](https://pkg.go.dev/net/rpc) - Go标准库RPC
+- [pprof](https://pkg.go.dev/runtime/pprof) - 性能分析工具
+
+### 实践项目
+- [分布式键值存储](https://github.com/etcd-io/etcd)
+- [Go微服务框架](https://github.com/go-micro/go-micro)
+- [RPC框架示例](https://github.com/smallnest/rpcx)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Lecture 3: 主从复制" icon="arrow-right" href="./lecture-03">
+    学习基本的容错机制
+  </Card>
+
+  <Card title="Lab 1: MapReduce" icon="code" href="./lab-1">
+    完成MapReduce实践项目
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到分布式系统课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜完成第2讲！你已经掌握了RPC机制和Go并发编程的基础。下一讲我们将学习主从复制这种基本的容错机制。*

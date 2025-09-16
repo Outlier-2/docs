@@ -1,0 +1,882 @@
+---
+title: "Week 7 - SQL数据库"
+description: "CS50第7周（2025版本）：学习SQL语言和数据库基础"
+---
+
+# Week 7 - SQL数据库
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/7" title="CS50 2025 - Week 7" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **SQL基础**：SQL语言语法、数据类型
+- **数据库操作**：创建、删除、修改数据库
+- **表操作**：创建表、约束条件
+- **数据查询**：SELECT语句、WHERE条件
+- **数据修改**：INSERT、UPDATE、DELETE
+- **高级查询**：JOIN、子查询、聚合函数
+- **Python集成**：sqlite3模块使用
+
+## 核心概念
+
+### SQL语言简介
+
+SQL (Structured Query Language) 是用于管理关系数据库的标准语言。
+
+#### 基本SQL语法
+
+```sql
+-- 创建数据库
+CREATE DATABASE mydatabase;
+
+-- 使用数据库
+USE mydatabase;
+
+-- 创建表
+CREATE TABLE students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    age INTEGER,
+    grade REAL,
+    enrollment_date DATE DEFAULT CURRENT_DATE
+);
+
+-- 查看表结构
+.schema students
+```
+
+### 数据类型
+
+#### SQLite数据类型
+
+| 类型 | 描述 | 示例 |
+|------|------|------|
+| INTEGER | 整数 | 42, -17 |
+| REAL | 浮点数 | 3.14, -0.5 |
+| TEXT | 文本字符串 | 'Hello', '数据库' |
+| BLOB | 二进制数据 | 图片、文件 |
+| NULL | 空值 | NULL |
+
+### 表操作
+
+#### 创建和修改表
+
+```sql
+-- 创建表
+CREATE TABLE courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_name TEXT NOT NULL,
+    credits INTEGER DEFAULT 3,
+    department TEXT
+);
+
+-- 添加列
+ALTER TABLE students ADD COLUMN email TEXT;
+
+-- 删除列
+ALTER TABLE students DROP COLUMN email;
+
+-- 删除表
+DROP TABLE courses;
+
+-- 重命名表
+ALTER TABLE students RENAME TO learners;
+```
+
+### 数据操作
+
+#### 插入数据
+
+```sql
+-- 插入单行数据
+INSERT INTO students (name, age, grade)
+VALUES ('张三', 18, 85.5);
+
+-- 插入多行数据
+INSERT INTO students (name, age, grade)
+VALUES
+    ('李四', 19, 92.3),
+    ('王五', 17, 78.9),
+    ('赵六', 20, 88.7);
+
+-- 插入所有列
+INSERT INTO students VALUES (5, '钱七', 18, 95.2, '2024-01-15');
+```
+
+#### 查询数据
+
+```sql
+-- 基本查询
+SELECT * FROM students;
+
+-- 查询特定列
+SELECT name, age FROM students;
+
+-- 条件查询
+SELECT * FROM students WHERE age > 18;
+
+-- 多条件查询
+SELECT * FROM students
+WHERE age >= 18 AND grade > 80;
+
+-- 模糊查询
+SELECT * FROM students WHERE name LIKE '张%';
+
+-- 排序查询
+SELECT * FROM students ORDER BY grade DESC;
+
+-- 限制查询结果
+SELECT * FROM students LIMIT 3;
+
+-- 聚合函数
+SELECT COUNT(*) FROM students;
+SELECT AVG(grade) FROM students;
+SELECT MAX(grade), MIN(grade) FROM students;
+
+-- 分组查询
+SELECT age, COUNT(*) FROM students GROUP BY age;
+
+-- HAVING子句
+SELECT age, AVG(grade) as avg_grade
+FROM students
+GROUP BY age
+HAVING AVG(grade) > 80;
+```
+
+#### 更新和删除数据
+
+```sql
+-- 更新数据
+UPDATE students
+SET grade = 90.5
+WHERE name = '张三';
+
+-- 批量更新
+UPDATE students
+SET age = age + 1
+WHERE grade > 85;
+
+-- 删除数据
+DELETE FROM students WHERE name = '赵六';
+
+-- 删除所有数据（保留表结构）
+DELETE FROM students;
+
+-- 删除表
+DROP TABLE students;
+```
+
+### 高级查询
+
+#### JOIN操作
+
+```sql
+-- 创建另一个表
+CREATE TABLE courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_name TEXT NOT NULL,
+    instructor TEXT
+);
+
+-- 创建关联表
+CREATE TABLE enrollments (
+    student_id INTEGER,
+    course_id INTEGER,
+    grade REAL,
+    FOREIGN KEY (student_id) REFERENCES students(id),
+    FOREIGN KEY (course_id) REFERENCES courses(id)
+);
+
+-- 插入示例数据
+INSERT INTO courses (course_name, instructor) VALUES
+    ('数据库原理', '王教授'),
+    ('数据结构', '李教授'),
+    ('算法设计', '张教授');
+
+INSERT INTO enrollments (student_id, course_id, grade) VALUES
+    (1, 1, 88.5),
+    (1, 2, 92.3),
+    (2, 1, 85.7),
+    (3, 3, 90.2);
+
+-- INNER JOIN
+SELECT s.name, c.course_name, e.grade
+FROM students s
+INNER JOIN enrollments e ON s.id = e.student_id
+INNER JOIN courses c ON e.course_id = c.id;
+
+-- LEFT JOIN
+SELECT s.name, c.course_name
+FROM students s
+LEFT JOIN enrollments e ON s.id = e.student_id
+LEFT JOIN courses c ON e.course_id = c.id;
+```
+
+#### 子查询
+
+```sql
+-- 子查询示例
+SELECT * FROM students
+WHERE grade > (SELECT AVG(grade) FROM students);
+
+-- IN子查询
+SELECT * FROM students
+WHERE id IN (SELECT student_id FROM enrollments WHERE grade > 90);
+
+-- EXISTS子查询
+SELECT s.name FROM students s
+WHERE EXISTS (
+    SELECT 1 FROM enrollments e
+    WHERE e.student_id = s.id AND e.grade > 90
+);
+```
+
+### Python与SQLite集成
+
+#### 基本操作
+
+```python
+import sqlite3
+
+# 连接到数据库（如果不存在则创建）
+conn = sqlite3.connect('school.db')
+cursor = conn.cursor()
+
+# 创建表
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS students (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        age INTEGER,
+        grade REAL
+    )
+''')
+
+# 插入数据
+cursor.execute("INSERT INTO students (name, age, grade) VALUES (?, ?, ?)",
+               ('小明', 18, 85.5))
+
+# 查询数据
+cursor.execute("SELECT * FROM students")
+students = cursor.fetchall()
+
+print("学生列表:")
+for student in students:
+    print(f"ID: {student[0]}, 姓名: {student[1]}, 年龄: {student[2]}, 成绩: {student[3]}")
+
+# 提交事务
+conn.commit()
+
+# 关闭连接
+conn.close()
+```
+
+#### 完整示例
+
+```python
+import sqlite3
+from datetime import datetime
+
+class SchoolDatabase:
+    """学校数据库管理系统"""
+
+    def __init__(self, db_name='school.db'):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self.setup_database()
+
+    def setup_database(self):
+        """初始化数据库"""
+        # 创建学生表
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                age INTEGER,
+                grade REAL,
+                enrollment_date DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+
+        # 创建课程表
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS courses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                course_name TEXT NOT NULL,
+                instructor TEXT,
+                credits INTEGER DEFAULT 3
+            )
+        ''')
+
+        # 创建选课表
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS enrollments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                student_id INTEGER,
+                course_id INTEGER,
+                grade REAL,
+                enrollment_date DATE DEFAULT CURRENT_DATE,
+                FOREIGN KEY (student_id) REFERENCES students(id),
+                FOREIGN KEY (course_id) REFERENCES courses(id)
+            )
+        ''')
+
+        self.conn.commit()
+
+    def add_student(self, name, age, grade):
+        """添加学生"""
+        self.cursor.execute(
+            "INSERT INTO students (name, age, grade) VALUES (?, ?, ?)",
+            (name, age, grade)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def add_course(self, course_name, instructor, credits=3):
+        """添加课程"""
+        self.cursor.execute(
+            "INSERT INTO courses (course_name, instructor, credits) VALUES (?, ?, ?)",
+            (course_name, instructor, credits)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def enroll_student(self, student_id, course_id):
+        """学生选课"""
+        self.cursor.execute(
+            "INSERT INTO enrollments (student_id, course_id) VALUES (?, ?)",
+            (student_id, course_id)
+        )
+        self.conn.commit()
+
+    def update_grade(self, enrollment_id, grade):
+        """更新成绩"""
+        self.cursor.execute(
+            "UPDATE enrollments SET grade = ? WHERE id = ?",
+            (grade, enrollment_id)
+        )
+        self.conn.commit()
+
+    def get_student_grades(self, student_id):
+        """获取学生所有课程成绩"""
+        self.cursor.execute('''
+            SELECT c.course_name, e.grade, e.enrollment_date
+            FROM enrollments e
+            JOIN courses c ON e.course_id = c.id
+            WHERE e.student_id = ?
+            ORDER BY e.enrollment_date
+        ''', (student_id,))
+        return self.cursor.fetchall()
+
+    def get_course_statistics(self, course_id):
+        """获取课程统计信息"""
+        self.cursor.execute('''
+            SELECT
+                COUNT(*) as student_count,
+                AVG(e.grade) as average_grade,
+                MAX(e.grade) as max_grade,
+                MIN(e.grade) as min_grade
+            FROM enrollments e
+            WHERE e.course_id = ? AND e.grade IS NOT NULL
+        ''', (course_id,))
+        return self.cursor.fetchone()
+
+    def get_top_students(self, limit=10):
+        """获取成绩最好的学生"""
+        self.cursor.execute('''
+            SELECT s.name, AVG(e.grade) as average_grade
+            FROM students s
+            JOIN enrollments e ON s.id = e.student_id
+            WHERE e.grade IS NOT NULL
+            GROUP BY s.id, s.name
+            ORDER BY average_grade DESC
+            LIMIT ?
+        ''', (limit,))
+        return self.cursor.fetchall()
+
+    def close(self):
+        """关闭数据库连接"""
+        self.conn.close()
+
+# 使用示例
+def database_demo():
+    # 创建数据库实例
+    db = SchoolDatabase()
+
+    # 添加学生
+    student1_id = db.add_student("张三", 18, 85.5)
+    student2_id = db.add_student("李四", 19, 92.3)
+    student3_id = db.add_student("王五", 17, 78.9)
+
+    # 添加课程
+    course1_id = db.add_course("数据库原理", "王教授", 4)
+    course2_id = db.add_course("数据结构", "李教授", 3)
+    course3_id = db.add_course("算法设计", "张教授", 3)
+
+    # 学生选课
+    db.enroll_student(student1_id, course1_id)
+    db.enroll_student(student1_id, course2_id)
+    db.enroll_student(student2_id, course1_id)
+    db.enroll_student(student2_id, course3_id)
+    db.enroll_student(student3_id, course2_id)
+
+    # 更新成绩
+    enrollments = db.cursor.execute("SELECT id FROM enrollments").fetchall()
+    for i, (enrollment_id,) in enumerate(enrollments):
+        db.update_grade(enrollment_id, 85.0 + i * 3)
+
+    # 查询学生成绩
+    print("=== 学生成绩 ===")
+    grades = db.get_student_grades(student1_id)
+    for course_name, grade, date in grades:
+        print(f"课程: {course_name}, 成绩: {grade}")
+
+    # 查询课程统计
+    print("\n=== 课程统计 ===")
+    stats = db.get_course_statistics(course1_id)
+    print(f"数据库原理 - 学生数: {stats[0]}, 平均成绩: {stats[1]:.1f}")
+
+    # 查询优秀学生
+    print("\n=== 优秀学生 ===")
+    top_students = db.get_top_students(3)
+    for name, avg_grade in top_students:
+        print(f"{name}: 平均成绩 {avg_grade:.1f}")
+
+    # 关闭数据库
+    db.close()
+
+# 运行演示
+# database_demo()
+```
+
+## 练习题与答案
+
+### 1. 基础SQL操作
+
+**问题：** 创建一个图书馆数据库，包含书籍、作者、借阅记录等表，并实现基本的查询功能。
+
+**答案：**
+```sql
+-- 创建图书馆数据库
+CREATE DATABASE library;
+USE library;
+
+-- 创建作者表
+CREATE TABLE authors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    birth_year INTEGER,
+    nationality TEXT
+);
+
+-- 创建书籍表
+CREATE TABLE books (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    author_id INTEGER,
+    isbn TEXT UNIQUE,
+    publication_year INTEGER,
+    genre TEXT,
+    FOREIGN KEY (author_id) REFERENCES authors(id)
+);
+
+-- 创建读者表
+CREATE TABLE readers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE,
+    phone TEXT,
+    registration_date DATE DEFAULT CURRENT_DATE
+);
+
+-- 创建借阅记录表
+CREATE TABLE borrowings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id INTEGER,
+    reader_id INTEGER,
+    borrow_date DATE DEFAULT CURRENT_DATE,
+    due_date DATE,
+    return_date DATE,
+    FOREIGN KEY (book_id) REFERENCES books(id),
+    FOREIGN KEY (reader_id) REFERENCES readers(id)
+);
+
+-- 插入示例数据
+INSERT INTO authors (name, birth_year, nationality) VALUES
+    ('村上春树', 1949, '日本'),
+    ('刘慈欣', 1963, '中国'),
+    ('J.K.罗琳', 1965, '英国');
+
+INSERT INTO books (title, author_id, isbn, publication_year, genre) VALUES
+    ('挪威的森林', 1, '9787532742941', 1987, '小说'),
+    ('三体', 2, '9787536692930', 2008, '科幻'),
+    ('哈利波特与魔法石', 3, '9787020033430', 1997, '奇幻');
+
+INSERT INTO readers (name, email, phone) VALUES
+    ('张三', 'zhangsan@email.com', '13800138000'),
+    ('李四', 'lisi@email.com', '13800138001');
+
+INSERT INTO borrowings (book_id, reader_id, due_date) VALUES
+    (1, 1, DATE('now', '+14 days')),
+    (2, 2, DATE('now', '+21 days'));
+
+-- 查询所有书籍及其作者
+SELECT b.title, a.name as author, b.genre
+FROM books b
+JOIN authors a ON b.author_id = a.id;
+
+-- 查询某读者的借阅记录
+SELECT r.name, b.title, b.borrow_date, b.due_date
+FROM readers r
+JOIN borrowings b ON r.id = b.reader_id
+JOIN books bk ON b.book_id = bk.id
+WHERE r.name = '张三';
+
+-- 查询逾期未还的书籍
+SELECT r.name, b.title, bk.title as book_title, b.due_date
+FROM readers r
+JOIN borrowings b ON r.id = b.reader_id
+JOIN books bk ON b.book_id = bk.id
+WHERE b.return_date IS NULL AND b.due_date < DATE('now');
+```
+
+### 2. 高级查询
+
+**问题：** 使用SQL实现复杂的统计分析查询。
+
+**答案：**
+```sql
+-- 按作者统计书籍数量
+SELECT a.name, COUNT(b.id) as book_count
+FROM authors a
+LEFT JOIN books b ON a.id = b.author_id
+GROUP BY a.id, a.name
+ORDER BY book_count DESC;
+
+-- 查询最受欢迎的书籍（按借阅次数）
+SELECT b.title, COUNT(br.id) as borrow_count
+FROM books b
+LEFT JOIN borrowings br ON b.id = br.book_id
+GROUP BY b.id, b.title
+ORDER BY borrow_count DESC
+LIMIT 10;
+
+-- 查询最活跃的读者
+SELECT r.name, COUNT(br.id) as borrow_count,
+       AVG(JULIANDAY(br.return_date) - JULIANDAY(br.borrow_date)) as avg_days_kept
+FROM readers r
+JOIN borrowings br ON r.id = br.reader_id
+WHERE br.return_date IS NOT NULL
+GROUP BY r.id, r.name
+HAVING borrow_count > 5
+ORDER BY borrow_count DESC;
+
+-- 按年份统计书籍出版趋势
+SELECT publication_year, COUNT(*) as book_count,
+       ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM books), 2) as percentage
+FROM books
+WHERE publication_year IS NOT NULL
+GROUP BY publication_year
+ORDER BY publication_year;
+
+-- 查询逾期率统计
+SELECT
+    COUNT(*) as total_borrowings,
+    COUNT(CASE WHEN return_date IS NULL AND due_date < DATE('now') THEN 1 END) as overdue_count,
+    ROUND(COUNT(CASE WHEN return_date IS NULL AND due_date < DATE('now') THEN 1 END) * 100.0 / COUNT(*), 2) as overdue_rate
+FROM borrowings;
+```
+
+### 3. Python与数据库集成
+
+**问题：** 使用Python和SQLite实现一个完整的图书管理系统。
+
+**答案：**
+```python
+import sqlite3
+from datetime import datetime, timedelta
+
+class LibrarySystem:
+    """图书管理系统"""
+
+    def __init__(self, db_name='library.db'):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self.setup_database()
+
+    def setup_database(self):
+        """初始化数据库"""
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS authors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                birth_year INTEGER,
+                nationality TEXT
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS books (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                author_id INTEGER,
+                isbn TEXT UNIQUE,
+                publication_year INTEGER,
+                genre TEXT,
+                available BOOLEAN DEFAULT TRUE,
+                FOREIGN KEY (author_id) REFERENCES authors(id)
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS readers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE,
+                phone TEXT,
+                registration_date DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS borrowings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER,
+                reader_id INTEGER,
+                borrow_date DATE DEFAULT CURRENT_DATE,
+                due_date DATE,
+                return_date DATE,
+                FOREIGN KEY (book_id) REFERENCES books(id),
+                FOREIGN KEY (reader_id) REFERENCES readers(id)
+            )
+        ''')
+
+        self.conn.commit()
+
+    def add_author(self, name, birth_year=None, nationality=None):
+        """添加作者"""
+        self.cursor.execute(
+            "INSERT INTO authors (name, birth_year, nationality) VALUES (?, ?, ?)",
+            (name, birth_year, nationality)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def add_book(self, title, author_id, isbn=None, publication_year=None, genre=None):
+        """添加书籍"""
+        self.cursor.execute(
+            "INSERT INTO books (title, author_id, isbn, publication_year, genre) VALUES (?, ?, ?, ?, ?)",
+            (title, author_id, isbn, publication_year, genre)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def add_reader(self, name, email=None, phone=None):
+        """添加读者"""
+        self.cursor.execute(
+            "INSERT INTO readers (name, email, phone) VALUES (?, ?, ?)",
+            (name, email, phone)
+        )
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def borrow_book(self, book_id, reader_id, days=14):
+        """借书"""
+        # 检查书籍是否可借
+        self.cursor.execute("SELECT available FROM books WHERE id = ?", (book_id,))
+        available = self.cursor.fetchone()[0]
+
+        if not available:
+            print("书籍已被借出")
+            return False
+
+        # 计算归还日期
+        due_date = datetime.now() + timedelta(days=days)
+
+        # 执行借书操作
+        self.cursor.execute(
+            "INSERT INTO borrowings (book_id, reader_id, due_date) VALUES (?, ?, ?)",
+            (book_id, reader_id, due_date.strftime('%Y-%m-%d'))
+        )
+
+        # 更新书籍状态
+        self.cursor.execute("UPDATE books SET available = FALSE WHERE id = ?", (book_id,))
+
+        self.conn.commit()
+        return True
+
+    def return_book(self, borrowing_id):
+        """还书"""
+        # 更新借阅记录
+        self.cursor.execute(
+            "UPDATE borrowings SET return_date = CURRENT_DATE WHERE id = ?",
+            (borrowing_id,)
+        )
+
+        # 更新书籍状态
+        self.cursor.execute('''
+            UPDATE books SET available = TRUE
+            WHERE id = (SELECT book_id FROM borrowings WHERE id = ?)
+        ''', (borrowing_id,))
+
+        self.conn.commit()
+        return True
+
+    def search_books(self, keyword=None, author=None, genre=None):
+        """搜索书籍"""
+        query = '''
+            SELECT b.id, b.title, a.name as author, b.genre, b.available
+            FROM books b
+            JOIN authors a ON b.author_id = a.id
+            WHERE 1=1
+        '''
+        params = []
+
+        if keyword:
+            query += " AND (b.title LIKE ? OR a.name LIKE ?)"
+            params.extend([f'%{keyword}%', f'%{keyword}%'])
+
+        if author:
+            query += " AND a.name = ?"
+            params.append(author)
+
+        if genre:
+            query += " AND b.genre = ?"
+            params.append(genre)
+
+        self.cursor.execute(query, params)
+        return self.cursor.fetchall()
+
+    def get_reader_borrowings(self, reader_id):
+        """获取读者的借阅记录"""
+        self.cursor.execute('''
+            SELECT b.title, br.borrow_date, br.due_date, br.return_date
+            FROM borrowings br
+            JOIN books b ON br.book_id = b.id
+            WHERE br.reader_id = ?
+            ORDER BY br.borrow_date DESC
+        ''', (reader_id,))
+        return self.cursor.fetchall()
+
+    def get_overdue_books(self):
+        """获取逾期书籍"""
+        self.cursor.execute('''
+            SELECT r.name, b.title, br.borrow_date, br.due_date
+            FROM borrowings br
+            JOIN readers r ON br.reader_id = r.id
+            JOIN books b ON br.book_id = b.id
+            WHERE br.return_date IS NULL AND br.due_date < DATE('now')
+            ORDER BY br.due_date
+        ''')
+        return self.cursor.fetchall()
+
+    def get_library_statistics(self):
+        """获取图书馆统计信息"""
+        stats = {}
+
+        # 总书籍数
+        self.cursor.execute("SELECT COUNT(*) FROM books")
+        stats['total_books'] = self.cursor.fetchone()[0]
+
+        # 可借书籍数
+        self.cursor.execute("SELECT COUNT(*) FROM books WHERE available = TRUE")
+        stats['available_books'] = self.cursor.fetchone()[0]
+
+        # 总读者数
+        self.cursor.execute("SELECT COUNT(*) FROM readers")
+        stats['total_readers'] = self.cursor.fetchone()[0]
+
+        # 当前借出数
+        self.cursor.execute("SELECT COUNT(*) FROM borrowings WHERE return_date IS NULL")
+        stats['current_borrowings'] = self.cursor.fetchone()[0]
+
+        # 逾期数
+        stats['overdue_count'] = len(self.get_overdue_books())
+
+        return stats
+
+    def close(self):
+        """关闭数据库连接"""
+        self.conn.close()
+
+# 使用示例
+def library_demo():
+    # 创建图书馆系统
+    library = LibrarySystem()
+
+    # 添加作者
+    author1_id = library.add_author("村上春树", 1949, "日本")
+    author2_id = library.add_author("刘慈欣", 1963, "中国")
+
+    # 添加书籍
+    book1_id = library.add_book("挪威的森林", author1_id, "9787532742941", 1987, "小说")
+    book2_id = library.add_book("三体", author2_id, "9787536692930", 2008, "科幻")
+
+    # 添加读者
+    reader1_id = library.add_reader("张三", "zhangsan@email.com")
+    reader2_id = library.add_reader("李四", "lisi@email.com")
+
+    # 借书
+    library.borrow_book(book1_id, reader1_id)
+    library.borrow_book(book2_id, reader2_id)
+
+    # 搜索书籍
+    print("=== 搜索结果 ===")
+    results = library.search_books(keyword="森林")
+    for book_id, title, author, genre, available in results:
+        print(f"《{title}》 - {author} ({'可借' if available else '已借出'})")
+
+    # 查看统计信息
+    print("\n=== 图书馆统计 ===")
+    stats = library.get_library_statistics()
+    for key, value in stats.items():
+        print(f"{key}: {value}")
+
+    # 关闭系统
+    library.close()
+
+# 运行演示
+# library_demo()
+```
+
+## 学习建议
+
+1. **掌握SQL基础**：熟练掌握基本的SQL语法
+2. **理解关系模型**：理解表、关系、约束等概念
+3. **练习复杂查询**：掌握JOIN、子查询、聚合函数
+4. **学习性能优化**：了解索引、查询优化
+5. **实践应用**：在实际项目中应用数据库知识
+
+## 扩展资源
+
+- **官方资源**：
+  - [SQLite官方文档](https://www.sqlite.org/docs.html)
+  - [CS50 Week 7 Lecture](https://cs50.harvard.edu/x/2025/weeks/7/)
+
+- **学习工具**：
+  - [DB Browser for SQLite](https://sqlitebrowser.org/)
+  - [SQLFiddle在线练习](https://www.sqlfiddle.com/)
+
+- **深入学习**：
+  - [MySQL教程](https://www.mysqltutorial.org/)
+  - [PostgreSQL文档](https://www.postgresql.org/docs/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 8: Web前端" icon="arrow-right" href="./week8">
+    学习HTML、CSS和JavaScript
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 7的学习！SQL是数据管理的核心语言，掌握SQL将使你能够有效地存储、查询和分析数据。下一周我们将学习Web前端开发，开始构建完整的Web应用。*

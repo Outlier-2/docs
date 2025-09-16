@@ -1,0 +1,655 @@
+---
+title: "Lecture 5: 容错机制 - Raft (1)"
+description: "Raft共识算法的第一部分：领导者选举和基本概念"
+---
+
+# Lecture 5: 容错机制 - Raft (1)
+
+## 本周内容
+
+- **Raft算法概述**：设计目标、核心概念和与Paxos的对比
+- **状态机实现**：Leader、Follower、Candidate状态的完整实现
+- **领导者选举**：选举过程、超时机制、故障处理
+- **实践项目**：Lab 3A - Raft领导者选举实现
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/L3a_A5aRg4c" title="Raft共识算法" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### Raft的设计哲学
+
+Raft是由Diego Ongaro和John Ousterhout在2013年提出的共识算法，主要设计目标是：
+
+**可理解性 (Understandability)**
+- 相比Paxos算法，Raft的设计更加直观
+- 将共识问题分解为几个相对独立的子问题
+- 通过状态机模型简化理解和实现
+
+**安全性 (Safety)**
+- 确保在任意情况下都不会出现错误的状态
+- 选举安全性：每个任期最多选举一个领导者
+- 日志匹配：领导者日志必须包含所有已提交的日志条目
+
+**可用性 (Availability)**
+- 只要大多数节点正常工作，系统就能正常运行
+- 能够处理网络分区和节点故障
+- 具有自动故障恢复能力
+
+### Raft基础架构
+
+```
+        +-------------------+
+        |   Raft Cluster    |
+        +-------------------+
+        |                   |
+        |  +-------------+  |
+        |  |   Leader    |  |
+        |  +-------------+  |
+        |         |         |
++-------+-------+ +-------+-------+
+|               | |               |
+|    Follower   | |    Follower   |
+|               | |               |
++---------------+ +---------------+
+```
+
+### Raft状态转换图
+
+```
+    +-------------+
+    |   Follower  |
+    |  (被动等待)  |
+    +-------------+
+           |
+           | 选举超时
+           v
+    +-------------+
+    |  Candidate   |
+    | (发起选举)   |
+    +-------------+
+           |
+           | 获得多数票
+           v
+    +-------------+
+    |   Leader     |
+    | (主动领导)   |
+    +-------------+
+           |
+           | 发现更高任期
+           v
+    +-------------+
+    |   Follower   |
+    +-------------+
+```
+
+## Raft算法详解
+
+### 1. 状态定义
+
+每个Raft节点有三种状态：
+
+**Follower（跟随者）**
+- 被动响应Leader和Candidate的请求
+- 不主动发送任何RPC
+- 定期检查是否收到Leader的心跳
+
+**Candidate（候选者）**
+- 当选举超时时，从Follower转为Candidate
+- 向其他节点请求投票
+- 如果获得多数票，转为Leader
+
+**Leader（领导者）**
+- 处理所有客户端请求
+- 复制日志到所有Follower
+- 定期发送心跳维持领导地位
+
+### 2. 领导者选举机制
+
+**选举触发条件**
+- Follower在选举超时时间内没有收到Leader的心跳
+- 选举超时时间通常是随机的（150-300ms）
+
+**选举过程**
+1. **状态转换**：Follower → Candidate
+2. **增加任期**：currentTerm++
+3. **投票给自己**：votedFor = 自己
+4. **重置选举定时器**
+5. **并行请求投票**：向所有其他节点发送RequestVote RPC
+6. **等待结果**：
+   - 获得多数票：成为Leader
+   - 收到更高任期的RPC：转为Follower
+   - 选举超时：重新开始选举
+
+### 3. RPC协议
+
+**RequestVote RPC**
+```go
+type RequestVoteArgs struct {
+    Term         int  // 候选者的任期
+    CandidateId  int  // 候选者ID
+    LastLogIndex int  // 候选者最后日志索引
+    LastLogTerm  int  // 候选者最后日志任期
+}
+
+type RequestVoteReply struct {
+    Term        int  // 当前任期，用于候选者更新自己
+    VoteGranted bool // 是否投票
+}
+```
+
+**AppendEntries RPC（心跳）**
+```go
+type AppendEntriesArgs struct {
+    Term         int        // Leader的任期
+    LeaderId     int        // Leader的ID
+    PrevLogIndex int        // 前一个日志索引
+    PrevLogTerm  int        // 前一个日志任期
+    Entries      []LogEntry // 日志条目
+    LeaderCommit int        // Leader的提交索引
+}
+
+type AppendEntriesReply struct {
+    Term    int  // 当前任期，用于Leader更新自己
+    Success bool // 是否成功
+}
+```
+
+## 完整实现代码
+
+### 1. Raft结构体定义
+
+```go
+package raft
+
+import (
+    "math/rand"
+    "sync"
+    "time"
+)
+
+const (
+    Follower = iota
+    Candidate
+    Leader
+)
+
+type LogEntry struct {
+    Term    int
+    Command interface{}
+}
+
+type Raft struct {
+    mu sync.Mutex
+
+    // 持久化状态
+    currentTerm int
+    votedFor    int
+    log         []LogEntry
+
+    // 易失性状态
+    commitIndex int
+    lastApplied int
+
+    // Leader状态
+    nextIndex  []int
+    matchIndex []int
+
+    // 节点信息
+    peers []*rpc.ClientEnd
+    me    int
+
+    // 状态管理
+    state         int
+    electionTimer *time.Timer
+    heartbeatChan chan bool
+
+    // 其他
+    applyCh chan ApplyMsg
+    dead    int32
+}
+
+type ApplyMsg struct {
+    CommandValid bool
+    Command      interface{}
+    CommandIndex int
+}
+```
+
+### 2. 选举机制实现
+
+```go
+// 启动选举过程
+func (rf *Raft) startElection() {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    // 转为候选者状态
+    rf.state = Candidate
+    rf.currentTerm++
+    rf.votedFor = rf.me
+
+    // 重置选举定时器
+    rf.resetElectionTimer()
+
+    // 准备请求投票参数
+    args := RequestVoteArgs{
+        Term:         rf.currentTerm,
+        CandidateId:  rf.me,
+        LastLogIndex: len(rf.log) - 1,
+        LastLogTerm:  rf.getLastLogTerm(),
+    }
+
+    // 并行请求投票
+    votes := 1 // 先给自己投票
+    replyChan := make(chan bool, len(rf.peers))
+
+    for i := range rf.peers {
+        if i == rf.me {
+            continue
+        }
+
+        go func(server int) {
+            reply := RequestVoteReply{}
+            if rf.sendRequestVote(server, &args, &reply) {
+                rf.mu.Lock()
+                defer rf.mu.Unlock()
+
+                // 检查任期
+                if reply.Term > rf.currentTerm {
+                    rf.currentTerm = reply.Term
+                    rf.state = Follower
+                    rf.votedFor = -1
+                    return
+                }
+
+                // 检查投票结果
+                if reply.VoteGranted {
+                    replyChan <- true
+                }
+            }
+        }(i)
+    }
+
+    // 等待投票结果
+    go func() {
+        timeout := time.After(time.Duration(200) * time.Millisecond)
+
+        for {
+            select {
+            case <-replyChan:
+                votes++
+                if votes > len(rf.peers)/2 {
+                    rf.mu.Lock()
+                    if rf.state == Candidate {
+                        rf.becomeLeader()
+                    }
+                    rf.mu.Unlock()
+                    return
+                }
+            case <-timeout:
+                return
+            }
+        }
+    }()
+}
+
+// 成为Leader
+func (rf *Raft) becomeLeader() {
+    rf.state = Leader
+
+    // 初始化Leader状态
+    rf.nextIndex = make([]int, len(rf.peers))
+    rf.matchIndex = make([]int, len(rf.peers))
+
+    for i := range rf.peers {
+        rf.nextIndex[i] = len(rf.log)
+        rf.matchIndex[i] = 0
+    }
+
+    // 开始发送心跳
+    go rf.sendHeartbeats()
+
+    // 重置选举定时器
+    rf.resetElectionTimer()
+}
+
+// 发送心跳
+func (rf *Raft) sendHeartbeats() {
+    for {
+        rf.mu.Lock()
+        if rf.state != Leader {
+            rf.mu.Unlock()
+            return
+        }
+        rf.mu.Unlock()
+
+        // 发送AppendEntries RPC作为心跳
+        for i := range rf.peers {
+            if i == rf.me {
+                continue
+            }
+
+            go func(server int) {
+                rf.mu.Lock()
+                if rf.state != Leader {
+                    rf.mu.Unlock()
+                    return
+                }
+
+                args := AppendEntriesArgs{
+                    Term:         rf.currentTerm,
+                    LeaderId:     rf.me,
+                    PrevLogIndex: len(rf.log) - 1,
+                    PrevLogTerm:  rf.getLastLogTerm(),
+                    Entries:      []LogEntry{}, // 空日志作为心跳
+                    LeaderCommit: rf.commitIndex,
+                }
+
+                rf.mu.Unlock()
+
+                reply := AppendEntriesReply{}
+                if rf.sendAppendEntries(server, &args, &reply) {
+                    rf.mu.Lock()
+                    defer rf.mu.Unlock()
+
+                    if reply.Term > rf.currentTerm {
+                        rf.currentTerm = reply.Term
+                        rf.state = Follower
+                        rf.votedFor = -1
+                    }
+                }
+            }(i)
+        }
+
+        time.Sleep(100 * time.Millisecond) // 心跳间隔
+    }
+}
+```
+
+### 3. 选举定时器管理
+
+```go
+// 重置选举定时器
+func (rf *Raft) resetElectionTimer() {
+    if rf.electionTimer != nil {
+        rf.electionTimer.Stop()
+    }
+
+    // 随机选举超时时间 (150-300ms)
+    timeout := time.Duration(150 + rand.Intn(150)) * time.Millisecond
+    rf.electionTimer = time.AfterFunc(timeout, rf.electionTimeout)
+}
+
+// 选举超时处理
+func (rf *Raft) electionTimeout() {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    if rf.state == Follower || rf.state == Candidate {
+        rf.startElection()
+    }
+}
+```
+
+### 4. RPC处理函数
+
+```go
+// 处理RequestVote RPC
+func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    reply.Term = rf.currentTerm
+    reply.VoteGranted = false
+
+    // 检查任期
+    if args.Term < rf.currentTerm {
+        return
+    }
+
+    // 更新任期
+    if args.Term > rf.currentTerm {
+        rf.currentTerm = args.Term
+        rf.state = Follower
+        rf.votedFor = -1
+    }
+
+    // 检查是否已经投票
+    if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
+        return
+    }
+
+    // 检查日志的新鲜度
+    lastLogTerm := rf.getLastLogTerm()
+    if args.LastLogTerm < lastLogTerm {
+        return
+    }
+
+    if args.LastLogTerm == lastLogTerm && args.LastLogIndex < len(rf.log)-1 {
+        return
+    }
+
+    // 投票
+    reply.VoteGranted = true
+    rf.votedFor = args.CandidateId
+    rf.resetElectionTimer()
+}
+
+// 处理AppendEntries RPC
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
+
+    reply.Term = rf.currentTerm
+    reply.Success = false
+
+    // 检查任期
+    if args.Term < rf.currentTerm {
+        return
+    }
+
+    // 更新任期
+    if args.Term > rf.currentTerm {
+        rf.currentTerm = args.Term
+        rf.state = Follower
+        rf.votedFor = -1
+    }
+
+    // 重置选举定时器（收到心跳）
+    rf.resetElectionTimer()
+
+    // 检查前一个日志
+    if args.PrevLogIndex >= 0 {
+        if args.PrevLogIndex >= len(rf.log) {
+            return
+        }
+        if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+            return
+        }
+    }
+
+    // 检查提交索引
+    if args.LeaderCommit > rf.commitIndex {
+        rf.commitIndex = min(args.LeaderCommit, len(rf.log)-1)
+        rf.applyCommittedEntries()
+    }
+
+    reply.Success = true
+}
+
+// 应用已提交的日志条目
+func (rf *Raft) applyCommittedEntries() {
+    for rf.lastApplied < rf.commitIndex {
+        rf.lastApplied++
+        msg := ApplyMsg{
+            CommandValid: true,
+            Command:      rf.log[rf.lastApplied].Command,
+            CommandIndex: rf.lastApplied,
+        }
+        rf.applyCh <- msg
+    }
+}
+```
+
+## 实践项目：Lab 3A
+
+### 项目目标
+
+实现Raft共识算法的领导者选举部分，包括：
+
+1. **状态管理**：实现三种状态的转换
+2. **选举机制**：处理选举超时和投票过程
+3. **RPC通信**：实现RequestVote和AppendEntries RPC
+4. **持久化**：保存关键状态到磁盘
+
+### 测试用例
+
+```go
+package raft
+
+import (
+    "testing"
+    "time"
+)
+
+func TestInitialElection(t *testing.T) {
+    // 测试初始领导者选举
+    servers := MakeServers(3)
+    defer ShutdownServers(servers)
+
+    // 等待选举完成
+    time.Sleep(1 * time.Second)
+
+    // 检查是否只有一个Leader
+    leaders := CountLeaders(servers)
+    if leaders != 1 {
+        t.Fatalf("期望1个Leader，实际有%d个", leaders)
+    }
+}
+
+func TestReElection(t *testing.T) {
+    // 测试重新选举
+    servers := MakeServers(3)
+    defer ShutdownServers(servers)
+
+    // 等待初始选举
+    time.Sleep(1 * time.Second)
+
+    // 关闭当前Leader
+    leader := FindLeader(servers)
+    servers[leader].Kill()
+
+    // 等待重新选举
+    time.Sleep(1 * time.Second)
+
+    // 检查是否有新的Leader
+    newLeader := FindLeader(servers)
+    if newLeader == -1 {
+        t.Fatal("没有选举出新Leader")
+    }
+}
+
+func TestMultipleCandidates(t *testing.T) {
+    // 测试多个候选者的情况
+    servers := MakeServers(5)
+    defer ShutdownServers(servers)
+
+    // 等待选举完成
+    time.Sleep(1 * time.Second)
+
+    // 关闭网络，让多个节点同时超时
+    PartitionNetwork(servers)
+    time.Sleep(500 * time.Millisecond)
+    RepairNetwork(servers)
+
+    // 等待重新选举
+    time.Sleep(1 * time.Second)
+
+    // 检查选举结果
+    leaders := CountLeaders(servers)
+    if leaders != 1 {
+        t.Fatalf("期望1个Leader，实际有%d个", leaders)
+    }
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **Raft vs Paxos**：为什么Raft比Paxos更容易理解和实现？
+
+2. **选举安全性**：证明Raft的选举安全性（每个任期最多一个Leader）。
+
+3. **分裂投票**：什么是分裂投票问题？Raft如何解决这个问题？
+
+4. **随机超时**：为什么选举超时需要随机化？
+
+### 编程题
+
+1. **实现Raft**：完成Raft的完整实现，包括持久化和日志复制。
+
+2. **测试框架**：编写一个测试框架来验证Raft的正确性。
+
+3. **性能优化**：优化Raft的性能，减少不必要的RPC调用。
+
+4. **可视化工具**：创建一个可视化工具来展示Raft的状态转换。
+
+### 设计题
+
+1. **集群管理**：设计一个动态添加/删除节点的机制。
+
+2. **快照机制**：实现日志压缩的快照功能。
+
+3. **客户端接口**：设计一个完整的客户端接口，包括重试机制。
+
+4. **监控和诊断**：添加监控和诊断功能，帮助调试Raft集群。
+
+## 常见问题
+
+### Q: 为什么需要随机选举超时？
+
+A: 随机选举超时可以避免多个节点同时发起选举，从而减少分裂投票的可能性。这是Raft解决选举冲突的关键机制。
+
+### Q: Raft如何处理网络分区？
+
+A: Raft通过多数派原则处理网络分区。只有包含多数节点的分区才能选举出Leader并处理请求，少数分区会进入候选者状态但无法获得多数票。
+
+### Q: 如何测试Raft的正确性？
+
+A: 需要编写大量的测试用例，包括正常情况、网络分区、节点故障、重启等各种场景。同时需要使用形式化验证工具来证明算法的正确性。
+
+## 扩展资源
+
+### 必读论文
+
+1. **[Raft论文](https://raft.github.io/raft.pdf)** - Raft的原始论文
+2. **[Paxos Made Simple](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf)** - Lamport的Paxos简化版
+3. **[In Search of an Understandable Consensus Algorithm](https://raft.github.io/)** - Raft的设计思路
+
+### 实践工具
+
+1. **[Raft Visualization](https://raft.github.io/)** - Raft的可视化演示
+2. **[etcd](https://etcd.io/)** - 基于Raft的分布式键值存储
+3. **[Consul](https://www.consul.io/)** - 支持Raft的服务发现工具
+
+### 在线课程
+
+1. **[MIT 6.824视频](https://www.youtube.com/watch?v=L3a_A5aRg4c)** - MIT的分布式系统课程
+2. **[Raft讲座](https://www.youtube.com/watch?v=YbZ3zDzDnrw)** - Diego Ongaro的Raft讲座
+3. **[Coursera分布式系统](https://www.coursera.org/learn/cloud-computing)** - 分布式系统课程
+
+## 下一步学习
+
+在完成Lab 3A后，你应该继续学习：
+
+1. **Lab 3B**: 实现Raft的日志复制功能
+2. **Lab 3C**: 实现持久化和故障恢复
+3. **Lab 4**: 基于Raft构建分布式键值存储
+4. **高级主题**: 线性一致性、配置变更、优化技巧
+
+---
+
+*Raft共识算法是现代分布式系统的基石，掌握它对理解和使用各种分布式系统至关重要。通过实际实现Raft，你将深入理解分布式一致性问题的解决方案。*

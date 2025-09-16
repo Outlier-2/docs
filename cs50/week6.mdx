@@ -1,0 +1,783 @@
+---
+title: "Week 6 - Python基础"
+description: "CS50第6周（2025版本）：学习Python编程语言基础"
+---
+
+# Week 6 - Python基础
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/6" title="CS50 2025 - Week 6" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **Python基础**：语法特点、与C语言对比
+- **数据类型**：整数、浮点数、字符串、布尔值、列表、字典、元组
+- **控制结构**：条件语句、循环结构
+- **函数**：定义、参数、返回值、lambda函数
+- **异常处理**：try-except语句
+- **模块导入**：标准库、第三方库
+- **文件操作**：读写文件、CSV处理
+
+## 核心概念
+
+### Python语言特点
+
+#### Python vs C语言
+
+Python相比C语言的主要优势：
+- **简洁的语法**：无需声明变量类型，代码更简洁
+- **自动内存管理**：无需手动分配和释放内存
+- **丰富的标准库**：内置大量实用功能
+- **解释型语言**：无需编译，运行即执行
+- **面向对象**：支持面向对象编程
+
+#### 基本语法示例
+
+```python
+# Python Hello World
+print("Hello, World!")
+
+# 变量赋值（无需类型声明）
+name = "Alice"
+age = 25
+height = 1.65
+is_student = True
+
+print(f"姓名: {name}, 年龄: {age}, 身高: {height}m, 学生: {is_student}")
+```
+
+### 数据类型
+
+#### 基本数据类型
+
+```python
+# 整数
+integer_num = 42
+print(f"整数: {integer_num}")
+
+# 浮点数
+float_num = 3.14159
+print(f"浮点数: {float_num}")
+
+# 字符串
+text = "Python编程"
+print(f"字符串: {text}")
+
+# 布尔值
+is_true = True
+is_false = False
+print(f"布尔值: {is_true}, {is_false}")
+
+# 类型转换
+num_str = "123"
+converted_num = int(num_str)
+print(f"字符串转整数: {converted_num}")
+```
+
+#### 复合数据类型
+
+```python
+# 列表（可变）
+fruits = ["苹果", "香蕉", "橙子"]
+fruits.append("葡萄")
+print(f"水果列表: {fruits}")
+
+# 元组（不可变）
+coordinates = (10, 20)
+print(f"坐标: {coordinates}")
+
+# 字典（键值对）
+person = {
+    "name": "张三",
+    "age": 30,
+    "city": "北京"
+}
+print(f"个人信息: {person}")
+
+# 集合（去重）
+unique_numbers = {1, 2, 2, 3, 3, 3}
+print(f"唯一数字: {unique_numbers}")
+```
+
+### 控制结构
+
+#### 条件语句
+
+```python
+# if-elif-else结构
+score = 85
+
+if score >= 90:
+    grade = "A"
+elif score >= 80:
+    grade = "B"
+elif score >= 70:
+    grade = "C"
+elif score >= 60:
+    grade = "D"
+else:
+    grade = "F"
+
+print(f"分数 {score} 对应等级: {grade}")
+
+# 三元运算符
+age = 20
+status = "成年" if age >= 18 else "未成年"
+print(f"状态: {status}")
+```
+
+#### 循环结构
+
+```python
+# for循环
+print("for循环示例:")
+for i in range(5):
+    print(f"数字: {i}")
+
+# 遍历列表
+fruits = ["苹果", "香蕉", "橙子"]
+print("\n遍历水果:")
+for fruit in fruits:
+    print(f"水果: {fruit}")
+
+# while循环
+print("\nwhile循环示例:")
+count = 0
+while count < 3:
+    print(f"计数: {count}")
+    count += 1
+
+# 列表推导式
+squares = [x**2 for x in range(10)]
+print(f"\n平方数列表: {squares}")
+
+# 字典推导式
+word_lengths = {word: len(word) for word in ["hello", "world", "python"]}
+print(f"单词长度: {word_lengths}")
+```
+
+### 函数
+
+#### 函数定义和调用
+
+```python
+# 基本函数
+def greet(name):
+    """问候函数"""
+    return f"你好, {name}!"
+
+message = greet("小明")
+print(message)
+
+# 带默认参数的函数
+def calculate_area(length, width=1):
+    """计算矩形面积"""
+    return length * width
+
+area1 = calculate_area(5, 3)
+area2 = calculate_area(5)  # 使用默认宽度
+print(f"面积1: {area1}, 面积2: {area2}")
+
+# 可变参数函数
+def sum_all(*args):
+    """计算所有参数的和"""
+    return sum(args)
+
+total = sum_all(1, 2, 3, 4, 5)
+print(f"总和: {total}")
+
+# 关键字参数函数
+def create_user(name, age, **kwargs):
+    """创建用户信息"""
+    user = {"name": name, "age": age}
+    user.update(kwargs)
+    return user
+
+user_info = create_user("张三", 25, city="北京", hobby="编程")
+print(f"用户信息: {user_info}")
+```
+
+#### Lambda函数和高阶函数
+
+```python
+# Lambda函数
+multiply = lambda x, y: x * y
+result = multiply(5, 3)
+print(f"5 * 3 = {result}")
+
+# 内置高阶函数
+numbers = [1, 2, 3, 4, 5]
+
+# map函数
+squared = list(map(lambda x: x**2, numbers))
+print(f"平方数: {squared}")
+
+# filter函数
+even_numbers = list(filter(lambda x: x % 2 == 0, numbers))
+print(f"偶数: {even_numbers}")
+
+# reduce函数
+from functools import reduce
+product = reduce(lambda x, y: x * y, numbers)
+print(f"乘积: {product}")
+```
+
+### 异常处理
+
+#### 基本异常处理
+
+```python
+# 基本的try-except
+try:
+    number = int("abc")
+except ValueError:
+    print("无法将字符串转换为整数")
+
+# 多个异常类型
+try:
+    result = 10 / 0
+except ZeroDivisionError:
+    print("除数不能为零")
+except TypeError:
+    print("类型错误")
+except Exception as e:
+    print(f"发生异常: {e}")
+
+# try-except-else-finally
+try:
+    file = open("example.txt", "r")
+    content = file.read()
+except FileNotFoundError:
+    print("文件不存在")
+else:
+    print("文件读取成功")
+    print(f"内容: {content}")
+finally:
+    if 'file' in locals():
+        file.close()
+    print("资源清理完成")
+```
+
+#### 自定义异常
+
+```python
+# 自定义异常类
+class NegativeNumberError(Exception):
+    """负数异常"""
+    pass
+
+def calculate_square_root(number):
+    """计算平方根"""
+    if number < 0:
+        raise NegativeNumberError("不能计算负数的平方根")
+    return number ** 0.5
+
+# 使用自定义异常
+try:
+    result = calculate_square_root(-4)
+except NegativeNumberError as e:
+    print(f"错误: {e}")
+else:
+    print(f"平方根: {result}")
+```
+
+### 模块和包
+
+#### 标准库使用
+
+```python
+# 数学模块
+import math
+print(f"圆周率: {math.pi}")
+print(f"2的平方根: {math.sqrt(2)}")
+
+# 随机模块
+import random
+random_numbers = [random.randint(1, 100) for _ in range(5)]
+print(f"随机数: {random_numbers}")
+
+# 时间模块
+import time
+current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+print(f"当前时间: {current_time}")
+
+# 系统模块
+import sys
+print(f"Python版本: {sys.version}")
+print(f"平台: {sys.platform}")
+```
+
+#### 第三方库安装和使用
+
+```python
+# 安装requests库: pip install requests
+import requests
+
+# 发送HTTP请求
+try:
+    response = requests.get("https://httpbin.org/get")
+    if response.status_code == 200:
+        data = response.json()
+        print(f"响应数据: {data}")
+    else:
+        print(f"请求失败，状态码: {response.status_code}")
+except Exception as e:
+    print(f"网络请求错误: {e}")
+
+# 安装PIL库: pip install Pillow
+from PIL import Image
+
+try:
+    # 创建一个简单的图像
+    img = Image.new('RGB', (100, 100), color='red')
+    img.save('red_image.png')
+    print("图像创建成功")
+except Exception as e:
+    print(f"图像处理错误: {e}")
+```
+
+### 文件操作
+
+#### 文本文件读写
+
+```python
+# 写入文件
+with open("example.txt", "w", encoding="utf-8") as file:
+    file.write("Hello, World!\n")
+    file.write("这是Python文件操作示例\n")
+    file.write("包含中文内容\n")
+
+# 读取文件
+with open("example.txt", "r", encoding="utf-8") as file:
+    content = file.read()
+    print("文件内容:")
+    print(content)
+
+# 逐行读取
+with open("example.txt", "r", encoding="utf-8") as file:
+    print("\n逐行读取:")
+    for line in file:
+        print(f"行: {line.strip()}")
+
+# 追加内容
+with open("example.txt", "a", encoding="utf-8") as file:
+    file.write("这是追加的内容\n")
+```
+
+#### CSV文件处理
+
+```python
+import csv
+
+# 写入CSV文件
+with open("students.csv", "w", newline="", encoding="utf-8") as file:
+    writer = csv.writer(file)
+    writer.writerow(["姓名", "年龄", "分数"])
+    writer.writerow(["张三", 20, 85])
+    writer.writerow(["李四", 21, 92])
+    writer.writerow(["王五", 19, 78])
+
+# 读取CSV文件
+with open("students.csv", "r", encoding="utf-8") as file:
+    reader = csv.reader(file)
+    print("\n学生信息:")
+    for row in reader:
+        print(f"姓名: {row[0]}, 年龄: {row[1]}, 分数: {row[2]}")
+```
+
+#### JSON文件处理
+
+```python
+import json
+
+# Python字典转换为JSON
+student = {
+    "name": "张三",
+    "age": 20,
+    "grades": [85, 92, 78],
+    "is_student": True
+}
+
+# 写入JSON文件
+with open("student.json", "w", encoding="utf-8") as file:
+    json.dump(student, file, ensure_ascii=False, indent=2)
+
+# 读取JSON文件
+with open("student.json", "r", encoding="utf-8") as file:
+    loaded_student = json.load(file)
+    print("\n从JSON加载的学生信息:")
+    print(json.dumps(loaded_student, ensure_ascii=False, indent=2))
+```
+
+## 实用项目示例
+
+### 简单计算器
+
+```python
+def calculator():
+    """简单计算器程序"""
+    print("=== Python计算器 ===")
+
+    while True:
+        try:
+            # 获取用户输入
+            num1 = float(input("请输入第一个数字: "))
+            operator = input("请输入运算符 (+, -, *, /) 或 'q' 退出: ")
+
+            if operator.lower() == 'q':
+                print("感谢使用计算器！")
+                break
+
+            num2 = float(input("请输入第二个数字: "))
+
+            # 执行计算
+            if operator == '+':
+                result = num1 + num2
+            elif operator == '-':
+                result = num1 - num2
+            elif operator == '*':
+                result = num1 * num2
+            elif operator == '/':
+                if num2 == 0:
+                    print("错误：除数不能为零")
+                    continue
+                result = num1 / num2
+            else:
+                print("错误：无效的运算符")
+                continue
+
+            print(f"结果: {num1} {operator} {num2} = {result}")
+            print("-" * 30)
+
+        except ValueError:
+            print("错误：请输入有效的数字")
+        except Exception as e:
+            print(f"发生错误: {e}")
+
+# 运行计算器
+# calculator()
+```
+
+### 文件处理工具
+
+```python
+import os
+import glob
+
+def file_processor():
+    """文件处理工具"""
+    print("=== 文件处理工具 ===")
+
+    while True:
+        print("\n选项:")
+        print("1. 列出当前目录文件")
+        print("2. 创建文件")
+        print("3. 读取文件")
+        print("4. 删除文件")
+        print("5. 退出")
+
+        choice = input("请选择操作 (1-5): ")
+
+        if choice == '1':
+            # 列出文件
+            files = os.listdir('.')
+            print("当前目录文件:")
+            for file in files:
+                if os.path.isfile(file):
+                    size = os.path.getsize(file)
+                    print(f"  {file} ({size} bytes)")
+
+        elif choice == '2':
+            # 创建文件
+            filename = input("请输入文件名: ")
+            content = input("请输入文件内容: ")
+            try:
+                with open(filename, "w", encoding="utf-8") as file:
+                    file.write(content)
+                print(f"文件 {filename} 创建成功")
+            except Exception as e:
+                print(f"创建文件失败: {e}")
+
+        elif choice == '3':
+            # 读取文件
+            filename = input("请输入要读取的文件名: ")
+            try:
+                with open(filename, "r", encoding="utf-8") as file:
+                    content = file.read()
+                print(f"文件内容:\n{content}")
+            except FileNotFoundError:
+                print("文件不存在")
+            except Exception as e:
+                print(f"读取文件失败: {e}")
+
+        elif choice == '4':
+            # 删除文件
+            filename = input("请输入要删除的文件名: ")
+            try:
+                os.remove(filename)
+                print(f"文件 {filename} 删除成功")
+            except FileNotFoundError:
+                print("文件不存在")
+            except Exception as e:
+                print(f"删除文件失败: {e}")
+
+        elif choice == '5':
+            print("感谢使用文件处理工具！")
+            break
+
+        else:
+            print("无效选择，请重试")
+
+# 运行文件处理工具
+# file_processor()
+```
+
+## 练习题与答案
+
+### 1. Python基础语法
+
+**问题：** 编写一个Python程序，将摄氏温度转换为华氏温度。
+
+**答案：**
+```python
+def celsius_to_fahrenheit(celsius):
+    """摄氏度转华氏度"""
+    fahrenheit = (celsius * 9/5) + 32
+    return fahrenheit
+
+def fahrenheit_to_celsius(fahrenheit):
+    """华氏度转摄氏度"""
+    celsius = (fahrenheit - 32) * 5/9
+    return celsius
+
+# 测试温度转换
+temperatures_c = [0, 25, 37, 100]
+print("摄氏度转华氏度:")
+for temp in temperatures_c:
+    f_temp = celsius_to_fahrenheit(temp)
+    print(f"{temp}°C = {f_temp:.1f}°F")
+
+temperatures_f = [32, 77, 98.6, 212]
+print("\n华氏度转摄氏度:")
+for temp in temperatures_f:
+    c_temp = fahrenheit_to_celsius(temp)
+    print(f"{temp}°F = {c_temp:.1f}°C")
+```
+
+### 2. 数据结构操作
+
+**问题：** 实现一个简单的学生管理系统，能够添加、删除、查询学生信息。
+
+**答案：**
+```python
+class StudentManager:
+    """学生管理系统"""
+
+    def __init__(self):
+        self.students = []
+
+    def add_student(self, name, age, grade):
+        """添加学生"""
+        student = {
+            'id': len(self.students) + 1,
+            'name': name,
+            'age': age,
+            'grade': grade
+        }
+        self.students.append(student)
+        print(f"学生 {name} 添加成功")
+
+    def remove_student(self, student_id):
+        """删除学生"""
+        for i, student in enumerate(self.students):
+            if student['id'] == student_id:
+                removed_student = self.students.pop(i)
+                print(f"学生 {removed_student['name']} 删除成功")
+                return True
+        print(f"未找到ID为 {student_id} 的学生")
+        return False
+
+    def find_student(self, name):
+        """查找学生"""
+        found_students = []
+        for student in self.students:
+            if name.lower() in student['name'].lower():
+                found_students.append(student)
+
+        if found_students:
+            print(f"找到 {len(found_students)} 名学生:")
+            for student in found_students:
+                print(f"  ID: {student['id']}, 姓名: {student['name']}, 年龄: {student['age']}, 成绩: {student['grade']}")
+        else:
+            print(f"未找到姓名包含 '{name}' 的学生")
+
+    def list_all_students(self):
+        """列出所有学生"""
+        if not self.students:
+            print("暂无学生信息")
+            return
+
+        print("所有学生信息:")
+        for student in self.students:
+            print(f"  ID: {student['id']}, 姓名: {student['name']}, 年龄: {student['age']}, 成绩: {student['grade']}")
+
+    def get_average_grade(self):
+        """计算平均成绩"""
+        if not self.students:
+            return 0
+
+        total_grade = sum(student['grade'] for student in self.students)
+        return total_grade / len(self.students)
+
+# 使用学生管理系统
+def student_management_demo():
+    manager = StudentManager()
+
+    # 添加学生
+    manager.add_student("张三", 18, 85)
+    manager.add_student("李四", 19, 92)
+    manager.add_student("王五", 17, 78)
+
+    # 列出所有学生
+    print("\n=== 所有学生 ===")
+    manager.list_all_students()
+
+    # 查找学生
+    print("\n=== 查找学生 ===")
+    manager.find_student("张")
+
+    # 计算平均成绩
+    average = manager.get_average_grade()
+    print(f"\n平均成绩: {average:.1f}")
+
+    # 删除学生
+    print("\n=== 删除学生 ===")
+    manager.remove_student(2)
+    manager.list_all_students()
+
+# 运行演示
+# student_management_demo()
+```
+
+### 3. 文件处理练习
+
+**问题：** 编写一个程序，统计文本文件中每个单词的出现频率。
+
+**答案：**
+```python
+import re
+from collections import Counter
+
+def word_frequency_counter(filename):
+    """统计文件中单词频率"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            text = file.read()
+
+        # 清理文本：转换为小写，移除标点符号
+        cleaned_text = re.sub(r'[^\w\s]', '', text.lower())
+
+        # 分割单词
+        words = cleaned_text.split()
+
+        # 统计词频
+        word_counts = Counter(words)
+
+        return word_counts
+
+    except FileNotFoundError:
+        print(f"文件 {filename} 不存在")
+        return None
+    except Exception as e:
+        print(f"处理文件时发生错误: {e}")
+        return None
+
+def display_word_frequencies(word_counts, top_n=10):
+    """显示词频统计结果"""
+    if not word_counts:
+        print("无词频数据")
+        return
+
+    print(f"=== 词频统计 (前{top_n}个) ===")
+
+    # 按频率排序
+    sorted_words = word_counts.most_common(top_n)
+
+    for word, count in sorted_words:
+        print(f"{word}: {count}")
+
+def create_sample_file():
+    """创建示例文件"""
+    sample_text = """
+    Python is a programming language that lets you work quickly
+    and integrate systems more effectively. Python is easy to learn
+    and powerful programming language. Many programmers love Python
+    because of its simplicity and readability. Python can be used
+    for web development, data analysis, artificial intelligence,
+    and many other applications.
+    """
+
+    with open("sample.txt", "w", encoding="utf-8") as file:
+        file.write(sample_text)
+
+# 运行词频统计
+def word_frequency_demo():
+    # 创建示例文件
+    create_sample_file()
+
+    # 统计词频
+    word_counts = word_frequency_counter("sample.txt")
+
+    if word_counts:
+        display_word_frequencies(word_counts, top_n=15)
+
+        # 显示总统计信息
+        total_words = sum(word_counts.values())
+        unique_words = len(word_counts)
+        print(f"\n总单词数: {total_words}")
+        print(f"不重复单词数: {unique_words}")
+
+# 运行演示
+# word_frequency_demo()
+```
+
+## 学习建议
+
+1. **动手实践**：多写代码，从简单程序开始
+2. **理解Python特性**：掌握Python的独特语法和特性
+3. **使用标准库**：熟悉Python丰富的标准库
+4. **练习算法**：用Python实现各种算法
+5. **参与项目**：通过实际项目提升编程能力
+
+## 扩展资源
+
+- **官方资源**：
+  - [Python官方文档](https://docs.python.org/zh-cn/3/)
+  - [CS50 Week 6 Lecture](https://cs50.harvard.edu/x/2025/weeks/6/)
+
+- **学习平台**：
+  - [Python教程](https://www.liaoxuefeng.com/wiki/1016959663602400)
+  - [LeetCode Python练习](https://leetcode.com/)
+
+- **实用工具**：
+  - [PyCharm IDE](https://www.jetbrains.com/pycharm/)
+  - [Jupyter Notebook](https://jupyter.org/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 7: SQL数据库" icon="arrow-right" href="./week7">
+    学习SQL和数据库基础
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 6的学习！Python是一门强大而易学的编程语言，它将为你打开更多的编程可能性。现在你已经掌握了Python的基础语法，可以开始探索更高级的主题了。*

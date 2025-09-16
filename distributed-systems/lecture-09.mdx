@@ -1,0 +1,1389 @@
+---
+title: "Lecture 9: ZooKeeper"
+description: "分布式协调服务ZooKeeper的设计和应用"
+---
+
+# Lecture 9: ZooKeeper
+
+## 本周内容
+
+- **ZooKeeper设计理念**：简化分布式应用开发，高性能和可靠性
+- **数据模型**：ZNode树形结构、节点类型和操作原语
+- **一致性保证**：顺序一致性、原子性、单一系统映像
+- **应用场景**：分布式锁、配置管理、服务发现、领导者选举
+- **架构设计**：Leader-Follower架构、ZAB协议、会话管理
+- **实践项目**：基于ZooKeeper的分布式协调系统
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/4HK_-7O3R20" title="ZooKeeper分布式协调服务" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### ZooKeeper概述
+
+ZooKeeper是一个开源的分布式协调服务，为分布式应用提供高性能、高可用、且具有严格顺序访问控制的数据存储服务。它简化了分布式系统的复杂性，使得开发者可以专注于业务逻辑而非协调问题。
+
+**设计目标**
+- **简单性**：提供简洁的API和数据模型
+- **高性能**：针对读密集型工作负载优化
+- **高可用性**：通过集群部署避免单点故障
+- **严格有序**：提供强一致性和顺序保证
+- **容错性**：能够容忍节点故障和网络分区
+
+**核心特性**
+- 层次化的命名空间（类似文件系统）
+- 数据同步和复制
+- 会话管理和临时节点
+- 通知机制（Watcher）
+- 原子操作和顺序保证
+
+### ZooKeeper数据模型
+
+ZooKeeper的数据模型是一个层次化的树形结构，类似于文件系统。
+
+```
+                /
+          /     |     \
+       zookeeper  apps  config
+          /        |       \
+      quorum    service1  database
+               /    \
+          version1  version2
+```
+
+**ZNode类型**
+
+```go
+// ZNode类型
+type ZNodeType int
+
+const (
+    PersistentNode ZNodeType = iota // 持久节点
+    EphemeralNode                  // 临时节点
+    PersistentSequential          // 持久顺序节点
+    EphemeralSequential          // 临时顺序节点
+    Container                    // 容器节点
+    TTL                          // TTL节点
+)
+
+// ZNode数据结构
+type ZNode struct {
+    Path      string      // 节点路径
+    Data      []byte      // 节点数据
+    Stat      *NodeStat   // 节点状态
+    Type      ZNodeType   // 节点类型
+    Children  []string    // 子节点列表
+}
+
+// 节点状态信息
+type NodeStat struct {
+    Czxid          int64     // 创建时的事务ID
+    Mzxid          int64     // 最后修改的事务ID
+    Pzxid          int64     // 最后修改子节点的事务ID
+    Ctime          int64     // 创建时间
+    Mtime          int64     // 最后修改时间
+    Version        int32     // 数据版本号
+    Cversion       int32     // 子节点版本号
+    Aversion       int32     // ACL版本号
+    EphemeralOwner int64     // 临时节点所有者会话ID
+    DataLength     int32     // 数据长度
+    NumChildren    int32     // 子节点数量
+    Pzxid          int64     // 事务ID
+}
+```
+
+**ZooKeeper操作原语**
+
+```go
+// ZooKeeper客户端接口
+type ZooKeeperClient interface {
+    // 创建节点
+    Create(path string, data []byte, flags int32, acl []ACL) (string, error)
+
+    // 删除节点
+    Delete(path string, version int32) error
+
+    // 获取节点数据
+    Get(path string, watch bool) ([]byte, *NodeStat, error)
+
+    // 设置节点数据
+    Set(path string, data []byte, version int32) (*NodeStat, error)
+
+    // 获取子节点列表
+    GetChildren(path string, watch bool) ([]string, error)
+
+    // 检查节点是否存在
+    Exists(path string, watch bool) (bool, *NodeStat, error)
+
+    // 同步数据
+    Sync(path string) error
+}
+
+// ACL（访问控制列表）
+type ACL struct {
+    Perms  int32   // 权限
+    ID     ID      // 认证信息
+}
+
+type ID struct {
+    Scheme string // 认证方案
+    ID     string // 认证标识
+}
+
+// 权限常量
+const (
+    PermRead   = 1 << iota
+    PermWrite
+    PermCreate
+    PermDelete
+    PermAdmin
+    PermAll = PermRead | PermWrite | PermCreate | PermDelete | PermAdmin
+)
+```
+
+### ZooKeeper架构
+
+ZooKeeper采用Leader-Follower架构，基于ZAB（ZooKeeper Atomic Broadcast）协议实现一致性。
+
+**架构组件**
+```
+                Client
+                    |
+        +---------------------+
+        |    Load Balancer    |
+        +---------------------+
+                    |
+    +-------+-------+-------+
+    |       |       |       |
+  Leader  Follower Follower Follower
+    |       |       |       |
++---+   +---+   +---+   +---+
+|DB |   |DB |   |DB |   |DB |
++---+   +---+   +---+   +---+
+```
+
+**ZAB协议实现**
+
+```go
+package zookeeper
+
+import (
+    "sync"
+    "time"
+)
+
+// ZAB协议状态
+type ZabState int
+
+const (
+    ZabLooking ZabState = iota
+    ZabFollowing
+    ZabLeading
+)
+
+// ZAB协议实现
+type ZabProtocol struct {
+    mu        sync.Mutex
+    state     ZabState
+    leaderID  int
+    currentZxid int64
+    log       []LogEntry
+    commitLog []int64
+    peers     []*Peer
+    quorumSize int
+}
+
+// LogEntry ZAB日志条目
+type LogEntry struct {
+    Zxid    int64
+    Data    []byte
+    Epoch   int32
+}
+
+// Peer 对等节点信息
+type Peer struct {
+    ID       int
+    Address  string
+    LastZxid int64
+}
+
+// 新建ZAB协议实例
+func NewZabProtocol(serverID int, peers []*Peer) *ZabProtocol {
+    return &ZabProtocol{
+        state:      ZabLooking,
+        leaderID:   -1,
+        currentZxid: 0,
+        log:        make([]LogEntry, 0),
+        commitLog:  make([]int64, 0),
+        peers:      peers,
+        quorumSize: len(peers)/2 + 1,
+    }
+}
+
+// 领导者选举
+func (zab *ZabProtocol) startElection() {
+    zab.mu.Lock()
+    defer zab.mu.Unlock()
+
+    zab.state = ZabLooking
+
+    // 发起选举
+    epoch := zab.getCurrentEpoch() + 1
+    lastZxid := zab.getLastZxid()
+
+    vote := Vote{
+        ServerID:  zab.leaderID,
+        Epoch:     epoch,
+        Zxid:      lastZxid,
+    }
+
+    // 向所有节点发送投票请求
+    responses := make(chan Vote, len(zab.peers))
+    for _, peer := range zab.peers {
+        go func(p *Peer) {
+            response := zab.requestVote(p, vote)
+            responses <- response
+        }(peer)
+    }
+
+    // 等待投票结果
+    votes := 1 // 自己的票
+    for i := 0; i < len(zab.peers); i++ {
+        response := <-responses
+        if response.Epoch == epoch && response.Zxid <= lastZxid {
+            votes++
+        }
+    }
+
+    // 检查是否获得多数票
+    if votes >= zab.quorumSize {
+        zab.becomeLeader(epoch)
+    } else {
+        // 等待其他节点的通知
+        zab.waitForLeaderNotification(epoch)
+    }
+}
+
+// 成为Leader
+func (zab *ZabProtocol) becomeLeader(epoch int32) {
+    zab.mu.Lock()
+    defer zab.mu.Unlock()
+
+    zab.state = ZabLeading
+    zab.leaderID = zab.getMyID()
+
+    // 发送NEW_LEADER消息
+    for _, peer := range zab.peers {
+        go func(p *Peer) {
+            zab.sendNewLeader(p, epoch, zab.getLastZxid())
+        }(peer)
+    }
+
+    // 启动心跳
+    go zab.sendHeartbeats()
+}
+
+// 处理客户端请求
+func (zab *ZabProtocol) processRequest(request []byte) error {
+    zab.mu.Lock()
+    defer zab.mu.Unlock()
+
+    if zab.state != ZabLeading {
+        return fmt.Errorf("not leader")
+    }
+
+    // 生成事务ID
+    zxid := zab.generateZxid()
+
+    // 创建日志条目
+    entry := LogEntry{
+        Zxid:  zxid,
+        Data:  request,
+        Epoch: zab.getCurrentEpoch(),
+    }
+
+    // 添加到本地日志
+    zab.log = append(zab.log, entry)
+
+    // 广播到所有Follower
+    zab.broadcastProposal(entry)
+
+    // 等待多数确认
+    if zab.waitForQuorum(zxid) {
+        zab.commitLog = append(zab.commitLog, zxid)
+        zab.applyCommitted()
+        return nil
+    }
+
+    return fmt.Errorf("quorum not reached")
+}
+
+// 广播提案
+func (zab *ZabProtocol) broadcastProposal(entry LogEntry) {
+    for _, peer := range zab.peers {
+        go func(p *Peer) {
+            zab.sendProposal(p, entry)
+        }(peer)
+    }
+}
+
+// 等待多数确认
+func (zab *ZabProtocol) waitForQuorum(zxid int64) bool {
+    // 实现等待逻辑
+    return true // 简化实现
+}
+
+// 应用已提交的事务
+func (zab *ZabProtocol) applyCommitted() {
+    // 应用已提交的日志到状态机
+    for _, zxid := range zab.commitLog {
+        for _, entry := range zab.log {
+            if entry.Zxid == zxid {
+                zab.applyToStateMachine(entry)
+                break
+            }
+        }
+    }
+}
+
+// 应用到状态机
+func (zab *ZabProtocol) applyToStateMachine(entry LogEntry) {
+    // 实现状态机应用逻辑
+}
+```
+
+### Watcher机制
+
+Watcher是ZooKeeper的重要特性，允许客户端监听节点变化。
+
+**Watcher实现**
+
+```go
+// Watcher类型
+type WatcherType int
+
+const (
+    WatcherDataChanged WatcherType = iota
+    WatcherChildrenChanged
+    WatcherNodeCreated
+    WatcherNodeDeleted
+)
+
+// Watcher事件
+type WatcherEvent struct {
+    Type  WatcherType
+    Path  string
+    State State
+}
+
+// Watcher管理器
+type WatcherManager struct {
+    mu       sync.Mutex
+    watchers map[string][]*Watcher
+}
+
+// Watcher结构
+type Watcher struct {
+    Path    string
+    Type    WatcherType
+    Channel chan WatcherEvent
+    Once    bool
+}
+
+// 新建Watcher管理器
+func NewWatcherManager() *WatcherManager {
+    return &WatcherManager{
+        watchers: make(map[string][]*Watcher),
+    }
+}
+
+// 添加Watcher
+func (wm *WatcherManager) AddWatcher(path string, watcherType WatcherType, once bool) chan WatcherEvent {
+    wm.mu.Lock()
+    defer wm.mu.Unlock()
+
+    channel := make(chan WatcherEvent, 1)
+    watcher := &Watcher{
+        Path:    path,
+        Type:    watcherType,
+        Channel: channel,
+        Once:    once,
+    }
+
+    wm.watchers[path] = append(wm.watchers[path], watcher)
+
+    return channel
+}
+
+// 触发Watcher
+func (wm *WatcherManager) TriggerWatchers(path string, eventType WatcherType) {
+    wm.mu.Lock()
+    defer wm.mu.Unlock()
+
+    watchers, exists := wm.watchers[path]
+    if !exists {
+        return
+    }
+
+    event := WatcherEvent{
+        Type: eventType,
+        Path: path,
+    }
+
+    // 通知所有相关Watcher
+    var remainingWatchers []*Watcher
+    for _, watcher := range watchers {
+        select {
+        case watcher.Channel <- event:
+            // 成功发送
+            if !watcher.Once {
+                remainingWatchers = append(remainingWatchers, watcher)
+            }
+        default:
+            // 通道已满，保留Watcher
+            remainingWatchers = append(remainingWatchers, watcher)
+        }
+    }
+
+    // 更新Watcher列表
+    wm.watchers[path] = remainingWatchers
+}
+```
+
+### 会话管理
+
+ZooKeeper的会话机制是临时节点和Watcher的基础。
+
+**会话实现**
+
+```go
+// 会话状态
+type SessionState int
+
+const (
+    SessionConnecting SessionState = iota
+    SessionConnected
+    SessionExpired
+    SessionClosed
+)
+
+// 会话信息
+type Session struct {
+    ID        string
+    Timeout   time.Duration
+    State     SessionState
+    CreatedAt time.Time
+    LastUsed  time.Time
+    Password  []byte
+}
+
+// 会话管理器
+type SessionManager struct {
+    mu       sync.Mutex
+    sessions map[string]*Session
+    timeout  time.Duration
+}
+
+// 新建会话管理器
+func NewSessionManager(timeout time.Duration) *SessionManager {
+    return &SessionManager{
+        sessions: make(map[string]*Session),
+        timeout:  timeout,
+    }
+}
+
+// 创建会话
+func (sm *SessionManager) CreateSession() *Session {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    sessionID := generateSessionID()
+    password := generatePassword()
+
+    session := &Session{
+        ID:        sessionID,
+        Timeout:   sm.timeout,
+        State:     SessionConnected,
+        CreatedAt: time.Now(),
+        LastUsed:  time.Now(),
+        Password:  password,
+    }
+
+    sm.sessions[sessionID] = session
+
+    // 启动会话超时检查
+    go sm.checkSessionTimeout(sessionID)
+
+    return session
+}
+
+// 更新会话
+func (sm *SessionManager) UpdateSession(sessionID string) bool {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    session, exists := sm.sessions[sessionID]
+    if !exists {
+        return false
+    }
+
+    session.LastUsed = time.Now()
+    return true
+}
+
+// 检查会话超时
+func (sm *SessionManager) checkSessionTimeout(sessionID string) {
+    time.Sleep(sm.timeout)
+
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    session, exists := sm.sessions[sessionID]
+    if !exists {
+        return
+    }
+
+    if time.Since(session.LastUsed) >= sm.timeout {
+        // 会话超时，清理相关资源
+        session.State = SessionExpired
+        delete(sm.sessions, sessionID)
+
+        // 清理临时节点
+        sm.cleanupSessionNodes(sessionID)
+    }
+}
+
+// 清理会话相关的临时节点
+func (sm *SessionManager) cleanupSessionNodes(sessionID string) {
+    // 实现临时节点清理逻辑
+}
+
+// 辅助函数：生成会话ID
+func generateSessionID() string {
+    return fmt.Sprintf("session-%d", time.Now().UnixNano())
+}
+
+// 辅助函数：生成密码
+func generatePassword() []byte {
+    password := make([]byte, 16)
+    for i := range password {
+        password[i] = byte(rand.Intn(256))
+    }
+    return password
+}
+```
+
+### 分布式锁实现
+
+基于ZooKeeper实现分布式锁是常见的应用场景。
+
+**分布式锁实现**
+
+```go
+package zklock
+
+import (
+    "errors"
+    "fmt"
+    "time"
+)
+
+// 分布式锁
+type DistributedLock struct {
+    zk       ZooKeeperClient
+    lockPath string
+    lockNode string
+    session  *Session
+}
+
+// 新建分布式锁
+func NewDistributedLock(zk ZooKeeperClient, lockPath string) *DistributedLock {
+    return &DistributedLock{
+        zk:       zk,
+        lockPath: lockPath,
+    }
+}
+
+// 获取锁
+func (dl *DistributedLock) Acquire(timeout time.Duration) error {
+    // 创建临时顺序节点
+    nodePath, err := dl.zk.Create(
+        dl.lockPath+"/lock-",
+        []byte{},
+        int32(EphemeralSequential)|int32(Persistent),
+        nil,
+    )
+    if err != nil {
+        return fmt.Errorf("create lock node failed: %v", err)
+    }
+
+    dl.lockNode = nodePath
+
+    // 获取所有锁节点
+    children, err := dl.zk.GetChildren(dl.lockPath, false)
+    if err != nil {
+        return fmt.Errorf("get children failed: %v", err)
+    }
+
+    // 检查是否是最小的节点
+    if dl.isSmallestNode(children) {
+        return nil // 获得锁
+    }
+
+    // 监听前一个节点
+    prevNode := dl.getPreviousNode(children)
+    if prevNode == "" {
+        return errors.New("cannot find previous node")
+    }
+
+    // 设置Watcher
+    exists, _, eventCh, err := dl.zk.ExistsW(dl.lockPath+"/"+prevNode)
+    if err != nil {
+        return fmt.Errorf("check previous node failed: %v", err)
+    }
+
+    if !exists {
+        // 前一个节点不存在，重新检查
+        return dl.Acquire(timeout)
+    }
+
+    // 等待前一个节点删除
+    select {
+    case event := <-eventCh:
+        if event.Type == WatcherNodeDeleted {
+            return nil // 获得锁
+        }
+    case <-time.After(timeout):
+        return errors.New("acquire lock timeout")
+    }
+
+    return errors.New("acquire lock failed")
+}
+
+// 释放锁
+func (dl *DistributedLock) Release() error {
+    if dl.lockNode == "" {
+        return errors.New("lock not acquired")
+    }
+
+    err := dl.zk.Delete(dl.lockNode, -1)
+    if err != nil {
+        return fmt.Errorf("delete lock node failed: %v", err)
+    }
+
+    dl.lockNode = ""
+    return nil
+}
+
+// 检查是否是最小节点
+func (dl *DistributedLock) isSmallestNode(children []string) bool {
+    if len(children) == 0 {
+        return false
+    }
+
+    // 获取当前节点的序号
+    currentSeq := dl.getNodeSequence(dl.lockNode)
+    if currentSeq == -1 {
+        return false
+    }
+
+    // 检查是否有更小的序号
+    for _, child := range children {
+        seq := dl.getNodeSequence(child)
+        if seq != -1 && seq < currentSeq {
+            return false
+        }
+    }
+
+    return true
+}
+
+// 获取前一个节点
+func (dl *DistributedLock) getPreviousNode(children []string) string {
+    currentSeq := dl.getNodeSequence(dl.lockNode)
+    if currentSeq == -1 {
+        return ""
+    }
+
+    var prevNode string
+    var prevSeq int = -1
+
+    for _, child := range children {
+        seq := dl.getNodeSequence(child)
+        if seq != -1 && seq < currentSeq && seq > prevSeq {
+            prevNode = child
+            prevSeq = seq
+        }
+    }
+
+    return prevNode
+}
+
+// 获取节点序号
+func (dl *DistributedLock) getNodeSequence(nodePath string) int {
+    // 从节点路径中提取序号
+    // 例如: /locks/lock-0000000001 -> 1
+    return 1 // 简化实现
+}
+
+// 使用示例
+func ExampleDistributedLock() {
+    zk := NewZooKeeperClient([]string{"localhost:2181"})
+    lock := NewDistributedLock(zk, "/locks/my-lock")
+
+    // 获取锁
+    err := lock.Acquire(30 * time.Second)
+    if err != nil {
+        fmt.Printf("Acquire lock failed: %v\n", err)
+        return
+    }
+
+    defer lock.Release()
+
+    // 执行临界区代码
+    fmt.Println("Lock acquired, executing critical section...")
+    time.Sleep(5 * time.Second)
+    fmt.Println("Critical section completed")
+}
+```
+
+### 配置管理
+
+ZooKeeper常用于分布式系统的配置管理。
+
+**配置管理实现**
+
+```go
+package zkconfig
+
+import (
+    "encoding/json"
+    "fmt"
+    "sync"
+    "time"
+)
+
+// 配置管理器
+type ConfigManager struct {
+    zk           ZooKeeperClient
+    configPath   string
+    configCache  map[string]interface{}
+    watchers     map[string][]chan ConfigChange
+    mu           sync.RWMutex
+}
+
+// 配置变更事件
+type ConfigChange struct {
+    Key   string
+    Value interface{}
+    Type  ChangeType
+}
+
+// 变更类型
+type ChangeType int
+
+const (
+    ConfigAdded ChangeType = iota
+    ConfigModified
+    ConfigDeleted
+)
+
+// 新建配置管理器
+func NewConfigManager(zk ZooKeeperClient, configPath string) *ConfigManager {
+    return &ConfigManager{
+        zk:          zk,
+        configPath:  configPath,
+        configCache: make(map[string]interface{}),
+        watchers:    make(map[string][]chan ConfigChange),
+    }
+}
+
+// 初始化配置管理器
+func (cm *ConfigManager) Initialize() error {
+    // 创建配置根节点
+    exists, _, err := cm.zk.Exists(cm.configPath, false)
+    if err != nil {
+        return fmt.Errorf("check config path failed: %v", err)
+    }
+
+    if !exists {
+        _, err := cm.zk.Create(cm.configPath, []byte{}, int32(Persistent), nil)
+        if err != nil {
+            return fmt.Errorf("create config path failed: %v", err)
+        }
+    }
+
+    // 加载现有配置
+    return cm.loadConfigurations()
+}
+
+// 加载所有配置
+func (cm *ConfigManager) loadConfigurations() error {
+    children, err := cm.zk.GetChildren(cm.configPath, false)
+    if err != nil {
+        return fmt.Errorf("get config children failed: %v", err)
+    }
+
+    for _, child := range children {
+        key := child
+        path := fmt.Sprintf("%s/%s", cm.configPath, key)
+
+        data, _, err := cm.zk.Get(path, false)
+        if err != nil {
+            continue // 跳过错误配置
+        }
+
+        var value interface{}
+        err = json.Unmarshal(data, &value)
+        if err != nil {
+            continue // 跳过无效配置
+        }
+
+        cm.mu.Lock()
+        cm.configCache[key] = value
+        cm.mu.Unlock()
+    }
+
+    return nil
+}
+
+// 获取配置值
+func (cm *ConfigManager) Get(key string) (interface{}, bool) {
+    cm.mu.RLock()
+    defer cm.mu.RUnlock()
+
+    value, exists := cm.configCache[key]
+    return value, exists
+}
+
+// 设置配置值
+func (cm *ConfigManager) Set(key string, value interface{}) error {
+    data, err := json.Marshal(value)
+    if err != nil {
+        return fmt.Errorf("marshal value failed: %v", err)
+    }
+
+    path := fmt.Sprintf("%s/%s", cm.configPath, key)
+
+    // 检查节点是否存在
+    exists, stat, err := cm.zk.Exists(path, false)
+    if err != nil {
+        return fmt.Errorf("check config exists failed: %v", err)
+    }
+
+    if exists {
+        // 更新现有配置
+        _, err = cm.zk.Set(path, data, stat.Version)
+        if err != nil {
+            return fmt.Errorf("update config failed: %v", err)
+        }
+    } else {
+        // 创建新配置
+        _, err = cm.zk.Create(path, data, int32(Persistent), nil)
+        if err != nil {
+            return fmt.Errorf("create config failed: %v", err)
+        }
+    }
+
+    // 更新缓存
+    cm.mu.Lock()
+    cm.configCache[key] = value
+    cm.mu.Unlock()
+
+    // 通知Watcher
+    cm.notifyWatchers(key, value, ConfigModified)
+
+    return nil
+}
+
+// 删除配置
+func (cm *ConfigManager) Delete(key string) error {
+    path := fmt.Sprintf("%s/%s", cm.configPath, key)
+
+    err := cm.zk.Delete(path, -1)
+    if err != nil {
+        return fmt.Errorf("delete config failed: %v", err)
+    }
+
+    // 更新缓存
+    cm.mu.Lock()
+    delete(cm.configCache, key)
+    cm.mu.Unlock()
+
+    // 通知Watcher
+    cm.notifyWatchers(key, nil, ConfigDeleted)
+
+    return nil
+}
+
+// 监听配置变更
+func (cm *ConfigManager) Watch(key string) chan ConfigChange {
+    cm.mu.Lock()
+    defer cm.mu.Unlock()
+
+    ch := make(chan ConfigChange, 10)
+    cm.watchers[key] = append(cm.watchers[key], ch)
+
+    return ch
+}
+
+// 通知Watcher
+func (cm *ConfigManager) notifyWatchers(key string, value interface{}, changeType ChangeType) {
+    cm.mu.RLock()
+    defer cm.mu.RUnlock()
+
+    watchers, exists := cm.watchers[key]
+    if !exists {
+        return
+    }
+
+    event := ConfigChange{
+        Key:   key,
+        Value: value,
+        Type:  changeType,
+    }
+
+    // 通知所有Watcher
+    for _, ch := range watchers {
+        select {
+        case ch <- event:
+            // 成功发送
+        default:
+            // 通道已满，跳过
+        }
+    }
+}
+
+// 使用示例
+func ExampleConfigManager() {
+    zk := NewZooKeeperClient([]string{"localhost:2181"})
+    config := NewConfigManager(zk, "/config/myapp")
+
+    // 初始化
+    err := config.Initialize()
+    if err != nil {
+        fmt.Printf("Initialize config failed: %v\n", err)
+        return
+    }
+
+    // 设置配置
+    err = config.Set("database.host", "localhost")
+    if err != nil {
+        fmt.Printf("Set config failed: %v\n", err)
+        return
+    }
+
+    err = config.Set("database.port", 5432)
+    if err != nil {
+        fmt.Printf("Set config failed: %v\n", err)
+        return
+    }
+
+    // 获取配置
+    if host, exists := config.Get("database.host"); exists {
+        fmt.Printf("Database host: %v\n", host)
+    }
+
+    // 监听配置变更
+    watcher := config.Watch("database.host")
+    go func() {
+        for event := range watcher {
+            fmt.Printf("Config changed: %s = %v\n", event.Key, event.Value)
+        }
+    }()
+}
+```
+
+### 服务发现
+
+ZooKeeper也常用于服务发现，管理服务的注册和发现。
+
+**服务发现实现**
+
+```go
+package zkservice
+
+import (
+    "encoding/json"
+    "fmt"
+    "sync"
+    "time"
+)
+
+// 服务信息
+type ServiceInfo struct {
+    ID       string            `json:"id"`
+    Name     string            `json:"name"`
+    Address  string            `json:"address"`
+    Port     int               `json:"port"`
+    Metadata map[string]string `json:"metadata"`
+}
+
+// 服务发现
+type ServiceDiscovery struct {
+    zk          ZooKeeperClient
+    basePath    string
+    services    map[string][]ServiceInfo
+    watchers    map[string][]chan ServiceEvent
+    mu          sync.RWMutex
+}
+
+// 服务事件
+type ServiceEvent struct {
+    Type      EventType
+    Service   ServiceInfo
+}
+
+// 事件类型
+type EventType int
+
+const (
+    ServiceRegistered EventType = iota
+    ServiceUnregistered
+    ServiceUpdated
+)
+
+// 新建服务发现
+func NewServiceDiscovery(zk ZooKeeperClient, basePath string) *ServiceDiscovery {
+    return &ServiceDiscovery{
+        zk:       zk,
+        basePath: basePath,
+        services: make(map[string][]ServiceInfo),
+        watchers: make(map[string][]chan ServiceEvent),
+    }
+}
+
+// 初始化服务发现
+func (sd *ServiceDiscovery) Initialize() error {
+    // 创建基础路径
+    exists, _, err := sd.zk.Exists(sd.basePath, false)
+    if err != nil {
+        return fmt.Errorf("check base path failed: %v", err)
+    }
+
+    if !exists {
+        _, err := sd.zk.Create(sd.basePath, []byte{}, int32(Persistent), nil)
+        if err != nil {
+            return fmt.Errorf("create base path failed: %v", err)
+        }
+    }
+
+    // 加载现有服务
+    return sd.loadServices()
+}
+
+// 注册服务
+func (sd *ServiceDiscovery) Register(service ServiceInfo) error {
+    servicePath := fmt.Sprintf("%s/%s", sd.basePath, service.Name)
+
+    // 创建服务目录
+    exists, _, err := sd.zk.Exists(servicePath, false)
+    if err != nil {
+        return fmt.Errorf("check service path failed: %v", err)
+    }
+
+    if !exists {
+        _, err := sd.zk.Create(servicePath, []byte{}, int32(Persistent), nil)
+        if err != nil {
+            return fmt.Errorf("create service path failed: %v", err)
+        }
+    }
+
+    // 创建服务实例节点
+    instancePath := fmt.Sprintf("%s/%s", servicePath, service.ID)
+    data, err := json.Marshal(service)
+    if err != nil {
+        return fmt.Errorf("marshal service info failed: %v", err)
+    }
+
+    // 创建临时节点
+    _, err = sd.zk.Create(instancePath, data, int32(Ephemeral), nil)
+    if err != nil {
+        return fmt.Errorf("create service instance failed: %v", err)
+    }
+
+    // 更新缓存
+    sd.mu.Lock()
+    sd.services[service.Name] = append(sd.services[service.Name], service)
+    sd.mu.Unlock()
+
+    // 通知Watcher
+    sd.notifyWatchers(service.Name, ServiceRegistered, service)
+
+    return nil
+}
+
+// 注销服务
+func (sd *ServiceDiscovery) Unregister(serviceName, instanceID string) error {
+    instancePath := fmt.Sprintf("%s/%s/%s", sd.basePath, serviceName, instanceID)
+
+    err := sd.zk.Delete(instancePath, -1)
+    if err != nil {
+        return fmt.Errorf("unregister service failed: %v", err)
+    }
+
+    // 更新缓存
+    sd.mu.Lock()
+    defer sd.mu.Unlock()
+
+    services := sd.services[serviceName]
+    for i, service := range services {
+        if service.ID == instanceID {
+            // 删除服务实例
+            sd.services[serviceName] = append(services[:i], services[i+1:]...)
+
+            // 通知Watcher
+            sd.notifyWatchers(serviceName, ServiceUnregistered, service)
+            break
+        }
+    }
+
+    return nil
+}
+
+// 发现服务
+func (sd *ServiceDiscovery) Discover(serviceName string) ([]ServiceInfo, error) {
+    sd.mu.RLock()
+    defer sd.mu.RUnlock()
+
+    services, exists := sd.services[serviceName]
+    if !exists {
+        return nil, fmt.Errorf("service not found: %s", serviceName)
+    }
+
+    return services, nil
+}
+
+// 监听服务变更
+func (sd *ServiceDiscovery) Watch(serviceName string) chan ServiceEvent {
+    sd.mu.Lock()
+    defer sd.mu.Unlock()
+
+    ch := make(chan ServiceEvent, 10)
+    sd.watchers[serviceName] = append(sd.watchers[serviceName], ch)
+
+    return ch
+}
+
+// 加载服务
+func (sd *ServiceDiscovery) loadServices() error {
+    serviceNames, err := sd.zk.GetChildren(sd.basePath, false)
+    if err != nil {
+        return fmt.Errorf("get service names failed: %v", err)
+    }
+
+    for _, serviceName := range serviceNames {
+        servicePath := fmt.Sprintf("%s/%s", sd.basePath, serviceName)
+
+        instances, err := sd.zk.GetChildren(servicePath, false)
+        if err != nil {
+            continue
+        }
+
+        for _, instanceID := range instances {
+            instancePath := fmt.Sprintf("%s/%s", servicePath, instanceID)
+
+            data, _, err := sd.zk.Get(instancePath, false)
+            if err != nil {
+                continue
+            }
+
+            var service ServiceInfo
+            err = json.Unmarshal(data, &service)
+            if err != nil {
+                continue
+            }
+
+            sd.mu.Lock()
+            sd.services[serviceName] = append(sd.services[serviceName], service)
+            sd.mu.Unlock()
+        }
+    }
+
+    return nil
+}
+
+// 通知Watcher
+func (sd *ServiceDiscovery) notifyWatchers(serviceName string, eventType EventType, service ServiceInfo) {
+    sd.mu.RLock()
+    defer sd.mu.RUnlock()
+
+    watchers, exists := sd.watchers[serviceName]
+    if !exists {
+        return
+    }
+
+    event := ServiceEvent{
+        Type:    eventType,
+        Service: service,
+    }
+
+    // 通知所有Watcher
+    for _, ch := range watchers {
+        select {
+        case ch <- event:
+            // 成功发送
+        default:
+            // 通道已满，跳过
+        }
+    }
+}
+
+// 使用示例
+func ExampleServiceDiscovery() {
+    zk := NewZooKeeperClient([]string{"localhost:2181"})
+    discovery := NewServiceDiscovery(zk, "/services")
+
+    // 初始化
+    err := discovery.Initialize()
+    if err != nil {
+        fmt.Printf("Initialize discovery failed: %v\n", err)
+        return
+    }
+
+    // 注册服务
+    service := ServiceInfo{
+        ID:      "service-1",
+        Name:    "user-service",
+        Address: "192.168.1.100",
+        Port:    8080,
+        Metadata: map[string]string{
+            "version": "1.0.0",
+            "env":     "production",
+        },
+    }
+
+    err = discovery.Register(service)
+    if err != nil {
+        fmt.Printf("Register service failed: %v\n", err)
+        return
+    }
+
+    // 发现服务
+    services, err := discovery.Discover("user-service")
+    if err != nil {
+        fmt.Printf("Discover service failed: %v\n", err)
+        return
+    }
+
+    for _, svc := range services {
+        fmt.Printf("Found service: %s at %s:%d\n", svc.Name, svc.Address, svc.Port)
+    }
+}
+```
+
+## 实践项目：基于ZooKeeper的分布式协调系统
+
+### 项目概述
+
+实现一个完整的基于ZooKeeper的分布式协调系统，包含：
+
+1. **分布式锁服务**：公平锁和非公平锁
+2. **配置管理中心**：动态配置和热更新
+3. **服务注册发现**：服务健康检查
+4. **领导者选举**：基于ZooKeeper的选举机制
+
+### 系统架构
+
+```
+                +-------------------+
+                |   Client App      |
+                +-------------------+
+                          |
+                +-------------------+
+                | Coordinator API  |
+                +-------------------+
+                          |
++-------------------------+-------------------------+
+|           |           |           |           |
++-----------+  +-----------+  +-----------+  +-----------+
+|Lock Service| |Config Mgmt | |Service Disc| |Leader Elec|
++-----------+  +-----------+  +-----------+  +-----------+
+|           |           |           |           |
++----------------------------------------------------+
+                        |
+                +-------------------+
+                |   ZooKeeper       |
+                |   Cluster         |
+                +-------------------+
+```
+
+## 练习题
+
+### 概念题
+
+1. **ZAB协议**：解释ZAB协议的工作原理和与Raft的区别。
+
+2. **临时节点**：为什么临时节点对分布式锁很重要？
+
+3. **Watcher机制**：ZooKeeper的Watcher有什么限制？如何处理？
+
+4. **一致性模型**：ZooKeeper提供了什么样的一致性保证？
+
+### 编程题
+
+1. **实现ZooKeeper客户端**：完成一个简化版的ZooKeeper客户端。
+
+2. **Leader选举**：基于临时节点实现领导者选举算法。
+
+3. **分布式队列**：使用ZooKeeper实现分布式队列。
+
+4. **屏障同步**：实现分布式屏障同步机制。
+
+### 设计题
+
+1. **性能优化**：如何优化ZooKeeper的性能？
+
+2. **容错机制**：设计ZooKeeper集群的容错方案。
+
+3. **监控系统**：设计ZooKeeper集群的监控系统。
+
+4. **迁移方案**：设计ZooKeeper数据的迁移方案。
+
+## 常见问题
+
+### Q: ZooKeeper和etcd有什么区别？
+
+A: ZooKeeper使用ZAB协议，更适合读密集型场景；etcd使用Raft协议，提供更强的一致性保证。etcd更适合配置管理和服务发现，而ZooKeeper更适合复杂的协调场景。
+
+### Q: 如何处理ZooKeeper的脑裂问题？
+
+A: ZooKeeper通过Quorum机制避免脑裂，只有获得多数节点支持的Leader才能提供服务。在网络分区时，只有包含多数节点的分区能继续工作。
+
+### Q: ZooKeeper的性能瓶颈在哪里？
+
+A: ZooKeeper的性能瓶颈主要在写入操作，因为写入需要同步到多数节点。读取操作性能较好，特别是可以设置Watcher来避免轮询。
+
+## 扩展资源
+
+### 必读论文
+
+1. **[ZooKeeper论文](https://zookeeper.apache.org/doc/zookeeperOver.pdf)** - ZooKeeper: Wait-free coordination for Internet-scale systems
+2. **[ZAB协议](https://web.stanford.edu/class/cs347/reading/zab.pdf)** - Zab: High-performance broadcast for primary-backup systems
+3. **[Chubby论文](https://static.googleusercontent.com/media/research.google.com/en//archive/chubby-osdi06.pdf)** - Chubby: lock service for loosely-coupled distributed systems
+
+### 实践项目
+
+1. **[Apache ZooKeeper](https://zookeeper.apache.org/)** - 官方ZooKeeper实现
+2. **[Apache Curator](https://curator.apache.org/)** - ZooKeeper高级客户端库
+3. **[etcd](https://etcd.io/)** - 基于Raft的分布式键值存储
+
+### 在线课程
+
+1. **[ZooKeeper官方文档](https://zookeeper.apache.org/doc/current/)** - 完整的文档和教程
+2. **[分布式系统协调](https://www.coursera.org/learn/cloud-computing)** - 相关课程
+3. **[ApacheCon视频](https://www.youtube.com/user/ApacheSoftware)** - ZooKeeper技术分享
+
+## 下一步学习
+
+在完成ZooKeeper学习后，你应该继续：
+
+1. **分布式事务**：学习两阶段提交和三阶段提交
+2. **Spanner**：了解全球分布式数据库
+3. **etcd**：学习基于Raft的协调服务
+4. **服务网格**：了解微服务架构管理
+
+---
+
+*ZooKeeper是分布式系统协调服务的经典实现，它的设计思想和技术方案深刻影响了后续的分布式系统。掌握ZooKeeper的原理和应用对构建可靠的分布式系统至关重要。*

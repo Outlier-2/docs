@@ -1,0 +1,974 @@
+---
+title: "Lecture 8: 树索引"
+description: "CMU 15-445 Lecture 8 - B+树索引、插入删除操作、优化技术、性能分析"
+---
+
+# Lecture 8: 树索引
+
+## B+树索引概述
+
+### B+树在数据库中的应用
+
+B+树是数据库系统中最常用的索引结构，具有以下特点：
+
+1. **平衡性**：所有叶子节点位于同一层级，保证查询性能稳定
+2. **高效范围查询**：叶子节点形成有序链表，支持高效的范围扫描
+3. **高扇出**：减少I/O操作，提高查询效率
+4. **动态调整**：支持高效的插入和删除操作
+
+### B+树的基本结构
+```
+B+树结构：
+├── 根节点：树的入口点
+├── 内部节点：存储键值和子节点指针
+├── 叶子节点：存储实际的数据指针或数据
+└── 叶子链表：连接所有叶子节点，支持范围查询
+```
+
+## B+树基础实现
+
+### B+树节点结构
+
+#### B+树节点定义
+```cpp
+class BPlusTree {
+private:
+    enum class NodeType { INTERNAL, LEAF };
+
+    struct Node {
+        NodeType type;
+        vector<Key> keys;
+        vector<Node*> children;  // 内部节点使用
+        vector<Value> values;    // 叶子节点使用
+        Node* next;              // 叶子节点链表指针
+        Node* parent;
+        bool is_root;
+        size_t key_count;
+
+        Node(NodeType t, bool root = false)
+            : type(t), next(nullptr), parent(nullptr), is_root(root), key_count(0) {}
+
+        bool is_leaf() const { return type == NodeType::LEAF; }
+        bool is_internal() const { return type == NodeType::INTERNAL; }
+        bool is_full(size_t order) const { return key_count >= order - 1; }
+        bool is_underflow(size_t order) const { return key_count < (order - 1) / 2; }
+    };
+
+    Node* root;
+    size_t order;  // B+树的阶
+    size_t height;
+    Node* head;    // 叶子链表头指针
+
+public:
+    BPlusTree(size_t tree_order = 4) : order(tree_order), height(1) {
+        root = new Node(NodeType::LEAF, true);
+        head = root;
+    }
+
+    ~BPlusTree() {
+        destroy_tree(root);
+    }
+
+    bool insert(const Key& key, const Value& value) {
+        // 查找插入位置
+        Node* leaf = find_leaf_node(key);
+
+        // 在叶子节点中插入
+        return insert_in_leaf(leaf, key, value);
+    }
+
+    bool find(const Key& key, Value* value) const {
+        Node* leaf = find_leaf_node(key);
+        return find_in_node(leaf, key, value);
+    }
+
+    vector<Value> range_query(const Key& start_key, const Key& end_key) {
+        vector<Value> results;
+        Node* start_leaf = find_leaf_node(start_key);
+
+        // 从起始叶子节点开始扫描
+        Node* current = start_leaf;
+        while (current != nullptr) {
+            for (size_t i = 0; i < current->key_count; i++) {
+                if (current->keys[i] >= start_key && current->keys[i] <= end_key) {
+                    results.push_back(current->values[i]);
+                } else if (current->keys[i] > end_key) {
+                    return results;  // 超出范围，停止扫描
+                }
+            }
+            current = current->next;  // 移动到下一个叶子节点
+        }
+
+        return results;
+    }
+
+    bool remove(const Key& key) {
+        Node* leaf = find_leaf_node(key);
+        return remove_from_node(leaf, key);
+    }
+
+    size_t get_height() const { return height; }
+    size_t get_order() const { return order; }
+    size_t get_node_count() const { return count_nodes(root); }
+
+private:
+    Node* find_leaf_node(const Key& key) const {
+        Node* current = root;
+
+        while (current->is_internal()) {
+            // 在内部节点中查找合适的子节点
+            size_t i = 0;
+            while (i < current->key_count && key >= current->keys[i]) {
+                i++;
+            }
+
+            current = current->children[i];
+        }
+
+        return current;
+    }
+
+    bool insert_in_leaf(Node* leaf, const Key& key, const Value& value) {
+        // 查找插入位置
+        size_t insert_pos = 0;
+        while (insert_pos < leaf->key_count && key > leaf->keys[insert_pos]) {
+            insert_pos++;
+        }
+
+        // 检查键是否已存在
+        if (insert_pos < leaf->key_count && key == leaf->keys[insert_pos]) {
+            leaf->values[insert_pos] = value;  // 更新值
+            return true;
+        }
+
+        // 检查叶子节点是否已满
+        if (leaf->is_full(order)) {
+            return split_leaf_and_insert(leaf, insert_pos, key, value);
+        }
+
+        // 插入键值对
+        leaf->keys.insert(leaf->keys.begin() + insert_pos, key);
+        leaf->values.insert(leaf->values.begin() + insert_pos, value);
+        leaf->key_count++;
+
+        return true;
+    }
+
+    bool split_leaf_and_insert(Node* leaf, size_t insert_pos, const Key& key, const Value& value) {
+        // 创建新叶子节点
+        Node* new_leaf = new Node(NodeType::LEAF);
+        size_t split_pos = order / 2;
+
+        // 分裂键和值
+        vector<Key> left_keys(leaf->keys.begin(), leaf->keys.begin() + split_pos);
+        vector<Value> left_values(leaf->values.begin(), leaf->values.begin() + split_pos);
+        vector<Key> right_keys(leaf->keys.begin() + split_pos, leaf->keys.end());
+        vector<Value> right_values(leaf->values.begin() + split_pos, leaf->values.end());
+
+        // 确定新键值插入的位置
+        if (insert_pos <= split_pos) {
+            left_keys.insert(left_keys.begin() + insert_pos, key);
+            left_values.insert(left_values.begin() + insert_pos, value);
+        } else {
+            right_keys.insert(right_keys.begin() + (insert_pos - split_pos), key);
+            right_values.insert(right_values.begin() + (insert_pos - split_pos), value);
+        }
+
+        // 更新叶子节点
+        leaf->keys = left_keys;
+        leaf->values = left_values;
+        leaf->key_count = left_keys.size();
+
+        new_leaf->keys = right_keys;
+        new_leaf->values = right_values;
+        new_leaf->key_count = right_keys.size();
+
+        // 更新叶子链表
+        new_leaf->next = leaf->next;
+        leaf->next = new_leaf;
+
+        // 将分裂键插入父节点
+        Key split_key = new_leaf->keys[0];
+        return insert_in_parent(leaf, split_key, new_leaf);
+    }
+
+    bool insert_in_parent(Node* left_child, const Key& key, Node* right_child) {
+        if (left_child->is_root) {
+            // 创建新的根节点
+            Node* new_root = new Node(NodeType::INTERNAL, true);
+            new_root->keys.push_back(key);
+            new_root->children.push_back(left_child);
+            new_root->children.push_back(right_child);
+            new_root->key_count = 1;
+
+            left_child->parent = new_root;
+            right_child->parent = new_root;
+            left_child->is_root = false;
+
+            root = new_root;
+            height++;
+            return true;
+        }
+
+        Node* parent = left_child->parent;
+        size_t insert_pos = 0;
+
+        // 查找插入位置
+        while (insert_pos < parent->key_count &&
+               parent->children[insert_pos] != left_child) {
+            insert_pos++;
+        }
+
+        // 检查父节点是否已满
+        if (parent->is_full(order)) {
+            return split_internal_and_insert(parent, insert_pos, key, right_child);
+        }
+
+        // 插入键和子节点指针
+        parent->keys.insert(parent->keys.begin() + insert_pos, key);
+        parent->children.insert(parent->children.begin() + insert_pos + 1, right_child);
+        parent->key_count++;
+
+        right_child->parent = parent;
+        return true;
+    }
+
+    bool split_internal_and_insert(Node* internal, size_t insert_pos, const Key& key, Node* right_child) {
+        // 创建新内部节点
+        Node* new_internal = new Node(NodeType::INTERNAL);
+        size_t split_pos = order / 2;
+
+        // 收集所有键和子节点
+        vector<Key> all_keys = internal->keys;
+        vector<Node*> all_children = internal->children;
+
+        all_keys.insert(all_keys.begin() + insert_pos, key);
+        all_children.insert(all_children.begin() + insert_pos + 1, right_child);
+
+        // 分裂键和子节点
+        vector<Key> left_keys(all_keys.begin(), all_keys.begin() + split_pos);
+        vector<Node*> left_children(all_children.begin(), all_children.begin() + split_pos + 1);
+        vector<Key> right_keys(all_keys.begin() + split_pos + 1, all_keys.end());
+        vector<Node*> right_children(all_children.begin() + split_pos + 1, all_children.end());
+
+        Key split_key = all_keys[split_pos];
+
+        // 更新内部节点
+        internal->keys = left_keys;
+        internal->children = left_children;
+        internal->key_count = left_keys.size();
+
+        new_internal->keys = right_keys;
+        new_internal->children = right_children;
+        new_internal->key_count = right_keys.size();
+
+        // 更新父指针
+        for (Node* child : new_internal->children) {
+            child->parent = new_internal;
+        }
+
+        // 将分裂键插入父节点
+        return insert_in_parent(internal, split_key, new_internal);
+    }
+
+    bool remove_from_node(Node* node, const Key& key) {
+        // 查找键的位置
+        size_t key_pos = 0;
+        while (key_pos < node->key_count && node->keys[key_pos] != key) {
+            key_pos++;
+        }
+
+        if (key_pos >= node->key_count) {
+            return false;  // 键不存在
+        }
+
+        // 删除键值对
+        node->keys.erase(node->keys.begin() + key_pos);
+        node->values.erase(node->values.begin() + key_pos);
+        node->key_count--;
+
+        // 检查是否需要重新平衡
+        if (node->is_underflow(order) && !node->is_root) {
+            return rebalance_node(node);
+        }
+
+        return true;
+    }
+
+    bool rebalance_node(Node* node) {
+        Node* parent = node->parent;
+        if (!parent) return true;  // 根节点不需要重新平衡
+
+        // 查找节点在父节点中的位置
+        size_t node_pos = 0;
+        while (node_pos < parent->children.size() && parent->children[node_pos] != node) {
+            node_pos++;
+        }
+
+        // 尝试从左兄弟借键
+        if (node_pos > 0) {
+            Node* left_sibling = parent->children[node_pos - 1];
+            if (left_sibling->key_count > (order - 1) / 2) {
+                return borrow_from_left(node, left_sibling, parent, node_pos - 1);
+            }
+        }
+
+        // 尝试从右兄弟借键
+        if (node_pos < parent->children.size() - 1) {
+            Node* right_sibling = parent->children[node_pos + 1];
+            if (right_sibling->key_count > (order - 1) / 2) {
+                return borrow_from_right(node, right_sibling, parent, node_pos);
+            }
+        }
+
+        // 合并节点
+        if (node_pos > 0) {
+            return merge_with_left(node, parent->children[node_pos - 1], parent, node_pos - 1);
+        } else {
+            return merge_with_right(node, parent->children[node_pos + 1], parent, node_pos);
+        }
+    }
+
+    bool borrow_from_left(Node* node, Node* left_sibling, Node* parent, size_t parent_key_pos) {
+        if (node->is_leaf()) {
+            // 从左叶子节点借最后一个键值对
+            Key borrowed_key = left_sibling->keys.back();
+            Value borrowed_value = left_sibling->values.back();
+
+            left_sibling->keys.pop_back();
+            left_sibling->values.pop_back();
+            left_sibling->key_count--;
+
+            // 插入到当前节点的前面
+            node->keys.insert(node->keys.begin(), borrowed_key);
+            node->values.insert(node->values.begin(), borrowed_value);
+            node->key_count++;
+
+            // 更新父节点的分隔键
+            parent->keys[parent_key_pos] = node->keys[0];
+        } else {
+            // 从左内部节点借
+            Key borrowed_key = left_sibling->keys.back();
+            Node* borrowed_child = left_sibling->children.back();
+
+            left_sibling->keys.pop_back();
+            left_sibling->children.pop_back();
+            left_sibling->key_count--;
+
+            // 更新父节点键
+            Key parent_key = parent->keys[parent_key_pos];
+            parent->keys[parent_key_pos] = borrowed_key;
+
+            // 将借来的键和子节点插入到当前节点
+            node->keys.insert(node->keys.begin(), parent_key);
+            node->children.insert(node->children.begin(), borrowed_child);
+            node->key_count++;
+
+            borrowed_child->parent = node;
+        }
+
+        return true;
+    }
+
+    bool borrow_from_right(Node* node, Node* right_sibling, Node* parent, size_t parent_key_pos) {
+        if (node->is_leaf()) {
+            // 从右叶子节点借第一个键值对
+            Key borrowed_key = right_sibling->keys[0];
+            Value borrowed_value = right_sibling->values[0];
+
+            right_sibling->keys.erase(right_sibling->keys.begin());
+            right_sibling->values.erase(right_sibling->values.begin());
+            right_sibling->key_count--;
+
+            // 插入到当前节点的末尾
+            node->keys.push_back(borrowed_key);
+            node->values.push_back(borrowed_value);
+            node->key_count++;
+
+            // 更新父节点的分隔键
+            parent->keys[parent_key_pos] = right_sibling->keys[0];
+        } else {
+            // 从右内部节点借
+            Key borrowed_key = right_sibling->keys[0];
+            Node* borrowed_child = right_sibling->children[0];
+
+            right_sibling->keys.erase(right_sibling->keys.begin());
+            right_sibling->children.erase(right_sibling->children.begin());
+            right_sibling->key_count--;
+
+            // 更新父节点键
+            Key parent_key = parent->keys[parent_key_pos];
+            parent->keys[parent_key_pos] = borrowed_key;
+
+            // 将借来的键和子节点插入到当前节点
+            node->keys.push_back(parent_key);
+            node->children.push_back(borrowed_child);
+            node->key_count++;
+
+            borrowed_child->parent = node;
+        }
+
+        return true;
+    }
+
+    bool merge_with_left(Node* node, Node* left_sibling, Node* parent, size_t parent_key_pos) {
+        if (node->is_leaf()) {
+            // 合并叶子节点
+            left_sibling->keys.insert(left_sibling->keys.end(), node->keys.begin(), node->keys.end());
+            left_sibling->values.insert(left_sibling->values.end(), node->values.begin(), node->values.end());
+            left_sibling->key_count += node->key_count;
+            left_sibling->next = node->next;
+        } else {
+            // 合并内部节点
+            Key parent_key = parent->keys[parent_key_pos];
+            left_sibling->keys.push_back(parent_key);
+            left_sibling->keys.insert(left_sibling->keys.end(), node->keys.begin(), node->keys.end());
+            left_sibling->children.insert(left_sibling->children.end(), node->children.begin(), node->children.end());
+            left_sibling->key_count += node->key_count + 1;
+
+            // 更新子节点的父指针
+            for (Node* child : node->children) {
+                child->parent = left_sibling;
+            }
+        }
+
+        // 从父节点中删除分隔键和子节点指针
+        parent->keys.erase(parent->keys.begin() + parent_key_pos);
+        parent->children.erase(parent->children.begin() + parent_key_pos + 1);
+        parent->key_count--;
+
+        // 删除被合并的节点
+        delete node;
+
+        // 检查父节点是否需要重新平衡
+        if (parent->is_underflow(order) && !parent->is_root) {
+            return rebalance_node(parent);
+        }
+
+        return true;
+    }
+
+    void destroy_tree(Node* node) {
+        if (node->is_internal()) {
+            for (Node* child : node->children) {
+                destroy_tree(child);
+            }
+        }
+        delete node;
+    }
+
+    size_t count_nodes(Node* node) const {
+        if (node->is_leaf()) {
+            return 1;
+        }
+
+        size_t count = 1;
+        for (Node* child : node->children) {
+            count += count_nodes(child);
+        }
+        return count;
+    }
+};
+```
+
+## B+树优化技术
+
+### 前缀压缩
+
+#### 前缀压缩实现
+```cpp
+class PrefixCompressedBPlusTree : public BPlusTree {
+private:
+    struct CompressedNode {
+        vector<Key> keys;
+        vector<string> prefixes;  // 存储前缀
+        vector<string> suffixes;  // 存储后缀
+        vector<Node*> children;
+        vector<Value> values;
+        Node* next;
+        Node* parent;
+        bool is_root;
+        size_t key_count;
+
+        // 压缩相关的方法
+        void compress_keys() {
+            if (keys.empty()) return;
+
+            prefixes.clear();
+            suffixes.clear();
+
+            // 第一个键不压缩
+            prefixes.push_back("");
+            suffixes.push_back(keys[0]);
+
+            for (size_t i = 1; i < keys.size(); i++) {
+                string common_prefix = find_common_prefix(keys[i-1], keys[i]);
+                string suffix = keys[i].substr(common_prefix.length());
+
+                prefixes.push_back(common_prefix);
+                suffixes.push_back(suffix);
+            }
+        }
+
+        string get_full_key(size_t index) const {
+            if (index >= keys.size()) return "";
+
+            string full_key = suffixes[index];
+            size_t current = index;
+
+            // 向上查找完整的前缀
+            while (current > 0) {
+                current--;
+                full_key = prefixes[current] + full_key;
+                if (prefixes[current] == "") break;
+            }
+
+            return full_key;
+        }
+
+    private:
+        string find_common_prefix(const string& a, const string& b) const {
+            size_t min_len = min(a.length(), b.length());
+            size_t common_len = 0;
+
+            while (common_len < min_len && a[common_len] == b[common_len]) {
+                common_len++;
+            }
+
+            return a.substr(0, common_len);
+        }
+    };
+
+public:
+    PrefixCompressedBPlusTree(size_t tree_order = 4) : BPlusTree(tree_order) {}
+
+    double get_compression_ratio() const {
+        size_t original_size = 0;
+        size_t compressed_size = 0;
+
+        // 计算原始大小
+        for (const auto& key : get_all_keys()) {
+            original_size += key.length();
+        }
+
+        // 计算压缩后大小
+        for (const auto& node : get_all_nodes()) {
+            for (const auto& prefix : node.prefixes) {
+                compressed_size += prefix.length();
+            }
+            for (const auto& suffix : node.suffixes) {
+                compressed_size += suffix.length();
+            }
+        }
+
+        return original_size > 0 ? static_cast<double>(compressed_size) / original_size : 1.0;
+    }
+};
+```
+
+### 批量加载优化
+
+#### B+树批量加载
+```cpp
+class BulkLoadBPlusTree {
+public:
+    static unique_ptr<BPlusTree> bulk_load(
+        const vector<pair<Key, Value>>& sorted_data,
+        size_t order) {
+
+        if (sorted_data.empty()) {
+            return make_unique<BPlusTree>(order);
+        }
+
+        // 验证数据是否已排序
+        if (!is_sorted(sorted_data.begin(), sorted_data.end())) {
+            throw invalid_argument("Data must be sorted for bulk loading");
+        }
+
+        // 创建叶子节点
+        vector<Node*> leaf_nodes = create_leaf_nodes(sorted_data, order);
+
+        // 构建内部节点
+        Node* root = build_internal_levels(leaf_nodes, order);
+
+        auto tree = make_unique<BPlusTree>(order);
+        tree->set_root(root);
+        tree->set_height(calculate_height(root));
+
+        return tree;
+    }
+
+private:
+    static vector<Node*> create_leaf_nodes(
+        const vector<pair<Key, Value>>& sorted_data,
+        size_t order) {
+
+        vector<Node*> leaf_nodes;
+        size_t max_keys_per_leaf = order - 1;
+        size_t data_size = sorted_data.size();
+
+        for (size_t i = 0; i < data_size; i += max_keys_per_leaf) {
+            Node* leaf = new Node(NodeType::LEAF);
+            size_t end_index = min(i + max_keys_per_leaf, data_size);
+
+            for (size_t j = i; j < end_index; j++) {
+                leaf->keys.push_back(sorted_data[j].first);
+                leaf->values.push_back(sorted_data[j].second);
+            }
+
+            leaf->key_count = leaf->keys.size();
+            leaf_nodes.push_back(leaf);
+        }
+
+        // 建立叶子链表
+        for (size_t i = 0; i < leaf_nodes.size() - 1; i++) {
+            leaf_nodes[i]->next = leaf_nodes[i + 1];
+        }
+
+        return leaf_nodes;
+    }
+
+    static Node* build_internal_levels(vector<Node*>& child_nodes, size_t order) {
+        while (child_nodes.size() > 1) {
+            vector<Node*> parent_nodes = create_parent_level(child_nodes, order);
+            child_nodes = parent_nodes;
+        }
+
+        return child_nodes[0];  // 返回根节点
+    }
+
+    static vector<Node*> create_parent_level(
+        const vector<Node*>& child_nodes,
+        size_t order) {
+
+        vector<Node*> parent_nodes;
+        size_t max_children_per_node = order;
+        size_t child_count = child_nodes.size();
+
+        for (size_t i = 0; i < child_count; i += max_children_per_node) {
+            Node* parent = new Node(NodeType::INTERNAL);
+            size_t end_index = min(i + max_children_per_node, child_count);
+
+            // 添加子节点
+            for (size_t j = i; j < end_index; j++) {
+                parent->children.push_back(child_nodes[j]);
+                child_nodes[j]->parent = parent;
+            }
+
+            // 添加分隔键（第一个键除外）
+            for (size_t j = i + 1; j < end_index; j++) {
+                Key separator_key = get_first_key(child_nodes[j]);
+                parent->keys.push_back(separator_key);
+            }
+
+            parent->key_count = parent->keys.size();
+            parent_nodes.push_back(parent);
+        }
+
+        return parent_nodes;
+    }
+
+    static Key get_first_key(Node* node) {
+        while (node->is_internal()) {
+            node = node->children[0];
+        }
+        return node->keys[0];
+    }
+
+    static size_t calculate_height(Node* root) {
+        size_t height = 1;
+        Node* current = root;
+
+        while (current->is_internal()) {
+            height++;
+            current = current->children[0];
+        }
+
+        return height;
+    }
+};
+```
+
+### 缓存感知B+树
+
+#### 缓存友好的B+树设计
+```cpp
+class CacheAwareBPlusTree {
+private:
+    static const size_t CACHE_LINE_SIZE = 64;  // 假设缓存行大小为64字节
+    static const size_t NODE_SIZE = 4096;     // 页面大小
+
+    struct CacheOptimizedNode {
+        // 确保节点大小适合缓存行
+        alignas(CACHE_LINE_SIZE) Key keys[15];      // 15个键
+        alignas(CACHE_LINE_SIZE) Node* children[16]; // 16个子节点指针
+        alignas(CACHE_LINE_SIZE) Value values[15];   // 15个值（叶子节点）
+        Node* next;
+        Node* parent;
+        NodeType type;
+        uint8_t key_count;
+        bool is_root;
+
+        // 填充到缓存行边界
+        char padding[CACHE_LINE_SIZE - (
+            sizeof(keys) + sizeof(children) + sizeof(values) +
+            sizeof(next) + sizeof(parent) + sizeof(type) +
+            sizeof(key_count) + sizeof(is_root)) % CACHE_LINE_SIZE];
+    };
+
+public:
+    CacheAwareBPlusTree() {
+        static_assert(sizeof(CacheOptimizedNode) <= NODE_SIZE,
+                     "Node size exceeds page size");
+    }
+
+    // 优化的查找操作
+    Value* find_optimized(const Key& key) {
+        CacheOptimizedNode* current = static_cast<CacheOptimizedNode*>(root);
+
+        // 预取下一个可能访问的节点
+        prefetch_next_level(current);
+
+        while (current->type == NodeType::INTERNAL) {
+            // 使用二分查找优化内部节点搜索
+            int child_index = binary_search_in_node(current, key);
+
+            // 预取下一个节点
+            if (child_index < current->key_count) {
+                prefetch_node(current->children[child_index + 1]);
+            }
+
+            current = static_cast<CacheOptimizedNode*>(current->children[child_index]);
+        }
+
+        // 在叶子节点中查找
+        return find_in_leaf(current, key);
+    }
+
+private:
+    void prefetch_next_level(CacheOptimizedNode* node) {
+        if (node->type == NodeType::INTERNAL) {
+            // 预取前几个子节点
+            for (int i = 0; i < min(4, static_cast<int>(node->key_count + 1)); i++) {
+                prefetch_node(node->children[i]);
+            }
+        }
+    }
+
+    void prefetch_node(Node* node) {
+        // 使用编译器内置函数进行数据预取
+        __builtin_prefetch(node, 0, 3);  // 预取到所有缓存级别
+    }
+
+    int binary_search_in_node(CacheOptimizedNode* node, const Key& key) {
+        int left = 0;
+        int right = node->key_count - 1;
+
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+
+            if (node->keys[mid] == key) {
+                return mid + 1;
+            } else if (node->keys[mid] < key) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+
+        return left;
+    }
+
+    Value* find_in_leaf(CacheOptimizedNode* leaf, const Key& key) {
+        // 线性扫描小叶子节点
+        for (int i = 0; i < leaf->key_count; i++) {
+            if (leaf->keys[i] == key) {
+                return &leaf->values[i];
+            }
+        }
+        return nullptr;
+    }
+};
+```
+
+## B+树性能分析
+
+### 性能基准测试
+
+#### B+树性能测试框架
+```cpp
+class BPlusTreeBenchmark {
+public:
+    struct BenchmarkConfig {
+        size_t tree_order;
+        size_t data_size;
+        bool use_prefix_compression;
+        bool cache_aware;
+        size_t value_size;
+    };
+
+    struct BenchmarkResults {
+        double build_time_ms;
+        double insert_time_ms;
+        double point_query_time_ms;
+        double range_query_time_ms;
+        double delete_time_ms;
+        size_t tree_height;
+        size_t node_count;
+        double memory_usage_mb;
+        double compression_ratio;
+    };
+
+    BenchmarkResults run_benchmark(const BenchmarkConfig& config) {
+        BenchmarkResults results;
+
+        // 生成测试数据
+        auto test_data = generate_test_data(config.data_size, config.value_size);
+
+        // 创建B+树
+        unique_ptr<BPlusTreeInterface> tree = create_tree(config);
+
+        // 构建时间测试
+        auto start = high_resolution_clock::now();
+        if (config.use_prefix_compression) {
+            tree = bulk_load_compressed(test_data, config.tree_order);
+        } else {
+            tree = bulk_load_standard(test_data, config.tree_order);
+        }
+        auto end = high_resolution_clock::now();
+        results.build_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+        // 插入性能测试
+        auto insert_data = generate_test_data(config.data_size / 10, config.value_size);
+        start = high_resolution_clock::now();
+        for (const auto& entry : insert_data) {
+            tree->insert(entry.first, entry.second);
+        }
+        end = high_resolution_clock::now();
+        results.insert_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+        // 点查询性能测试
+        vector<Key> query_keys = extract_keys(test_data);
+        start = high_resolution_clock::now();
+        for (const Key& key : query_keys) {
+            Value value;
+            tree->find(key, &value);
+        }
+        end = high_resolution_clock::now();
+        results.point_query_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+        // 范围查询性能测试
+        Key range_start = query_keys[query_keys.size() / 4];
+        Key range_end = query_keys[3 * query_keys.size() / 4];
+        start = high_resolution_clock::now();
+        auto range_results = tree->range_query(range_start, range_end);
+        end = high_resolution_clock::now();
+        results.range_query_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+        // 删除性能测试
+        auto delete_keys = extract_keys(insert_data);
+        start = high_resolution_clock::now();
+        for (const Key& key : delete_keys) {
+            tree->remove(key);
+        }
+        end = high_resolution_clock::now();
+        results.delete_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+        // 收集统计信息
+        results.tree_height = tree->get_height();
+        results.node_count = tree->get_node_count();
+        results.memory_usage_mb = tree->get_memory_usage() / (1024.0 * 1024.0);
+
+        if (config.use_prefix_compression) {
+            results.compression_ratio = tree->get_compression_ratio();
+        }
+
+        return results;
+    }
+
+    void analyze_scalability(const BenchmarkConfig& base_config) {
+        vector<size_t> data_sizes = {1000, 10000, 100000, 1000000, 10000000};
+        vector<BenchmarkResults> results;
+
+        for (size_t size : data_sizes) {
+            BenchmarkConfig config = base_config;
+            config.data_size = size;
+            results.push_back(run_benchmark(config));
+        }
+
+        // 生成可扩展性报告
+        generate_scalability_report(results);
+    }
+
+private:
+    vector<pair<Key, Value>> generate_test_data(size_t count, size_t value_size) {
+        vector<pair<Key, Value>> data;
+        data.reserve(count);
+
+        random_device rd;
+        mt19937 gen(rd());
+
+        for (size_t i = 0; i < count; i++) {
+            Key key = generate_unique_key();
+            Value value = generate_random_value(value_size);
+            data.emplace_back(key, value);
+        }
+
+        sort(data.begin(), data.end());  // 按键排序
+        return data;
+    }
+
+    void generate_scalability_report(const vector<BenchmarkResults>& results) {
+        cout << "B+ Tree Scalability Analysis:\n";
+        cout << "============================\n";
+        cout << "Data Size\tBuild Time\tInsert Time\tQuery Time\tHeight\n";
+        cout << "------------------------------------------------\n";
+
+        for (const auto& result : results) {
+            cout << result.tree_height << "\t"
+                 << result.build_time_ms << "\t"
+                 << result.insert_time_ms << "\t"
+                 << result.point_query_time_ms << "\t"
+                 << result.tree_height << "\n";
+        }
+    }
+};
+```
+
+## 实践建议
+
+### B+树优化策略
+1. **选择合适的阶数**：根据页面大小和数据特征选择B+树的阶
+2. **批量加载**：对于已知数据的批量插入，使用批量加载算法
+3. **前缀压缩**：对于具有共同前缀的键，使用前缀压缩减少空间占用
+4. **缓存优化**：设计缓存友好的节点结构
+
+### 性能调优技巧
+1. **监控树高度**：定期检查树的高度，避免过深的树结构
+2. **碎片整理**：定期进行碎片整理，提高空间利用率
+3. **预取策略**：实现智能预取机制，提高缓存命中率
+4. **并发控制**：优化并发访问策略，提高系统吞吐量
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持并发访问的B+树索引
+2. 设计并实现B+树的变种，如B*树或B-link树
+3. 实现一个自适应的B+树，能够根据工作负载自动调整参数
+
+### 思考题
+1. 分析B+树在不同数据分布下的性能特征
+2. 讨论B+树与哈希索引的优劣对比
+3. 如何设计一个混合索引结构，结合B+树和哈希索引的优点？
+
+## 下节预告
+
+下一讲将介绍**索引并发控制**，包括：
+- B+树的并发访问机制
+- 锁协议和并发控制算法
+- 乐观并发控制
+- 性能优化策略
+
+---
+
+**核心要点**：B+树为数据库提供了高效的索引结构，特别适合范围查询和有序访问，是现代数据库系统的核心组件！

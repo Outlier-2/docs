@@ -1,0 +1,441 @@
+---
+title: "Week 0 - 计算机科学思维"
+description: "CS50第0周（2025版本）：了解计算机科学基础概念，包括二进制、ASCII、算法和Scratch编程"
+---
+
+# Week 0 - 计算机科学思维
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/0" title="CS50 2025 - Week 0" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **计算思维**：问题的输入、输出和解决方法
+- **数据表示**：一进制、二进制、十进制、ASCII、Unicode、RGB
+- **抽象化**：简化复杂系统的概念
+- **算法设计**：解决问题的步骤和方法
+- **运行时间**：算法效率分析
+- **伪代码**：算法的逻辑描述
+- **Scratch编程**：函数、参数、返回值、变量、布尔表达式、条件语句、循环、事件、线程
+
+## 核心概念
+
+### 计算思维与问题解决
+
+**计算机科学本质上是问题解决的学科**。每个问题都有：
+
+- **输入**：需要处理的数据
+- **输出**：期望得到的结果
+- **解决过程**：从输入到输出的步骤
+
+![输入输出处理图示](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide38.png)
+
+上图展示了编程的核心概念：将输入通过处理过程转换为输出。这是所有程序的基本工作原理。
+
+### 数据表示系统
+
+计算机只理解0和1，但通过这些简单数字可以表示一切：
+
+#### 二进制系统
+
+**为什么使用二进制？**
+- **物理实现简单**：电路的开/关状态
+- **可靠性高**：只有两种状态，抗干扰能力强
+- **数学基础**：基于布尔代数
+
+**二进制表示示例**：
+```text
+13 (十进制) = 8 + 4 + 0 + 1 = 1101 (二进制)
+42 (十进制) = 32 + 8 + 2 = 101010 (二进制)
+```
+
+#### ASCII和Unicode
+
+**ASCII**：用7位二进制表示英文字符
+- A = 65 = 1000001
+- a = 97 = 1100001
+- 0 = 48 = 0110000
+
+![ASCII字符映射表](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide93.png)
+
+上表展示了ASCII字符到数字的标准映射，这是计算机处理文本的基础。
+
+**Unicode**：扩展ASCII，支持全球字符
+
+![Unicode表情符号示例](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide103.png)
+
+Unicode可以表示全球各种语言的字符，包括表情符号等特殊字符。
+
+#### RGB颜色表示
+
+用三个0-255的数字表示颜色：
+- 红色：(255, 0, 0)
+- 绿色：(0, 255, 0)
+- 蓝色：(0, 0, 255)
+
+![RGB颜色模型图示](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide118.png)
+
+RGB模型通过红、绿、蓝三个颜色通道的组合来表示所有颜色。
+
+![具体RGB值示例](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide120.png)
+
+上图为RGB值(72, 73, 33)对应的黄色，展示了具体的颜色编码效果。
+
+### 算法与抽象化
+
+#### 什么是算法？
+
+**算法是解决问题的精确步骤**，例如找最大值的算法：
+
+```pseudo
+function findMax(a, b, c):
+    if a > b and a > c:
+        return a
+    else if b > a and b > c:
+        return b
+    else:
+        return c
+```
+
+#### 抽象化的重要性
+
+**抽象化是隐藏复杂细节的过程**：
+- 函数：隐藏具体实现，只暴露接口
+- 变量：用名称表示内存中的值
+- 控制结构：简化重复和条件逻辑
+
+### Scratch可视化编程
+
+Scratch通过拖拽积木块来学习编程概念：
+
+![Scratch IDE界面](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide162.png)
+
+Scratch提供了直观的图形界面，包含舞台、角色、积木区和脚本区域，让编程变得可视化。
+
+#### 核心编程概念
+
+1. **函数和参数**
+   ```scratch
+   定义 跳舞 (次数)
+     重复 (次数) 次
+       移动 (100) 步
+       等待 (0.5) 秒
+     结束
+   ```
+
+2. **变量和数据**
+   ```scratch
+   将 [得分] 设为 [0]
+   将 [得分] 增加 [10]
+   ```
+
+3. **条件语句**
+   ```scratch
+   如果 <(得分) > [50]> 那么
+     说 [恭喜过关！]
+   否则
+     说 [继续努力！]
+   结束
+   ```
+
+4. **循环**
+   ```scratch
+   重复 (10) 次
+     移动 (50) 步
+     右转 (36) 度
+   结束
+   ```
+
+5. **事件处理**
+   ```scratch
+   当 [绿色旗帜] 被点击
+     广播 [开始游戏]
+
+   当接收到 [开始游戏]
+     重置角色位置
+   ```
+
+#### Scratch项目示例
+
+**简单的Oscartime游戏概念**：
+- 使用事件处理用户输入
+- 用变量跟踪游戏状态
+- 通过循环创建动画效果
+- 用条件判断游戏逻辑
+
+![Scratch坐标系系统](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide167.png)
+
+Scratch使用以(0,0)为中心的坐标系，x轴向右为正，y轴向上为正。
+
+![Scratch中的输入输出概念](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide172.png)
+
+通过Scratch重新展示了输入输出的核心概念，帮助理解程序的基本工作原理。
+
+![Oscartime游戏界面](https://cs50.harvard.edu/x/notes/0/cs50Week0Scratch10.png)
+
+Oscartime是CS50中的一个经典Scratch项目示例，展示了如何用Scratch创建互动游戏。
+
+## 算法效率
+
+### 运行时间分析
+
+好的算法不仅要正确，还要高效：
+
+- **线性时间 O(n)**：运行时间与输入大小成正比
+- **对数时间 O(log n)**：每次都将问题规模减半
+- **常数时间 O(1)**：运行时间与输入大小无关
+
+![算法效率对比图](https://cs50.harvard.edu/x/notes/0/cs50Week0Slide141.png)
+
+上图比较了不同搜索算法的效率：线性搜索（O(n)）、每次减半的搜索（O(n/2)）和二分查找（O(log n)）。可以看到算法效率对程序性能的巨大影响。
+
+### 二分查找示例
+
+```pseudo
+function binarySearch(array, target):
+    left = 0
+    right = length(array) - 1
+
+    while left <= right:
+        middle = (left + right) / 2
+        if array[middle] == target:
+            return middle
+        else if array[middle] < target:
+            left = middle + 1
+        else:
+            right = middle - 1
+
+    return -1  // 未找到
+```
+
+## 代码示例
+
+### 十进制转二进制
+
+```c
+#include <stdio.h>
+
+void decimalToBinary(int n) {
+    // 处理0的特殊情况
+    if (n == 0) {
+        printf("0");
+        return;
+    }
+
+    int binary[32];
+    int i = 0;
+
+    // 除2取余法
+    while (n > 0) {
+        binary[i] = n % 2;
+        n = n / 2;
+        i++;
+    }
+
+    // 逆序输出
+    printf("二进制表示: ");
+    for (int j = i - 1; j >= 0; j--) {
+        printf("%d", binary[j]);
+    }
+}
+
+int main() {
+    int number;
+    printf("请输入一个十进制数: ");
+    scanf("%d", &number);
+
+    printf("%d 的二进制是: ", number);
+    decimalToBinary(number);
+    printf("\n");
+
+    return 0;
+}
+```
+
+### ASCII字符转换
+
+```c
+#include <stdio.h>
+
+void printASCII() {
+    printf("ASCII字符表 (32-126):\n");
+    printf("十进制\t十六进制\t字符\n");
+    printf("------------------------\n");
+
+    for (int i = 32; i <= 126; i++) {
+        printf("%d\t0x%x\t\t%c\n", i, i, i);
+    }
+}
+
+int main() {
+    printASCII();
+    return 0;
+}
+```
+
+### 简单算法实现
+
+```c
+#include <stdio.h>
+
+// 找出三个数中的最大值
+int findMax(int a, int b, int c) {
+    int max = a;
+
+    if (b > max) {
+        max = b;
+    }
+
+    if (c > max) {
+        max = c;
+    }
+
+    return max;
+}
+
+// 计算数组平均值
+double calculateAverage(int array[], int size) {
+    int sum = 0;
+
+    for (int i = 0; i < size; i++) {
+        sum += array[i];
+    }
+
+    return (double)sum / size;
+}
+
+int main() {
+    // 测试findMax函数
+    int num1 = 10, num2 = 25, num3 = 15;
+    int maximum = findMax(num1, num2, num3);
+    printf("三个数中的最大值是: %d\n", maximum);
+
+    // 测试average函数
+    int scores[] = {85, 90, 78, 92, 88};
+    int size = sizeof(scores) / sizeof(scores[0]);
+    double average = calculateAverage(scores, size);
+    printf("平均分是: %.2f\n", average);
+
+    return 0;
+}
+```
+
+## 练习题与答案
+
+### 1. 二进制转换练习
+
+**问题：** 将以下十进制数转换为二进制
+
+**答案：**
+- 25 = 16 + 8 + 0 + 0 + 1 = 11001（二进制）
+- 42 = 32 + 0 + 8 + 0 + 2 + 0 = 101010（二进制）
+- 128 = 10000000（二进制）
+- 255 = 128 + 64 + 32 + 16 + 8 + 4 + 2 + 1 = 11111111（二进制）
+
+### 2. ASCII编码
+
+**问题：** 查找以下字符的ASCII值
+
+**答案：**
+- 'A' = 65（十进制）= 01000001（二进制）
+- 'z' = 122（十进制）= 01111010（二进制）
+- '9' = 57（十进制）= 00111001（二进制）
+- '@' = 64（十进制）= 01000000（二进制）
+
+### 3. 算法设计
+
+**问题：** 设计以下算法
+
+**答案：**
+
+**判断偶数算法：**
+```pseudo
+function isEven(n):
+    if n % 2 == 0:
+        return true
+    else:
+        return false
+```
+
+**计算阶乘算法：**
+```pseudo
+function factorial(n):
+    if n <= 1:
+        return 1
+    else:
+        return n * factorial(n-1)
+```
+
+**找数组最小值算法：**
+```pseudo
+function findMin(array):
+    min = array[0]
+    for i from 1 to length(array)-1:
+        if array[i] < min:
+            min = array[i]
+    return min
+```
+
+### 4. Scratch项目创意
+
+**问题：** Scratch项目建议
+
+**答案：**
+- **动画故事**：创建角色移动、对话和场景切换的故事
+- **互动游戏**：实现简单的点击或键盘控制的游戏
+- **数学计算工具**：制作加法器、转换器等实用工具
+
+### 5. 思考题
+
+**问题：** 为什么计算机使用二进制而不是十进制？
+
+**答案：** 因为二进制在物理实现上更简单、可靠。电路只有开/关两种状态，抗干扰能力强，且基于布尔代数的数学基础。
+
+**问题：** 抽象化如何帮助我们更好地理解复杂系统？
+
+**答案：** 抽象化隐藏了不必要的细节，让我们专注于核心功能和逻辑。就像开车时不需要了解发动机的具体工作原理一样，抽象化让我们能更高效地使用和构建复杂系统。
+
+**问题：** 算法效率为什么重要？
+
+**答案：** 算法效率直接影响程序的运行时间和资源消耗。在大数据量情况下，效率低的算法可能导致程序运行时间过长甚至无法完成，而高效的算法能节省计算资源和时间成本。
+
+## 学习建议
+
+1. **概念理解优先**：确保理解二进制、ASCII、算法等核心概念
+2. **Scratch实践**：在scratch.mit.edu上创建项目，熟悉编程概念
+3. **手写算法**：用伪代码描述解决问题的步骤
+4. **分析效率**：思考不同算法的时间复杂度
+5. **连接实际**：观察日常生活中的算法应用
+
+## 扩展资源
+
+- **官方资源**：
+  - [Scratch官方网站](https://scratch.mit.edu/)
+  - [CS50 Week 0 Lecture](https://cs50.harvard.edu/x/2025/weeks/0/)
+
+- **学习工具**：
+  - [Binary Converter](https://www.rapidtables.com/convert/number/binary-converter.html)
+  - [ASCII Table](https://www.asciitable.com/)
+
+- **深入阅读**：
+  - [算法导论（第一章）](https://mitpress.mit.edu/books/introduction-algorithms-third-edition)
+  - [计算思维](https://www.cs.cmu.edu/~15110-s13/Wendy/sec1-A.html)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 1: C语言基础" icon="arrow-right" href="./week1">
+    开始学习C语言编程基础
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜完成第0周学习！你已经掌握了计算机科学的核心思维方式和基础概念，准备好进入编程的世界了！*

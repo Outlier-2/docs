@@ -1,0 +1,1415 @@
+---
+title: "Week 10：网络安全"
+description: "CS144 Week 10 - 网络安全、加密、认证、防火墙"
+---
+
+# Week 10：网络安全
+
+## 课程概述
+
+Week 10 covers network security fundamentals, including encryption, authentication, firewalls, and secure communication protocols.
+
+## 网络安全基础
+
+### 安全目标
+
+网络安全的核心目标通常被称为CIA三元组：
+
+- **机密性 (Confidentiality)**：保护数据不被未授权访问
+- **完整性 (Integrity)**：确保数据不被篡改
+- **可用性 (Availability)**：确保服务和数据可正常访问
+
+### 常见网络威胁
+
+```cpp
+class NetworkThreats {
+public:
+    enum ThreatType {
+        SNIFFING,        // 网络嗅探
+        SPOOFING,        // IP欺骗
+        DENIAL_OF_SERVICE,  // 拒绝服务攻击
+        MAN_IN_THE_MIDDLE,  // 中间人攻击
+        REPLAY_ATTACK,   // 重放攻击
+        PHISHING,        // 钓鱼攻击
+        MALWARE          // 恶意软件
+    };
+
+    struct Threat {
+        ThreatType type;
+        std::string description;
+        std::vector<std::string> mitigation_strategies;
+        double severity_level;
+    };
+
+    std::vector<Threat> get_common_threats() {
+        return {
+            {
+                SNIFFING,
+                "未授权的网络流量监听",
+                {"使用加密", "网络分段", "安全协议"},
+                0.8
+            },
+            {
+                SPOOFING,
+                "伪造IP地址进行攻击",
+                {"IPSec", "源路由验证", "防火墙"},
+                0.7
+            },
+            {
+                DENIAL_OF_SERVICE,
+                "通过大量请求使服务不可用",
+                {"速率限制", "DDoS防护", "负载均衡"},
+                0.9
+            }
+        };
+    }
+};
+```
+
+## 加密技术
+
+### 对称加密
+
+```cpp
+class SymmetricEncryption {
+private:
+    AES_KEY aes_key;
+    std::vector<uint8_t> key;
+
+public:
+    SymmetricEncryption(const std::vector<uint8_t>& encryption_key) : key(encryption_key) {
+        AES_set_encrypt_key(key.data(), key.size() * 8, &aes_key);
+    }
+
+    std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext) {
+        // 填充数据到块大小
+        std::vector<uint8_t> padded = pad_pkcs7(plaintext, AES_BLOCK_SIZE);
+
+        // 分配输出缓冲区
+        std::vector<uint8_t> ciphertext(padded.size());
+
+        // AES加密
+        AES_encrypt(padded.data(), ciphertext.data(), &aes_key);
+
+        return ciphertext;
+    }
+
+    std::vector<uint8_t> decrypt(const std::vector<uint8_t>& ciphertext) {
+        std::vector<uint8_t> plaintext(ciphertext.size());
+
+        // AES解密
+        AES_decrypt(ciphertext.data(), plaintext.data(), &aes_key);
+
+        // 移除填充
+        return unpad_pkcs7(plaintext);
+    }
+
+private:
+    std::vector<uint8_t> pad_pkcs7(const std::vector<uint8_t>& data, size_t block_size) {
+        size_t padding_length = block_size - (data.size() % block_size);
+        std::vector<uint8_t> padded = data;
+        padded.insert(padded.end(), padding_length, static_cast<uint8_t>(padding_length));
+        return padded;
+    }
+
+    std::vector<uint8_t> unpad_pkcs7(const std::vector<uint8_t>& padded) {
+        if (padded.empty()) return padded;
+
+        uint8_t padding_length = padded.back();
+        if (padding_length > padded.size()) {
+            throw std::runtime_error("Invalid padding");
+        }
+
+        return std::vector<uint8_t>(padded.begin(), padded.end() - padding_length);
+    }
+};
+```
+
+### 非对称加密
+
+```cpp
+class AsymmetricEncryption {
+private:
+    RSA* rsa_keypair;
+    EVP_PKEY* evp_key;
+
+public:
+    AsymmetricEncryption(int key_size = 2048) {
+        // 生成RSA密钥对
+        rsa_keypair = RSA_new();
+        BIGNUM* bn = BN_new();
+        BN_set_word(bn, RSA_F4);
+        RSA_generate_key_ex(rsa_keypair, key_size, bn, nullptr);
+        BN_free(bn);
+
+        // 转换为EVP_PKEY
+        evp_key = EVP_PKEY_new();
+        EVP_PKEY_assign_RSA(evp_key, rsa_keypair);
+    }
+
+    ~AsymmetricEncryption() {
+        EVP_PKEY_free(evp_key);
+    }
+
+    std::vector<uint8_t> encrypt(const std::vector<uint8_t>& plaintext) {
+        // 创建加密上下文
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(evp_key, nullptr);
+        EVP_PKEY_encrypt_init(ctx);
+        EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING);
+
+        // 确定输出大小
+        size_t ciphertext_len;
+        EVP_PKEY_encrypt(ctx, nullptr, &ciphertext_len, plaintext.data(), plaintext.size());
+
+        // 加密
+        std::vector<uint8_t> ciphertext(ciphertext_len);
+        EVP_PKEY_encrypt(ctx, ciphertext.data(), &ciphertext_len,
+                        plaintext.data(), plaintext.size());
+
+        EVP_PKEY_CTX_free(ctx);
+        return ciphertext;
+    }
+
+    std::vector<uint8_t> decrypt(const std::vector<uint8_t>& ciphertext) {
+        // 创建解密上下文
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(evp_key, nullptr);
+        EVP_PKEY_decrypt_init(ctx);
+        EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING);
+
+        // 确定输出大小
+        size_t plaintext_len;
+        EVP_PKEY_decrypt(ctx, nullptr, &plaintext_len, ciphertext.data(), ciphertext.size());
+
+        // 解密
+        std::vector<uint8_t> plaintext(plaintext_len);
+        EVP_PKEY_decrypt(ctx, plaintext.data(), &plaintext_len,
+                        ciphertext.data(), ciphertext.size());
+
+        plaintext.resize(plaintext_len);
+        EVP_PKEY_CTX_free(ctx);
+        return plaintext;
+    }
+
+    std::vector<uint8_t> get_public_key() {
+        BIO* bio = BIO_new(BIO_s_mem());
+        PEM_write_bio_PUBKEY(bio, evp_key);
+
+        char* buffer = nullptr;
+        long length = BIO_get_mem_data(bio, &buffer);
+        std::vector<uint8_t> public_key(buffer, buffer + length);
+
+        BIO_free(bio);
+        return public_key;
+    }
+};
+```
+
+### 数字签名
+
+```cpp
+class DigitalSignature {
+private:
+    EVP_PKEY* private_key;
+    EVP_PKEY* public_key;
+
+public:
+    DigitalSignature() {
+        // 生成ECDSA密钥对
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
+        EVP_PKEY_keygen_init(ctx);
+        EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1);
+        EVP_PKEY_keygen(ctx, &private_key);
+        EVP_PKEY_CTX_free(ctx);
+
+        // 复制公钥
+        public_key = EVP_PKEY_dup(private_key);
+    }
+
+    ~DigitalSignature() {
+        EVP_PKEY_free(private_key);
+        EVP_PKEY_free(public_key);
+    }
+
+    std::vector<uint8_t> sign(const std::vector<uint8_t>& message) {
+        // 创建签名上下文
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+        EVP_SignInit(ctx, EVP_sha256());
+
+        // 更新消息
+        EVP_SignUpdate(ctx, message.data(), message.size());
+
+        // 确定签名大小
+        size_t sig_len;
+        EVP_SignFinal(ctx, nullptr, &sig_len, private_key);
+
+        // 签名
+        std::vector<uint8_t> signature(sig_len);
+        EVP_SignFinal(ctx, signature.data(), &sig_len, private_key);
+
+        EVP_MD_CTX_free(ctx);
+        return signature;
+    }
+
+    bool verify(const std::vector<uint8_t>& message, const std::vector<uint8_t>& signature) {
+        // 创建验证上下文
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+        EVP_VerifyInit(ctx, EVP_sha256());
+
+        // 更新消息
+        EVP_VerifyUpdate(ctx, message.data(), message.size());
+
+        // 验证签名
+        int result = EVP_VerifyFinal(ctx, signature.data(), signature.size(), public_key);
+
+        EVP_MD_CTX_free(ctx);
+        return result == 1;
+    }
+};
+```
+
+## 认证协议
+
+### TLS/SSL握手
+
+```cpp
+class TLSHandshake {
+private:
+    std::vector<uint8_t> client_random;
+    std::vector<uint8_t> server_random;
+    std::vector<uint8_t> master_secret;
+    Certificate server_certificate;
+    PrivateKey server_private_key;
+
+public:
+    enum HandshakeState {
+        CLIENT_HELLO,
+        SERVER_HELLO,
+        CERTIFICATE,
+        KEY_EXCHANGE,
+        FINISHED
+    };
+
+    struct ClientHello {
+        uint16_t tls_version;
+        std::vector<uint8_t> random;
+        std::vector<uint16_t> cipher_suites;
+        std::vector<uint8_t> extensions;
+    };
+
+    struct ServerHello {
+        uint16_t tls_version;
+        std::vector<uint8_t> random;
+        uint16_t cipher_suite;
+        std::vector<uint8_t> extensions;
+    };
+
+    ClientHello create_client_hello() {
+        ClientHello hello;
+        hello.tls_version = 0x0303;  // TLS 1.2
+        hello.random = generate_random(32);
+
+        // 支持的密码套件
+        hello.cipher_suites = {
+            0xC02B,  // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+            0xC02F,  // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+            0x002F,  // TLS_RSA_WITH_AES_128_CBC_SHA
+        };
+
+        return hello;
+    }
+
+    ServerHello process_client_hello(const ClientHello& hello) {
+        client_random = hello.random;
+
+        ServerHello response;
+        response.tls_version = 0x0303;
+        response.random = generate_random(32);
+        server_random = response.random;
+
+        // 选择密码套件
+        response.cipher_suite = 0xC02B;  // 选择第一个支持的套件
+
+        return response;
+    }
+
+    void perform_key_exchange(const std::vector<uint8_t>& client_key_exchange) {
+        // 生成主密钥
+        std::vector<uint8_t> pre_master_secret = client_key_exchange;
+
+        // PRF函数生成主密钥
+        master_secret = prf(pre_master_secret,
+                           "master secret",
+                           client_random + server_random,
+                           48);
+    }
+
+    bool verify_finished(const std::vector<uint8_t>& finished_message) {
+        // 验证Finished消息
+        std::vector<uint8_t> expected = calculate_finished_message();
+        return finished_message == expected;
+    }
+
+private:
+    std::vector<uint8_t> generate_random(size_t length) {
+        std::vector<uint8_t> random(length);
+        RAND_bytes(random.data(), length);
+        return random;
+    }
+
+    std::vector<uint8_t> prf(const std::vector<uint8_t>& secret,
+                            const std::string& label,
+                            const std::vector<uint8_t>& seed,
+                            size_t output_length) {
+        // TLS的PRF函数实现
+        std::vector<uint8_t> result;
+        std::vector<uint8_t> hmac_input = seed;
+
+        HMAC_CTX* hmac = HMAC_CTX_new();
+        unsigned char hmac_output[EVP_MAX_MD_SIZE];
+        unsigned int hmac_length;
+
+        for (size_t i = 0; result.size() < output_length; i++) {
+            std::vector<uint8_t> A;
+            if (i == 0) {
+                A.insert(A.end(), label.begin(), label.end());
+                A.insert(A.end(), hmac_input.begin(), hmac_input.end());
+            } else {
+                A = hmac_output;
+                A.insert(A.end(), hmac_input.begin(), hmac_input.end());
+            }
+
+            HMAC_Init_ex(hmac, secret.data(), secret.size(), EVP_sha256(), nullptr);
+            HMAC_Update(hmac, A.data(), A.size());
+            HMAC_Final(hmac, hmac_output, &hmac_length);
+
+            result.insert(result.end(), hmac_output, hmac_output + hmac_length);
+        }
+
+        HMAC_CTX_free(hmac);
+        result.resize(output_length);
+        return result;
+    }
+};
+```
+
+## 防火墙
+
+### 包过滤防火墙
+
+```cpp
+class PacketFilterFirewall {
+private:
+    struct FirewallRule {
+        enum Action { ALLOW, DENY, LOG } action;
+        enum Direction { INBOUND, OUTBOUND, BOTH } direction;
+        IPAddress source_ip;
+        IPAddress source_mask;
+        IPAddress dest_ip;
+        IPAddress dest_mask;
+        uint16_t source_port_min;
+        uint16_t source_port_max;
+        uint16_t dest_port_min;
+        uint16_t dest_port_max;
+        Protocol protocol;
+        std::string description;
+        bool enabled;
+    };
+
+    std::vector<FirewallRule> rules;
+    std::mutex rules_mutex;
+    Statistics stats;
+
+public:
+    bool add_rule(const FirewallRule& rule) {
+        std::lock_guard<std::mutex> lock(rules_mutex);
+        rules.push_back(rule);
+        return true;
+    }
+
+    bool remove_rule(size_t index) {
+        std::lock_guard<std::mutex> lock(rules_mutex);
+        if (index < rules.size()) {
+            rules.erase(rules.begin() + index);
+            return true;
+        }
+        return false;
+    }
+
+    FirewallDecision inspect_packet(const Packet& packet) {
+        std::lock_guard<std::mutex> lock(rules_mutex);
+        stats.total_packets++;
+
+        FirewallDecision decision;
+        decision.action = FirewallDecision::ALLOW;
+        decision.matched_rule = -1;
+
+        for (size_t i = 0; i < rules.size(); i++) {
+            const auto& rule = rules[i];
+            if (!rule.enabled) continue;
+
+            if (matches_rule(packet, rule)) {
+                decision.action = (rule.action == FirewallRule::ALLOW) ?
+                                 FirewallDecision::ALLOW : FirewallDecision::DENY;
+                decision.matched_rule = i;
+                decision.description = rule.description;
+
+                if (rule.action == FirewallRule::LOG) {
+                    stats.logged_packets++;
+                    log_packet(packet, rule);
+                }
+
+                break;
+            }
+        }
+
+        if (decision.action == FirewallDecision::DENY) {
+            stats.blocked_packets++;
+        }
+
+        return decision;
+    }
+
+    Statistics get_statistics() const {
+        return stats;
+    }
+
+private:
+    bool matches_rule(const Packet& packet, const FirewallRule& rule) {
+        // 检查方向
+        if (rule.direction != FirewallRule::BOTH) {
+            bool is_inbound = packet.is_inbound();
+            if ((rule.direction == FirewallRule::INBOUND && !is_inbound) ||
+                (rule.direction == FirewallRule::OUTBOUND && is_inbound)) {
+                return false;
+            }
+        }
+
+        // 检查协议
+        if (rule.protocol != Protocol::ANY && packet.protocol != rule.protocol) {
+            return false;
+        }
+
+        // 检查源IP
+        if (!matches_ip(packet.source_ip, rule.source_ip, rule.source_mask)) {
+            return false;
+        }
+
+        // 检查目标IP
+        if (!matches_ip(packet.destination_ip, rule.dest_ip, rule.dest_mask)) {
+            return false;
+        }
+
+        // 检查端口
+        if (packet.has_ports()) {
+            uint16_t src_port = packet.source_port;
+            uint16_t dst_port = packet.destination_port;
+
+            if (src_port < rule.source_port_min || src_port > rule.source_port_max) {
+                return false;
+            }
+
+            if (dst_port < rule.dest_port_min || dst_port > rule.dest_port_max) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool matches_ip(const IPAddress& ip, const IPAddress& rule_ip, const IPAddress& rule_mask) {
+        if (rule_ip.is_any()) return true;
+
+        uint32_t ip_addr = ip.address;
+        uint32_t rule_addr = rule_ip.address;
+        uint32_t mask = rule_mask.address;
+
+        return (ip_addr & mask) == (rule_addr & mask);
+    }
+
+    void log_packet(const Packet& packet, const FirewallRule& rule) {
+        // 记录包到日志文件
+        std::ofstream log_file("firewall.log", std::ios::app);
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+
+        log_file << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") << "] "
+                << "Rule: " << rule.description << " "
+                << "Src: " << packet.source_ip.to_string() << ":" << packet.source_port << " "
+                << "Dst: " << packet.destination_ip.to_string() << ":" << packet.destination_port << " "
+                << "Protocol: " << protocol_to_string(packet.protocol) << std::endl;
+    }
+};
+```
+
+### 状态检测防火墙
+
+```cpp
+class StatefulFirewall {
+private:
+    PacketFilterFirewall packet_filter;
+    ConnectionTracker connection_tracker;
+
+public:
+    struct ConnectionEntry {
+        IPAddress source_ip;
+        IPAddress dest_ip;
+        uint16_t source_port;
+        uint16_t dest_port;
+        Protocol protocol;
+        ConnectionState state;
+        std::chrono::steady_clock::time_point last_activity;
+        uint64_t bytes_sent;
+        uint64_t bytes_received;
+    };
+
+    FirewallDecision inspect_packet(const Packet& packet) {
+        // 检查是否是已有连接的一部分
+        auto connection = connection_tracker.find_connection(packet);
+
+        if (connection) {
+            // 已有连接，更新状态
+            update_connection_state(connection.value(), packet);
+            return handle_established_connection(packet, connection.value());
+        } else {
+            // 新连接，检查包过滤规则
+            auto decision = packet_filter.inspect_packet(packet);
+
+            if (decision.action == FirewallDecision::ALLOW) {
+                // 创建新连接条目
+                create_new_connection(packet);
+            }
+
+            return decision;
+        }
+    }
+
+private:
+    void update_connection_state(ConnectionEntry& conn, const Packet& packet) {
+        conn.last_activity = std::chrono::steady_clock::now();
+
+        if (packet.direction == Packet::INBOUND) {
+            conn.bytes_received += packet.size();
+        } else {
+            conn.bytes_sent += packet.size();
+        }
+
+        // 更新TCP状态
+        if (packet.protocol == Protocol::TCP) {
+            update_tcp_state(conn, packet);
+        }
+    }
+
+    FirewallDecision handle_established_connection(const Packet& packet, const ConnectionEntry& conn) {
+        // 对已建立的连接应用额外的安全检查
+        if (packet.protocol == Protocol::TCP) {
+            if (is_tcp_attack(packet, conn)) {
+                return FirewallDecision::DENY;
+            }
+        }
+
+        // 检查连接是否超时
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - conn.last_activity).count();
+
+        if (elapsed > get_connection_timeout(conn.protocol)) {
+            connection_tracker.remove_connection(conn);
+            return packet_filter.inspect_packet(packet);
+        }
+
+        return FirewallDecision::ALLOW;
+    }
+
+    bool is_tcp_attack(const Packet& packet, const ConnectionEntry& conn) {
+        // 检查TCP攻击模式
+        if (packet.tcp_flags & TCP_SYN) {
+            // SYN flood攻击检测
+            if (conn.state == ConnectionState::SYN_RECEIVED) {
+                auto syn_count = connection_tracker.get_syn_count(packet.source_ip);
+                return syn_count > MAX_SYN_COUNT;
+            }
+        }
+
+        // 检查端口扫描
+        if (packet.tcp_flags & TCP_RST) {
+            auto rst_count = connection_tracker.get_rst_count(packet.source_ip);
+            return rst_count > MAX_RST_COUNT;
+        }
+
+        return false;
+    }
+};
+```
+
+## 入侵检测系统 (IDS)
+
+### 签名检测
+
+```cpp
+class SignatureBasedIDS {
+private:
+    struct AttackSignature {
+        std::string name;
+        std::string pattern;
+        std::regex regex_pattern;
+        ThreatLevel severity;
+        std::string description;
+    };
+
+    std::vector<AttackSignature> signatures;
+    std::mutex signatures_mutex;
+    AlertManager alert_manager;
+
+public:
+    bool add_signature(const std::string& name, const std::string& pattern,
+                      ThreatLevel severity, const std::string& description) {
+        try {
+            AttackSignature sig;
+            sig.name = name;
+            sig.pattern = pattern;
+            sig.regex_pattern = std::regex(pattern, std::regex::icase);
+            sig.severity = severity;
+            sig.description = description;
+
+            std::lock_guard<std::mutex> lock(signatures_mutex);
+            signatures.push_back(sig);
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to add signature: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<Alert> analyze_packet(const Packet& packet) {
+        std::vector<Alert> alerts;
+
+        // 转换数据包为可搜索的字符串
+        std::string packet_data = packet_to_string(packet);
+
+        std::lock_guard<std::mutex> lock(signatures_mutex);
+
+        for (const auto& signature : signatures) {
+            if (std::regex_search(packet_data, signature.regex_pattern)) {
+                Alert alert;
+                alert.signature_name = signature.name;
+                alert.threat_level = signature.severity;
+                alert.description = signature.description;
+                alert.source_ip = packet.source_ip;
+                alert.destination_ip = packet.destination_ip;
+                alert.timestamp = std::chrono::system_clock::now();
+
+                alerts.push_back(alert);
+
+                // 发送警报
+                alert_manager.send_alert(alert);
+            }
+        }
+
+        return alerts;
+    }
+
+    void load_signatures_from_file(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open signature file: " << filename << std::endl;
+            return;
+        }
+
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+
+            std::istringstream iss(line);
+            std::string name, pattern, severity_str, description;
+
+            if (std::getline(iss, name, '\t') &&
+                std::getline(iss, pattern, '\t') &&
+                std::getline(iss, severity_str, '\t') &&
+                std::getline(iss, description)) {
+
+                ThreatLevel severity = string_to_threat_level(severity_str);
+                add_signature(name, pattern, severity, description);
+            }
+        }
+    }
+
+private:
+    std::string packet_to_string(const Packet& packet) {
+        std::ostringstream oss;
+
+        // 包含头部信息
+        oss << "IP:" << packet.source_ip.to_string() << "->" << packet.destination_ip.to_string() << " ";
+
+        if (packet.protocol == Protocol::TCP) {
+            oss << "TCP:" << packet.source_port << "->" << packet.destination_port << " ";
+            oss << "Flags:" << std::hex << static_cast<int>(packet.tcp_flags) << std::dec << " ";
+
+            // 检查有效载荷
+            if (!packet.payload.empty()) {
+                std::string payload(packet.payload.begin(), packet.payload.end());
+                oss << "Payload:" << payload;
+            }
+        } else if (packet.protocol == Protocol::UDP) {
+            oss << "UDP:" << packet.source_port << "->" << packet.destination_port << " ";
+        }
+
+        return oss.str();
+    }
+
+    ThreatLevel string_to_threat_level(const std::string& str) {
+        if (str == "CRITICAL") return ThreatLevel::CRITICAL;
+        if (str == "HIGH") return ThreatLevel::HIGH;
+        if (str == "MEDIUM") return ThreatLevel::MEDIUM;
+        if (str == "LOW") return ThreatLevel::LOW;
+        return ThreatLevel::INFO;
+    }
+};
+```
+
+### 异常检测
+
+```cpp
+class AnomalyBasedIDS {
+private:
+    std::map<IPAddress, TrafficProfile> traffic_profiles;
+    std::mutex profiles_mutex;
+    Baseline baseline;
+    AlertManager alert_manager;
+
+    struct TrafficProfile {
+        IPAddress source_ip;
+        uint64_t total_packets;
+        uint64_t total_bytes;
+        std::map<Protocol, uint64_t> protocol_counts;
+        std::map<uint16_t, uint64_t> port_counts;
+        std::chrono::steady_clock::time_point first_seen;
+        std::chrono::steady_clock::time_point last_seen;
+        std::vector<double> packet_rate_history;
+        std::vector<double> byte_rate_history;
+    };
+
+    struct Baseline {
+        double avg_packet_rate;
+        double std_packet_rate;
+        double avg_byte_rate;
+        double std_byte_rate;
+        std::map<Protocol, double> protocol_distribution;
+        std::vector<uint16_t> common_ports;
+    };
+
+public:
+    void update_baseline() {
+        std::lock_guard<std::mutex> lock(profiles_mutex);
+
+        if (traffic_profiles.empty()) return;
+
+        // 计算平均流量率
+        std::vector<double> packet_rates;
+        std::vector<double> byte_rates;
+
+        for (const auto& [ip, profile] : traffic_profiles) {
+            double duration = std::chrono::duration<double>(
+                profile.last_seen - profile.first_seen).count();
+
+            if (duration > 0) {
+                packet_rates.push_back(profile.total_packets / duration);
+                byte_rates.push_back(profile.total_bytes / duration);
+            }
+        }
+
+        baseline.avg_packet_rate = calculate_mean(packet_rates);
+        baseline.std_packet_rate = calculate_stddev(packet_rates, baseline.avg_packet_rate);
+        baseline.avg_byte_rate = calculate_mean(byte_rates);
+        baseline.std_byte_rate = calculate_stddev(byte_rates, baseline.avg_byte_rate);
+
+        // 计算协议分布
+        calculate_protocol_distribution();
+    }
+
+    std::vector<Alert> analyze_packet(const Packet& packet) {
+        std::vector<Alert> alerts;
+
+        std::lock_guard<std::mutex> lock(profiles_mutex);
+
+        // 更新流量档案
+        auto& profile = traffic_profiles[packet.source_ip];
+        update_traffic_profile(profile, packet);
+
+        // 检查异常
+        if (is_rate_anomaly(profile)) {
+            alerts.push_back(create_rate_alert(packet.source_ip, profile));
+        }
+
+        if (is_protocol_anomaly(profile)) {
+            alerts.push_back(create_protocol_alert(packet.source_ip, profile));
+        }
+
+        if (is_port_scan_anomaly(profile)) {
+            alerts.push_back(create_port_scan_alert(packet.source_ip, profile));
+        }
+
+        return alerts;
+    }
+
+private:
+    void update_traffic_profile(TrafficProfile& profile, const Packet& packet) {
+        auto now = std::chrono::steady_clock::now();
+
+        if (profile.first_seen == std::chrono::steady_clock::time_point{}) {
+            profile.first_seen = now;
+            profile.source_ip = packet.source_ip;
+        }
+
+        profile.last_seen = now;
+        profile.total_packets++;
+        profile.total_bytes += packet.size();
+        profile.protocol_counts[packet.protocol]++;
+        profile.port_counts[packet.destination_port]++;
+
+        // 更新历史记录
+        update_rate_history(profile);
+    }
+
+    bool is_rate_anomaly(const TrafficProfile& profile) {
+        if (profile.packet_rate_history.size() < 10) return false;
+
+        double recent_rate = profile.packet_rate_history.back();
+        double z_score = (recent_rate - baseline.avg_packet_rate) / baseline.std_packet_rate;
+
+        return std::abs(z_score) > 3.0;  // 3个标准差
+    }
+
+    bool is_protocol_anomaly(const TrafficProfile& profile) {
+        // 检查协议分布是否异常
+        for (const auto& [protocol, count] : profile.protocol_counts) {
+            double profile_ratio = static_cast<double>(count) / profile.total_packets;
+            double baseline_ratio = baseline.protocol_distribution[protocol];
+
+            if (std::abs(profile_ratio - baseline_ratio) > 0.3) {  // 30%差异
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool is_port_scan_anomaly(const TrafficProfile& profile) {
+        // 检查是否扫描大量端口
+        if (profile.port_counts.size() > 50) {  // 访问超过50个端口
+            return true;
+        }
+
+        // 检查端口访问模式
+        auto duration = std::chrono::duration<double>(
+            profile.last_seen - profile.first_seen).count();
+
+        if (duration > 0) {
+            double port_rate = profile.port_counts.size() / duration;
+            return port_rate > 10.0;  // 每秒访问10个以上端口
+        }
+
+        return false;
+    }
+
+    Alert create_rate_alert(const IPAddress& source_ip, const TrafficProfile& profile) {
+        Alert alert;
+        alert.signature_name = "High Traffic Rate";
+        alert.threat_level = ThreatLevel::MEDIUM;
+        alert.description = "Unusually high traffic rate detected";
+        alert.source_ip = source_ip;
+        alert.timestamp = std::chrono::system_clock::now();
+
+        return alert;
+    }
+};
+```
+
+## VPN和隧道
+
+### IPSec VPN
+
+```cpp
+class IPSecVPN {
+private:
+    struct SecurityAssociation {
+        uint32_t spi;
+        EncryptionAlgorithm encryption_algo;
+        IntegrityAlgorithm integrity_algo;
+        std::vector<uint8_t> encryption_key;
+        std::vector<uint8_t> integrity_key;
+        std::chrono::steady_clock::time_point lifetime;
+    };
+
+    std::map<uint32_t, SecurityAssociation> outbound_sas;
+    std::map<uint32_t, SecurityAssociation> inbound_sas;
+    IKEv2Client ike_client;
+
+public:
+    bool establish_tunnel(const IPAddress& remote_gateway,
+                         const std::vector<uint8_t>& pre_shared_key) {
+        // IKEv2协商
+        auto ike_result = ike_client.establish_security_association(
+            remote_gateway, pre_shared_key);
+
+        if (!ike_result.success) {
+            return false;
+        }
+
+        // 创建安全关联
+        SecurityAssociation outbound_sa;
+        outbound_sa.spi = generate_spi();
+        outbound_sa.encryption_algo = ike_result.encryption_algo;
+        outbound_sa.integrity_algo = ike_result.integrity_algo;
+        outbound_sa.encryption_key = ike_result.encryption_key;
+        outbound_sa.integrity_key = ike_result.integrity_key;
+        outbound_sa.lifetime = std::chrono::steady_clock::now() + std::chrono::hours(8);
+
+        outbound_sas[outbound_sa.spi] = outbound_sa;
+
+        return true;
+    }
+
+    ESPPacket encapsulate_packet(const Packet& original_packet) {
+        // 选择安全关联
+        auto sa = select_outbound_sa(original_packet.destination_ip);
+        if (!sa) {
+            throw std::runtime_error("No suitable security association found");
+        }
+
+        ESPPacket esp_packet;
+        esp_packet.spi = sa->spi;
+        esp_packet.sequence_number = get_next_sequence_number(sa->spi);
+
+        // 加密和认证
+        std::vector<uint8_t> encrypted_payload = encrypt_payload(
+            original_packet.serialize(), *sa);
+
+        esp_packet.payload = encrypted_payload;
+        esp_packet.integrity_checksum = calculate_integrity_checksum(esp_packet, *sa);
+
+        return esp_packet;
+    }
+
+    Packet decapsulate_packet(const ESPPacket& esp_packet) {
+        // 查找安全关联
+        auto it = inbound_sas.find(esp_packet.spi);
+        if (it == inbound_sas.end()) {
+            throw std::runtime_error("Security association not found");
+        }
+
+        auto& sa = it->second;
+
+        // 验证完整性
+        if (!verify_integrity_checksum(esp_packet, sa)) {
+            throw std::runtime_error("Integrity check failed");
+        }
+
+        // 解密负载
+        std::vector<uint8_t> decrypted_payload = decrypt_payload(
+            esp_packet.payload, sa);
+
+        return Packet::deserialize(decrypted_payload);
+    }
+
+private:
+    SecurityAssociation* select_outbound_sa(const IPAddress& destination) {
+        // 选择匹配目标地址的安全关联
+        for (auto& [spi, sa] : outbound_sas) {
+            if (sa.lifetime > std::chrono::steady_clock::now()) {
+                return &sa;
+            }
+        }
+        return nullptr;
+    }
+
+    std::vector<uint8_t> encrypt_payload(const std::vector<uint8_t>& payload,
+                                         const SecurityAssociation& sa) {
+        switch (sa.encryption_algo) {
+            case AES_256_CBC:
+                return encrypt_aes_cbc(payload, sa.encryption_key);
+            case AES_256_GCM:
+                return encrypt_aes_gcm(payload, sa.encryption_key);
+            default:
+                throw std::runtime_error("Unsupported encryption algorithm");
+        }
+    }
+
+    std::vector<uint8_t> calculate_integrity_checksum(const ESPPacket& packet,
+                                                      const SecurityAssociation& sa) {
+        std::vector<uint8_t> packet_data = packet.serialize_for_integrity();
+
+        switch (sa.integrity_algo) {
+            case HMAC_SHA256:
+                return calculate_hmac_sha256(packet_data, sa.integrity_key);
+            case HMAC_SHA384:
+                return calculate_hmac_sha384(packet_data, sa.integrity_key);
+            default:
+                throw std::runtime_error("Unsupported integrity algorithm");
+        }
+    }
+};
+```
+
+## 实验项目：网络安全实现
+
+### 目标
+- 实现完整的防火墙系统
+- 部署入侵检测系统
+- 创建VPN隧道
+- 测试安全机制的有效性
+
+### 实现步骤
+
+#### 1. 综合安全网关
+
+```cpp
+class SecurityGateway {
+private:
+    StatefulFirewall firewall;
+    SignatureBasedIDS signature_ids;
+    AnomalyBasedIDS anomaly_ids;
+    IPSecVPN vpn;
+    TrafficMonitor monitor;
+    SecurityPolicy policy;
+
+public:
+    void initialize() {
+        // 加载安全策略
+        load_security_policy();
+
+        // 加载签名数据库
+        signature_ids.load_signatures_from_file("signatures.db");
+
+        // 建立基线
+        anomaly_ids.update_baseline();
+
+        // 启动监控
+        start_monitoring();
+    }
+
+    PacketResult process_packet(const Packet& packet) {
+        PacketResult result;
+
+        // 1. 防火墙检查
+        auto fw_decision = firewall.inspect_packet(packet);
+        if (fw_decision.action == FirewallDecision::DENY) {
+            result.action = PacketAction::DROP;
+            result.reason = "Firewall rule: " + fw_decision.description;
+            return result;
+        }
+
+        // 2. 入侵检测
+        auto sig_alerts = signature_ids.analyze_packet(packet);
+        auto anomaly_alerts = anomaly_ids.analyze_packet(packet);
+
+        if (!sig_alerts.empty() || !anomaly_alerts.empty()) {
+            result.action = PacketAction::DROP;
+            result.reason = "Security threat detected";
+            result.alerts.insert(result.alerts.end(),
+                               sig_alerts.begin(), sig_alerts.end());
+            result.alerts.insert(result.alerts.end(),
+                               anomaly_alerts.begin(), anomaly_alerts.end());
+            return result;
+        }
+
+        // 3. VPN处理
+        if (packet.protocol == Protocol::ESP) {
+            try {
+                ESPPacket esp_packet = parse_esp_packet(packet);
+                Packet decrypted = vpn.decapsulate_packet(esp_packet);
+                result.action = PacketAction::FORWARD;
+                result.processed_packet = decrypted;
+                return result;
+            } catch (const std::exception& e) {
+                result.action = PacketAction::DROP;
+                result.reason = "VPN decryption failed: " + std::string(e.what());
+                return result;
+            }
+        }
+
+        // 4. 正常处理
+        result.action = PacketAction::FORWARD;
+        result.processed_packet = packet;
+        return result;
+    }
+
+private:
+    void load_security_policy() {
+        // 从配置文件加载安全策略
+        std::ifstream config("security_policy.json");
+        nlohmann::json policy_json;
+        config >> policy_json;
+
+        policy = SecurityPolicy::from_json(policy_json);
+
+        // 应用防火墙规则
+        for (const auto& rule : policy.firewall_rules) {
+            firewall.add_rule(rule);
+        }
+
+        // 应用VPN配置
+        for (const auto& tunnel : policy.vpn_tunnels) {
+            vpn.establish_tunnel(tunnel.remote_gateway, tunnel.pre_shared_key);
+        }
+    }
+
+    void start_monitoring() {
+        std::thread monitor_thread([this]() {
+            while (true) {
+                // 更新基线
+                anomaly_ids.update_baseline();
+
+                // 清理过期连接
+                firewall.cleanup_expired_connections();
+
+                // 生成报告
+                auto report = monitor.generate_report();
+                if (report.has_anomalies()) {
+                    alert_manager.send_report(report);
+                }
+
+                std::this_thread::sleep_for(std::chrono::minutes(5));
+            }
+        });
+        monitor_thread.detach();
+    }
+};
+```
+
+#### 2. 安全测试工具
+
+```cpp
+class SecurityTestingTool {
+private:
+    NetworkSimulator simulator;
+    PacketGenerator packet_generator;
+    VulnerabilityScanner vulnerability_scanner;
+
+public:
+    void run_comprehensive_test() {
+        std::cout << "Running comprehensive security test..." << std::endl;
+
+        // 1. 防火墙测试
+        test_firewall_rules();
+        test_stateful_inspection();
+        test_nat_traversal();
+
+        // 2. IDS测试
+        test_signature_detection();
+        test_anomaly_detection();
+        test_false_positive_rate();
+
+        // 3. VPN测试
+        test_vpn_encryption();
+        test_vpn_authentication();
+        test_vpn_performance();
+
+        // 4. 性能测试
+        test_security_overhead();
+        test_scalability();
+        test_resilience();
+
+        // 生成测试报告
+        generate_test_report();
+    }
+
+    void simulate_attack_scenarios() {
+        std::cout << "Simulating attack scenarios..." << std::endl;
+
+        // 1. DDoS攻击
+        simulate_ddos_attack();
+
+        // 2. 端口扫描
+        simulate_port_scan();
+
+        // 3. 暴力破解
+        simulate_brute_force_attack();
+
+        // 4. 中间人攻击
+        simulate_man_in_the_middle();
+
+        // 5. 零日攻击
+        simulate_zero_day_attack();
+    }
+
+private:
+    void simulate_ddos_attack() {
+        std::cout << "Simulating DDoS attack..." << std::endl;
+
+        auto start_time = std::chrono::steady_clock::now();
+
+        // 生成大量SYN包
+        for (int i = 0; i < 10000; i++) {
+            auto syn_packet = packet_generator.generate_syn_packet();
+            simulator.send_packet(syn_packet);
+        }
+
+        // 监测系统响应
+        auto metrics = simulator.get_metrics();
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+
+        std::cout << "DDoS test completed in " << duration.count() << " seconds" << std::endl;
+        std::cout << "Packets processed: " << metrics.packets_processed << std::endl;
+        std::cout << "Packets dropped: " << metrics.packets_dropped << std::endl;
+        std::cout << "Detection rate: " << metrics.detection_rate << "%" << std::endl;
+    }
+
+    void simulate_port_scan() {
+        std::cout << "Simulating port scan..." << std::endl;
+
+        IPAddress target_ip("192.168.1.100");
+
+        // 扫描常见端口
+        std::vector<uint16_t> common_ports = {21, 22, 23, 25, 53, 80, 110, 143, 443, 993, 995};
+
+        for (uint16_t port : common_ports) {
+            auto scan_packet = packet_generator.generate_port_scan_packet(target_ip, port);
+            simulator.send_packet(scan_packet);
+
+            // 等待响应
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // 检查检测结果
+        auto alerts = simulator.get_alerts();
+        int port_scan_alerts = std::count_if(alerts.begin(), alerts.end(),
+            [](const Alert& alert) {
+                return alert.signature_name.find("Port Scan") != std::string::npos;
+            });
+
+        std::cout << "Port scan detected: " << (port_scan_alerts > 0 ? "YES" : "NO") << std::endl;
+        std::cout << "Detection accuracy: " << (port_scan_alerts > 0 ? 100.0 : 0.0) << "%" << std::endl;
+    }
+};
+```
+
+## 调试和安全分析
+
+### 安全事件分析
+
+```cpp
+class SecurityAnalyzer {
+private:
+    EventDatabase event_db;
+    ThreatIntelligence threat_intel;
+    CorrelationEngine correlation_engine;
+
+public:
+    void analyze_security_events() {
+        std::cout << "Analyzing security events..." << std::endl;
+
+        // 获取最近的安全事件
+        auto events = event_db.get_recent_events(24 * 60 * 60);  // 最近24小时
+
+        // 关联分析
+        auto correlated_events = correlation_engine.correlate_events(events);
+
+        // 威胁情报匹配
+        for (const auto& event : correlated_events) {
+            auto threat_info = threat_intel.query(event.source_ip);
+            if (threat_info.is_malicious) {
+                escalate_event(event, threat_info);
+            }
+        }
+
+        // 生成分析报告
+        generate_analysis_report(correlated_events);
+    }
+
+    void detect_attack_patterns() {
+        std::cout << "Detecting attack patterns..." << std::endl;
+
+        // 1. 检测DDoS攻击模式
+        detect_ddos_patterns();
+
+        // 2. 检测暴力破解模式
+        detect_brute_force_patterns();
+
+        // 3. 检测数据泄露模式
+        detect_data_exfiltration_patterns();
+
+        // 4. 检测横向移动模式
+        detect_lateral_movement_patterns();
+    }
+
+private:
+    void detect_ddos_patterns() {
+        auto events = event_db.get_events_by_type("DDoS");
+
+        if (events.size() > DDOS_THRESHOLD) {
+            // 分析攻击特征
+            DDoSAttackPattern pattern = analyze_ddos_pattern(events);
+
+            // 预测攻击趋势
+            auto prediction = predict_attack_evolution(pattern);
+
+            // 生成警报
+            Alert alert;
+            alert.signature_name = "DDoS Attack Pattern Detected";
+            alert.threat_level = ThreatLevel::HIGH;
+            alert.description = "Pattern analysis indicates ongoing DDoS attack";
+            alert.prediction = prediction;
+
+            alert_manager.send_alert(alert);
+        }
+    }
+
+    DDoSAttackPattern analyze_ddos_pattern(const std::vector<SecurityEvent>& events) {
+        DDoSAttackPattern pattern;
+
+        // 分析源IP分布
+        std::map<IPAddress, int> source_counts;
+        for (const auto& event : events) {
+            source_counts[event.source_ip]++;
+        }
+
+        // 计算攻击强度
+        pattern.attack_intensity = events.size();
+
+        // 识别攻击类型
+        if (source_counts.size() > 1000) {
+            pattern.attack_type = "Distributed DDoS";
+        } else {
+            pattern.attack_type = "Concentrated DDoS";
+        }
+
+        // 分析攻击向量
+        pattern.attack_vectors = analyze_attack_vectors(events);
+
+        return pattern;
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 比较对称加密和非对称加密的优缺点
+2. TLS握手过程包含哪些步骤？
+3. 什么是深度包检测？它如何工作？
+
+### 实践练习
+1. 实现简单的防火墙
+2. 创建数字签名系统
+3. 部署入侵检测系统
+
+### 挑战项目
+1. 实现完整的VPN网关
+2. 创建安全事件关联分析系统
+3. 开发威胁情报平台
+
+## 课程总结
+
+CS144课程已经涵盖了计算机网络的核心概念和技术：
+
+- 网络基础和协议栈
+- 可靠数据传输和TCP
+- 路由和转发
+- 拥塞控制
+- NAT和P2P
+- 网络安全
+
+恭喜完成CS144计算机网络课程！你已经掌握了构建和优化现代网络系统的核心技能。
+
+---
+*课程完成！祝你在网络工程领域取得成功！*

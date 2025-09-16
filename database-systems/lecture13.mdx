@@ -1,0 +1,1170 @@
+---
+title: "Lecture 13: 查询执行 II"
+description: "CMU 15-445 Lecture 13 - 高级执行技术、并行查询、自适应执行、性能监控"
+---
+
+# Lecture 13: 查询执行 II
+
+## 高级执行技术
+
+### 向量化执行
+
+#### 向量化操作符框架
+```cpp
+class VectorizedIterator {
+public:
+    virtual ~VectorizedIterator() = default;
+
+    // 批量处理接口
+    virtual size_t next_batch(RecordBatch* batch, size_t max_batch_size) = 0;
+
+    // 获取输出模式
+    const Schema& get_output_schema() const {
+        return output_schema_;
+    }
+
+    // 性能统计
+    VectorizedStats get_stats() const {
+        return stats_;
+    }
+
+protected:
+    Schema output_schema_;
+    VectorizedStats stats_;
+};
+
+class RecordBatch {
+public:
+    RecordBatch(size_t capacity, const Schema& schema)
+        : capacity_(capacity), schema_(schema) {
+        // 为每列预分配内存
+        for (const auto& col : schema.get_columns()) {
+            column_data_.emplace_back(create_column_vector(col.type, capacity));
+        }
+        row_count_ = 0;
+    }
+
+    void add_record(const Record& record) {
+        if (row_count_ >= capacity_) {
+            throw runtime_error("Batch capacity exceeded");
+        }
+
+        for (size_t col_idx = 0; col_idx < schema_.get_column_count(); col_idx++) {
+            Value value = record.get_value(schema_.get_column_name(col_idx));
+            set_value(col_idx, row_count_, value);
+        }
+
+        row_count_++;
+    }
+
+    size_t get_row_count() const { return row_count_; }
+    size_t get_capacity() const { return capacity_; }
+
+    const Value get_value(size_t col_idx, size_t row_idx) const {
+        return column_data_[col_idx]->get_value(row_idx);
+    }
+
+    void set_value(size_t col_idx, size_t row_idx, const Value& value) {
+        column_data_[col_idx]->set_value(row_idx, value);
+    }
+
+    // SIMD友好的列访问接口
+    template<typename T>
+    const T* get_column_data(size_t col_idx) const {
+        return static_cast<const T*>(column_data_[col_idx]->get_raw_data());
+    }
+
+    template<typename T>
+    T* get_mutable_column_data(size_t col_idx) {
+        return static_cast<T*>(column_data_[col_idx]->get_mutable_raw_data());
+    }
+
+private:
+    struct ColumnVector {
+        virtual ~ColumnVector() = default;
+        virtual Value get_value(size_t row_idx) const = 0;
+        virtual void set_value(size_t row_idx, const Value& value) = 0;
+        virtual const void* get_raw_data() const = 0;
+        virtual void* get_mutable_raw_data() = 0;
+    };
+
+    template<typename T>
+    class TypedColumnVector : public ColumnVector {
+    private:
+        vector<T> data_;
+        size_t size_;
+
+    public:
+        TypedColumnVector(size_t capacity) : data_(capacity), size_(0) {}
+
+        Value get_value(size_t row_idx) const override {
+            if (row_idx >= size_) return Value();
+            return Value(data_[row_idx]);
+        }
+
+        void set_value(size_t row_idx, const Value& value) override {
+            if (row_idx >= data_.size()) return;
+            data_[row_idx] = value.get<T>();
+            size_ = max(size_, row_idx + 1);
+        }
+
+        const void* get_raw_data() const override {
+            return data_.data();
+        }
+
+        void* get_mutable_raw_data() override {
+            return data_.data();
+        }
+    };
+
+    unique_ptr<ColumnVector> create_column_vector(DataType type, size_t capacity) {
+        switch (type) {
+            case DataType::INTEGER:
+                return make_unique<TypedColumnVector<int32_t>>(capacity);
+            case DataType::FLOAT:
+                return make_unique<TypedColumnVector<float>>(capacity);
+            case DataType::DECIMAL:
+                return make_unique<TypedColumnVector<double>>(capacity);
+            case DataType::STRING:
+                return make_unique<TypedColumnVector<string>>(capacity);
+            default:
+                throw runtime_error("Unsupported data type");
+        }
+    }
+
+    size_t capacity_;
+    size_t row_count_;
+    Schema schema_;
+    vector<unique_ptr<ColumnVector>> column_data_;
+};
+```
+
+#### 向量化过滤操作
+```cpp
+class VectorizedFilterIterator : public VectorizedIterator {
+private:
+    unique_ptr<VectorizedIterator> child_;
+    unique_ptr<VectorizedExpression> filter_expr_;
+    vector<uint8_t> selection_bitmap_;  // 选择位图
+
+public:
+    VectorizedFilterIterator(unique_ptr<VectorizedIterator> child,
+                             unique_ptr<VectorizedExpression> filter_expr)
+        : child_(move(child)), filter_expr_(move(filter_expr)) {
+        output_schema_ = child_->get_output_schema();
+    }
+
+    size_t next_batch(RecordBatch* batch, size_t max_batch_size) override {
+        auto start_time = chrono::steady_clock::now();
+
+        // 从子操作符读取批次
+        size_t input_rows = child_->next_batch(batch, max_batch_size);
+        if (input_rows == 0) {
+            return 0;
+        }
+
+        // 评估过滤条件
+        evaluate_filter(batch, input_rows);
+
+        // 压缩批次，只保留满足条件的行
+        size_t output_rows = compress_batch(batch, input_rows);
+
+        auto end_time = chrono::steady_clock::now();
+        stats_.execution_time += chrono::duration_cast<chrono::milliseconds>(end_time - start_time);
+        stats_.input_rows += input_rows;
+        stats_.output_rows += output_rows;
+
+        return output_rows;
+    }
+
+private:
+    void evaluate_filter(RecordBatch* batch, size_t row_count) {
+        selection_bitmap_.resize(row_count);
+
+        // 使用SIMD指令批量评估表达式
+        VectorizedExpression::Result result = filter_expr_->evaluate_batch(batch, row_count);
+
+        // 将结果转换为选择位图
+        for (size_t i = 0; i < row_count; i++) {
+            selection_bitmap_[i] = result.is_valid[i] && result.truth_value[i];
+        }
+    }
+
+    size_t compress_batch(RecordBatch* batch, size_t row_count) {
+        size_t output_row = 0;
+
+        for (size_t input_row = 0; input_row < row_count; input_row++) {
+            if (selection_bitmap_[input_row]) {
+                if (output_row != input_row) {
+                    // 需要移动行
+                    copy_row(batch, input_row, output_row);
+                }
+                output_row++;
+            }
+        }
+
+        batch->set_row_count(output_row);
+        return output_row;
+    }
+
+    void copy_row(RecordBatch* batch, size_t src_row, size_t dst_row) {
+        for (size_t col_idx = 0; col_idx < batch->get_schema().get_column_count(); col_idx++) {
+            Value value = batch->get_value(col_idx, src_row);
+            batch->set_value(col_idx, dst_row, value);
+        }
+    }
+};
+```
+
+## 并行查询执行
+
+### 并行执行框架
+
+#### 并行执行器架构
+```cpp
+class ParallelQueryExecutor {
+public:
+    struct ExecutionConfig {
+        size_t thread_pool_size;
+        size_t batch_size;
+        bool enable_work_stealing;
+        size_t max_parallel_degree;
+    };
+
+    ParallelQueryExecutor(const ExecutionConfig& config)
+        : config_(config), work_stealing_enabled_(config.enable_work_stealing) {
+        initialize_thread_pool();
+    }
+
+    QueryResult execute_parallel(const ExecutionPlan& plan) {
+        QueryResult result;
+
+        // 创建并行执行上下文
+        auto context = create_execution_context(plan);
+
+        // 启动并行执行
+        vector<future<PartialResult>> futures;
+        for (size_t i = 0; i < config_.max_parallel_degree; i++) {
+            futures.push_back(thread_pool_->enqueue([this, context, i]() {
+                return execute_partition(context, i);
+            }));
+        }
+
+        // 收集部分结果
+        vector<PartialResult> partial_results;
+        for (auto& future : futures) {
+            partial_results.push_back(future.get());
+        }
+
+        // 合并结果
+        result = merge_partial_results(partial_results);
+
+        return result;
+    }
+
+private:
+    struct ExecutionContext {
+        const ExecutionPlan* plan;
+        vector<unique_ptr<Iterator>> partition_iterators;
+        atomic<size_t> completed_partitions{0};
+        mutex result_mutex;
+        vector<PartialResult> partial_results;
+        condition_variable completion_cv;
+    };
+
+    struct PartialResult {
+        vector<Record> records;
+        IteratorStats stats;
+        size_t partition_id;
+    };
+
+    void initialize_thread_pool() {
+        thread_pool_ = make_unique<ThreadPool>(config_.thread_pool_size);
+
+        if (work_stealing_enabled_) {
+            work_stealing_queue_ = make_unique<WorkStealingQueue>();
+        }
+    }
+
+    unique_ptr<ExecutionContext> create_execution_context(const ExecutionPlan& plan) {
+        auto context = make_unique<ExecutionContext>();
+        context->plan = &plan;
+
+        // 为每个分区创建迭代器
+        for (size_t i = 0; i < config_.max_parallel_degree; i++) {
+            auto partition_plan = create_partition_plan(plan, i);
+            context->partition_iterators.push_back(create_iterator(partition_plan));
+        }
+
+        return context;
+    }
+
+    PartialResult execute_partition(ExecutionContext* context, size_t partition_id) {
+        PartialResult result;
+        result.partition_id = partition_id;
+
+        auto start_time = chrono::steady_clock::now();
+
+        // 执行分区
+        auto& iterator = context->partition_iterators[partition_id];
+        iterator->open();
+
+        RecordBatch batch(config_.batch_size, iterator->get_output_schema());
+        vector<Record> records;
+
+        while (true) {
+            size_t batch_rows = execute_batch_processing(iterator, &batch);
+            if (batch_rows == 0) break;
+
+            // 将批次结果转换为记录
+            for (size_t i = 0; i < batch_rows; i++) {
+                records.push_back(extract_record_from_batch(batch, i));
+            }
+        }
+
+        iterator->close();
+        result.records = move(records);
+        result.stats = iterator->get_stats();
+
+        // 通知完成
+        size_t completed = ++context->completed_partitions;
+        if (completed == config_.max_parallel_degree) {
+            lock_guard<mutex> lock(context->result_mutex);
+            context->completion_cv.notify_one();
+        }
+
+        return result;
+    }
+
+    size_t execute_batch_processing(Iterator* iterator, RecordBatch* batch) {
+        // 批量处理记录
+        size_t total_rows = 0;
+
+        while (total_rows < config_.batch_size) {
+            Record record;
+            if (iterator->next(&record)) {
+                batch->add_record(record);
+                total_rows++;
+            } else {
+                break;
+            }
+        }
+
+        return total_rows;
+    }
+
+    QueryResult merge_partial_results(const vector<PartialResult>& partial_results) {
+        QueryResult final_result;
+
+        // 合并记录
+        for (const auto& partial : partial_results) {
+            final_result.records.insert(final_result.records.end(),
+                                       partial.records.begin(), partial.records.end());
+        }
+
+        // 合并统计信息
+        for (const auto& partial : partial_results) {
+            final_result.stats.merge(partial.stats);
+        }
+
+        return final_result;
+    }
+
+    ExecutionConfig config_;
+    unique_ptr<ThreadPool> thread_pool_;
+    bool work_stealing_enabled_;
+    unique_ptr<WorkStealingQueue> work_stealing_queue_;
+};
+```
+
+#### 工作窃取调度器
+```cpp
+class WorkStealingScheduler {
+private:
+    struct Worker {
+        thread worker_thread;
+        WorkQueue* local_queue;
+        vector<WorkQueue*> steal_queues;
+        atomic<bool> should_stop{false};
+        size_t worker_id;
+    };
+
+    vector<unique_ptr<Worker>> workers_;
+    vector<unique_ptr<WorkQueue>> queues_;
+    atomic<size_t> next_worker_{0};
+
+public:
+    WorkStealingScheduler(size_t num_workers) {
+        initialize_workers(num_workers);
+    }
+
+    ~WorkStealingScheduler() {
+        stop_all_workers();
+    }
+
+    template<typename F>
+    auto enqueue(F&& task) -> future<decltype(task())> {
+        using ResultType = decltype(task());
+
+        // 选择工作队列（轮询分配）
+        size_t worker_id = next_worker_++ % workers_.size();
+        WorkQueue* queue = workers_[worker_id]->local_queue;
+
+        // 包装任务为packaged_task
+        auto packaged_task = make_shared<packaged_task<ResultType()>>(forward<F>(task));
+        auto future = packaged_task->get_future();
+
+        // 创建工作项
+        auto work_item = [packaged_task]() {
+            (*packaged_task)();
+        };
+
+        queue->push(move(work_item));
+        return future;
+    }
+
+private:
+    void initialize_workers(size_t num_workers) {
+        // 创建工作队列
+        for (size_t i = 0; i < num_workers; i++) {
+            queues_.push_back(make_unique<WorkQueue>());
+        }
+
+        // 创建工作线程
+        for (size_t i = 0; i < num_workers; i++) {
+            auto worker = make_unique<Worker>();
+            worker->worker_id = i;
+            worker->local_queue = queues_[i].get();
+
+            // 设置窃取队列（除了自己的队列）
+            for (size_t j = 0; j < num_workers; j++) {
+                if (j != i) {
+                    worker->steal_queues.push_back(queues_[j].get());
+                }
+            }
+
+            // 启动工作线程
+            worker->worker_thread = thread([this, worker.get()]() {
+                worker_loop(worker);
+            });
+
+            workers_.push_back(move(worker));
+        }
+    }
+
+    void worker_loop(Worker* worker) {
+        while (!worker->should_stop) {
+            function<void()> task;
+
+            // 首先尝试从本地队列获取任务
+            if (worker->local_queue->try_pop(&task)) {
+                execute_task(task);
+                continue;
+            }
+
+            // 本地队列为空，尝试窃取任务
+            task = try_steal_task(worker);
+            if (task) {
+                execute_task(task);
+                continue;
+            }
+
+            // 没有任务，短暂休眠
+            this_thread::sleep_for(chrono::microseconds(1));
+        }
+    }
+
+    function<void()> try_steal_task(Worker* worker) {
+        // 随机选择窃取目标
+        random_device rd;
+        mt19937 gen(rd());
+        uniform_int_distribution<size_t> dist(0, worker->steal_queues.size() - 1);
+
+        for (size_t attempt = 0; attempt < worker->steal_queues.size(); attempt++) {
+            size_t victim_idx = dist(gen);
+            WorkQueue* victim_queue = worker->steal_queues[victim_idx];
+
+            function<void()> task;
+            if (victim_queue->try_steal(&task)) {
+                return task;
+            }
+        }
+
+        return nullptr;
+    }
+
+    void execute_task(const function<void()>& task) {
+        try {
+            task();
+        } catch (const exception& e) {
+            // 记录错误
+            log_error("Task execution failed: " + string(e.what()));
+        }
+    }
+
+    void stop_all_workers() {
+        for (auto& worker : workers_) {
+            worker->should_stop = true;
+        }
+
+        for (auto& worker : workers_) {
+            if (worker->worker_thread.joinable()) {
+                worker->worker_thread.join();
+            }
+        }
+    }
+};
+```
+
+## 自适应查询执行
+
+### 自适应执行策略
+
+#### 运行时优化器
+```cpp
+class AdaptiveQueryOptimizer {
+public:
+    struct RuntimeStatistics {
+        size_t rows_processed;
+        size_t bytes_processed;
+        double selectivity;
+        double execution_time_ms;
+        size_t memory_usage;
+        bool has_outliers;
+    };
+
+    struct ExecutionFeedback {
+        RuntimeStatistics stats;
+        vector<PlanAlternative> alternatives;
+        bool should_reoptimize;
+    };
+
+    ExecutionFeedback provide_feedback(const ExecutionPlan& plan,
+                                       const RuntimeStatistics& stats) {
+        ExecutionFeedback feedback;
+        feedback.stats = stats;
+
+        // 分析执行模式
+        ExecutionPattern pattern = analyze_execution_pattern(plan, stats);
+
+        // 生成替代计划
+        feedback.alternatives = generate_alternatives(plan, pattern);
+
+        // 决定是否需要重新优化
+        feedback.should_reoptimize = should_reoptimize(plan, stats, pattern);
+
+        return feedback;
+    }
+
+    ExecutionPlan reoptimize_plan(const ExecutionPlan& original_plan,
+                                  const ExecutionFeedback& feedback) {
+        if (!feedback.should_reoptimize) {
+            return original_plan;
+        }
+
+        // 选择最佳替代方案
+        PlanAlternative best_alternative = select_best_alternative(
+            feedback.alternatives, feedback.stats);
+
+        // 应用优化
+        return apply_optimization(original_plan, best_alternative);
+    }
+
+private:
+    struct ExecutionPattern {
+        bool is_skewed_data;
+        bool has_high_selectivity;
+        bool is_memory_intensive;
+        bool is_cpu_intensive;
+        double data_distribution_factor;
+    };
+
+    struct PlanAlternative {
+        string description;
+        ExecutionPlan modified_plan;
+        double estimated_improvement;
+        vector<string> changes_made;
+    };
+
+    ExecutionPattern analyze_execution_pattern(const ExecutionPlan& plan,
+                                             const RuntimeStatistics& stats) {
+        ExecutionPattern pattern;
+
+        // 检测数据倾斜
+        pattern.is_skewed_data = detect_data_skew(stats);
+
+        // 检查选择性
+        pattern.has_high_selectivity = stats.selectivity > 0.8;
+
+        // 分析资源使用模式
+        pattern.is_memory_intensive = stats.memory_usage > get_memory_threshold();
+        pattern.is_cpu_intensive = stats.execution_time_ms > get_cpu_threshold();
+
+        // 计算数据分布因子
+        pattern.data_distribution_factor = calculate_distribution_factor(stats);
+
+        return pattern;
+    }
+
+    bool detect_data_skew(const RuntimeStatistics& stats) {
+        // 简化的倾斜检测逻辑
+        // 实际实现中需要更复杂的统计分析
+        return stats.has_outliers || stats.rows_processed < get_expected_row_count() * 0.5;
+    }
+
+    vector<PlanAlternative> generate_alternatives(const ExecutionPlan& plan,
+                                                  const ExecutionPattern& pattern) {
+        vector<PlanAlternative> alternatives;
+
+        if (pattern.is_skewed_data) {
+            // 数据倾斜：考虑使用哈希分区
+            auto hash_partition_alt = create_hash_partition_alternative(plan);
+            alternatives.push_back(hash_partition_alt);
+        }
+
+        if (pattern.has_high_selectivity) {
+            // 高选择性：考虑使用索引
+            auto index_scan_alt = create_index_scan_alternative(plan);
+            alternatives.push_back(index_scan_alt);
+        }
+
+        if (pattern.is_memory_intensive) {
+            // 内存密集型：考虑流式执行
+            auto streaming_alt = create_streaming_alternative(plan);
+            alternatives.push_back(streaming_alt);
+        }
+
+        if (pattern.is_cpu_intensive) {
+            // CPU密集型：考虑并行执行
+            auto parallel_alt = create_parallel_alternative(plan);
+            alternatives.push_back(parallel_alt);
+        }
+
+        return alternatives;
+    }
+
+    PlanAlternative create_hash_partition_alternative(const ExecutionPlan& plan) {
+        PlanAlternative alt;
+        alt.description = "Hash Partition Alternative";
+
+        // 修改计划以使用哈希分区
+        ExecutionPlan modified_plan = plan;
+        modify_join_to_use_hash_partition(&modified_plan);
+
+        alt.modified_plan = modified_plan;
+        alt.estimated_improvement = estimate_improvement(plan, modified_plan);
+        alt.changes_made = {"Added hash partitioning to joins"};
+
+        return alt;
+    }
+
+    bool should_reoptimize(const ExecutionPlan& plan, const RuntimeStatistics& stats,
+                           const ExecutionPattern& pattern) {
+        // 检查性能是否显著偏离预期
+        double expected_time = estimate_expected_execution_time(plan);
+        double actual_time = stats.execution_time_ms;
+
+        if (actual_time > expected_time * 1.5) {  // 比预期慢50%
+            return true;
+        }
+
+        // 检查资源使用是否异常
+        if (stats.memory_usage > get_available_memory() * 0.8) {
+            return true;
+        }
+
+        // 检查是否有明显的优化机会
+        if (pattern.is_skewed_data || pattern.has_high_selectivity) {
+            return true;
+        }
+
+        return false;
+    }
+
+    PlanAlternative select_best_alternative(const vector<PlanAlternative>& alternatives,
+                                           const RuntimeStatistics& current_stats) {
+        if (alternatives.empty()) {
+            return PlanAlternative{};  // 空替代方案
+        }
+
+        // 评估每个替代方案的预期收益
+        PlanAlternative best = alternatives[0];
+        double best_score = evaluate_alternative(best, current_stats);
+
+        for (size_t i = 1; i < alternatives.size(); i++) {
+            double score = evaluate_alternative(alternatives[i], current_stats);
+            if (score > best_score) {
+                best = alternatives[i];
+                best_score = score;
+            }
+        }
+
+        return best;
+    }
+
+    double evaluate_alternative(const PlanAlternative& alt,
+                              const RuntimeStatistics& current_stats) {
+        double score = 0.0;
+
+        // 基于预期改进评分
+        score += alt.estimated_improvement * 0.6;
+
+        // 基于资源使用优化评分
+        double resource_score = calculate_resource_optimization_score(alt);
+        score += resource_score * 0.3;
+
+        // 基于执行稳定性评分
+        double stability_score = calculate_stability_score(alt);
+        score += stability_score * 0.1;
+
+        return score;
+    }
+};
+```
+
+### 动态并行度调整
+
+#### 自适应并行度控制器
+```cpp
+class AdaptiveParallelismController {
+private:
+    struct PerformanceMetrics {
+        double throughput;  // 行/秒
+        double latency;     // 平均延迟(ms)
+        double cpu_utilization;
+        double memory_usage;
+        size_t active_threads;
+    };
+
+    struct ParallelismConfig {
+        size_t current_parallel_degree;
+        size_t min_parallel_degree;
+        size_t max_parallel_degree;
+        double scaling_factor;
+        bool auto_tune_enabled;
+    };
+
+    ParallelismConfig config_;
+    PerformanceMetrics current_metrics_;
+    chrono::steady_clock::time_point last_adjustment_;
+    chrono::milliseconds adjustment_interval_{1000};  // 1秒调整间隔
+
+public:
+    AdaptiveParallelismController(size_t initial_degree, size_t min_degree, size_t max_degree)
+        : last_adjustment_(chrono::steady_clock::now()) {
+        config_.current_parallel_degree = initial_degree;
+        config_.min_parallel_degree = min_degree;
+        config_.max_parallel_degree = max_degree;
+        config_.scaling_factor = 1.2;
+        config_.auto_tune_enabled = true;
+    }
+
+    void update_metrics(const PerformanceMetrics& metrics) {
+        current_metrics_ = metrics;
+
+        auto now = chrono::steady_clock::now();
+        if (config_.auto_tune_enabled &&
+            (now - last_adjustment_) >= adjustment_interval_) {
+            adjust_parallelism();
+            last_adjustment_ = now;
+        }
+    }
+
+    size_t get_current_parallel_degree() const {
+        return config_.current_parallel_degree;
+    }
+
+    void set_parallel_degree(size_t degree) {
+        config_.current_parallel_degree = max(config_.min_parallel_degree,
+                                          min(config_.max_parallel_degree, degree));
+    }
+
+private:
+    void adjust_parallelism() {
+        if (!should_adjust()) {
+            return;
+        }
+
+        ParallelismAdjustment adjustment = calculate_adjustment();
+        apply_adjustment(adjustment);
+    }
+
+    bool should_adjust() const {
+        // 检查是否需要调整
+        if (current_metrics_.cpu_utilization > 0.9) {
+            return true;  // CPU过载
+        }
+
+        if (current_metrics_.memory_usage > 0.8) {
+            return true;  // 内存压力
+        }
+
+        if (current_metrics_.latency > get_latency_threshold()) {
+            return true;  // 延迟过高
+        }
+
+        return false;
+    }
+
+    struct ParallelismAdjustment {
+        int degree_change;
+        string reason;
+        double confidence;
+    };
+
+    ParallelismAdjustment calculate_adjustment() {
+        ParallelismAdjustment adjustment;
+
+        // CPU利用率分析
+        if (current_metrics_.cpu_utilization > 0.9) {
+            adjustment.degree_change = -1;
+            adjustment.reason = "High CPU utilization";
+            adjustment.confidence = 0.8;
+            return adjustment;
+        }
+
+        if (current_metrics_.cpu_utilization < 0.3) {
+            adjustment.degree_change = 1;
+            adjustment.reason = "Low CPU utilization";
+            adjustment.confidence = 0.7;
+            return adjustment;
+        }
+
+        // 内存使用分析
+        if (current_metrics_.memory_usage > 0.8) {
+            adjustment.degree_change = -1;
+            adjustment.reason = "High memory usage";
+            adjustment.confidence = 0.9;
+            return adjustment;
+        }
+
+        // 吞吐量分析
+        double expected_throughput = calculate_expected_throughput();
+        if (current_metrics_.throughput < expected_throughput * 0.7) {
+            adjustment.degree_change = 1;
+            adjustment.reason = "Low throughput";
+            adjustment.confidence = 0.6;
+            return adjustment;
+        }
+
+        // 默认：不需要调整
+        adjustment.degree_change = 0;
+        adjustment.reason = "Performance within acceptable range";
+        adjustment.confidence = 1.0;
+
+        return adjustment;
+    }
+
+    void apply_adjustment(const ParallelismAdjustment& adjustment) {
+        if (adjustment.degree_change == 0) {
+            return;  // 不需要调整
+        }
+
+        size_t new_degree = config_.current_parallel_degree + adjustment.degree_change;
+
+        // 确保在允许范围内
+        new_degree = max(config_.min_parallel_degree,
+                        min(config_.max_parallel_degree, new_degree));
+
+        if (new_degree != config_.current_parallel_degree) {
+            config_.current_parallel_degree = new_degree;
+
+            // 记录调整
+            log_adjustment(adjustment, new_degree);
+        }
+    }
+
+    double calculate_expected_throughput() const {
+        // 基于历史数据计算期望吞吐量
+        // 这里使用简化的线性模型
+        double base_throughput = 10000.0;  // 基础吞吐量
+        double scaling_factor = 0.8;       // 并行度扩展因子
+
+        return base_throughput * pow(config_.current_parallel_degree, scaling_factor);
+    }
+
+    double get_latency_threshold() const {
+        // 动态延迟阈值
+        double base_threshold = 100.0;  // 100ms基础阈值
+        double scaling_factor = 1.0 / log2(config_.current_parallel_degree + 1);
+
+        return base_threshold * scaling_factor;
+    }
+
+    void log_adjustment(const ParallelismAdjustment& adjustment, size_t new_degree) {
+        // 记录调整信息
+        cout << "Parallelism adjusted: " << config_.current_parallel_degree
+             << " -> " << new_degree
+             << " (Reason: " << adjustment.reason
+             << ", Confidence: " << adjustment.confidence << ")" << endl;
+    }
+};
+```
+
+## 性能监控与分析
+
+### 实时性能监控
+
+#### 查询性能监控器
+```cpp
+class QueryPerformanceMonitor {
+public:
+    struct QueryMetrics {
+        string query_id;
+        chrono::system_clock::time_point start_time;
+        chrono::system_clock::time_point end_time;
+        size_t rows_processed;
+        size_t bytes_processed;
+        size_t disk_io_ops;
+        size_t network_io_bytes;
+        double cpu_time_ms;
+        double memory_peak_mb;
+        vector<OperatorMetrics> operator_metrics;
+        ExecutionStatus status;
+    };
+
+    struct OperatorMetrics {
+        string operator_name;
+        size_t operator_id;
+        size_t input_rows;
+        size_t output_rows;
+        double execution_time_ms;
+        size_t memory_usage_mb;
+        size_t disk_io_ops;
+    };
+
+    void start_query(const string& query_id, const ExecutionPlan& plan) {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        QueryMetrics metrics;
+        metrics.query_id = query_id;
+        metrics.start_time = chrono::system_clock::now();
+        metrics.status = ExecutionStatus::RUNNING;
+
+        // 初始化操作符指标
+        initialize_operator_metrics(&metrics, plan);
+
+        active_queries_[query_id] = metrics;
+    }
+
+    void update_operator_metrics(const string& query_id, size_t operator_id,
+                                const OperatorMetrics& op_metrics) {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        auto it = active_queries_.find(query_id);
+        if (it == active_queries_.end()) {
+            return;
+        }
+
+        // 查找对应的操作符
+        for (auto& op : it->second.operator_metrics) {
+            if (op.operator_id == operator_id) {
+                op = op_metrics;
+                break;
+            }
+        }
+    }
+
+    void complete_query(const string& query_id, ExecutionStatus status) {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        auto it = active_queries_.find(query_id);
+        if (it == active_queries_.end()) {
+            return;
+        }
+
+        it->second.end_time = chrono::system_clock::now();
+        it->second.status = status;
+
+        // 移动到完成查询列表
+        completed_queries_.push_back(move(it->second));
+        active_queries_.erase(it);
+
+        // 分析查询性能
+        analyze_query_performance(completed_queries_.back());
+    }
+
+    QueryMetrics get_query_metrics(const string& query_id) const {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        // 检查活跃查询
+        auto active_it = active_queries_.find(query_id);
+        if (active_it != active_queries_.end()) {
+            return active_it->second;
+        }
+
+        // 检查完成查询
+        for (const auto& metrics : completed_queries_) {
+            if (metrics.query_id == query_id) {
+                return metrics;
+            }
+        }
+
+        throw runtime_error("Query metrics not found: " + query_id);
+    }
+
+    vector<QueryMetrics> get_recent_queries(size_t limit = 100) const {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        vector<QueryMetrics> recent;
+        size_t start_idx = completed_queries_.size() > limit ?
+                           completed_queries_.size() - limit : 0;
+
+        for (size_t i = start_idx; i < completed_queries_.size(); i++) {
+            recent.push_back(completed_queries_[i]);
+        }
+
+        return recent;
+    }
+
+    PerformanceSummary get_performance_summary() const {
+        lock_guard<mutex> lock(monitor_mutex_);
+
+        PerformanceSummary summary;
+        summary.total_queries = completed_queries_.size();
+        summary.active_queries = active_queries_.size();
+
+        if (!completed_queries_.empty()) {
+            calculate_summary_statistics(&summary);
+        }
+
+        return summary;
+    }
+
+private:
+    void initialize_operator_metrics(QueryMetrics* metrics, const ExecutionPlan& plan) {
+        size_t operator_id = 0;
+        for (const auto& op : plan.get_operators()) {
+            OperatorMetrics op_metrics;
+            op_metrics.operator_name = op->get_name();
+            op_metrics.operator_id = operator_id++;
+            metrics->operator_metrics.push_back(op_metrics);
+        }
+    }
+
+    void analyze_query_performance(const QueryMetrics& metrics) {
+        // 分析查询性能模式
+        QueryPattern pattern = extract_query_pattern(metrics);
+
+        // 更新性能基准
+        update_performance_baselines(pattern, metrics);
+
+        // 检测异常查询
+        if (is_abnormal_query(metrics)) {
+            alert_abnormal_query(metrics);
+        }
+
+        // 优化建议
+        generate_optimization_suggestions(metrics);
+    }
+
+    struct QueryPattern {
+        bool is_io_intensive;
+        bool is_cpu_intensive;
+        bool is_memory_intensive;
+        bool has_long_running_ops;
+        double complexity_score;
+    };
+
+    QueryPattern extract_query_pattern(const QueryMetrics& metrics) {
+        QueryPattern pattern;
+
+        double total_time = get_execution_time_ms(metrics);
+        pattern.is_io_intensive = metrics.disk_io_ops > get_io_threshold();
+        pattern.is_cpu_intensive = metrics.cpu_time_ms / total_time > 0.7;
+        pattern.is_memory_intensive = metrics.memory_peak_mb > get_memory_threshold();
+
+        pattern.has_long_running_ops = false;
+        for (const auto& op : metrics.operator_metrics) {
+            if (op.execution_time_ms > get_long_op_threshold()) {
+                pattern.has_long_running_ops = true;
+                break;
+            }
+        }
+
+        pattern.complexity_score = calculate_complexity_score(metrics);
+
+        return pattern;
+    }
+
+    bool is_abnormal_query(const QueryMetrics& metrics) {
+        // 基于历史数据判断是否异常
+        double execution_time = get_execution_time_ms(metrics);
+        double avg_time = get_average_execution_time();
+        double std_dev = get_execution_time_std_dev();
+
+        // 超过平均值3个标准差认为是异常
+        return execution_time > avg_time + 3 * std_dev;
+    }
+
+    void generate_optimization_suggestions(const QueryMetrics& metrics) {
+        vector<string> suggestions;
+
+        // 检查I/O密集型操作
+        if (metrics.disk_io_ops > get_io_threshold()) {
+            suggestions.push_back("Consider adding indexes for I/O-intensive operations");
+        }
+
+        // 检查内存使用
+        if (metrics.memory_peak_mb > get_memory_threshold()) {
+            suggestions.push_back("Consider using streaming operators to reduce memory usage");
+        }
+
+        // 检查长运行操作符
+        for (const auto& op : metrics.operator_metrics) {
+            if (op.execution_time_ms > get_long_op_threshold()) {
+                suggestions.push_back("Operator '" + op.operator_name + "' took " +
+                                   to_string(op.execution_time_ms) + "ms - consider optimization");
+            }
+        }
+
+        // 存储建议
+        if (!suggestions.empty()) {
+            store_optimization_suggestions(metrics.query_id, suggestions);
+        }
+    }
+
+    mutable mutex monitor_mutex_;
+    unordered_map<string, QueryMetrics> active_queries_;
+    vector<QueryMetrics> completed_queries_;
+    unordered_map<QueryPattern, vector<QueryMetrics>> pattern_history_;
+};
+```
+
+## 实践建议
+
+### 执行引擎优化策略
+1. **向量化处理**：利用SIMD指令加速批量操作
+2. **并行执行**：根据资源使用情况动态调整并行度
+3. **自适应优化**：基于运行时统计信息动态调整执行策略
+4. **资源管理**：合理分配内存和CPU资源
+
+### 性能监控技巧
+1. **实时监控**：建立完善的性能指标收集体系
+2. **异常检测**：及时发现性能异常的查询
+3. **趋势分析**：分析性能变化趋势，提前预警
+4. **自动优化**：基于监控数据自动调整系统参数
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持SIMD优化的向量化过滤操作符
+2. 设计并实现一个自适应的并行度控制系统
+3. 实现一个实时查询性能监控器，支持异常检测和告警
+
+### 思考题
+1. 分析向量化执行和传统行式执行的性能差异
+2. 讨论自适应查询执行在不同工作负载下的适用性
+3. 如何设计一个支持机器学习驱动的查询优化器？
+
+## 下节预告
+
+下一讲将介绍**查询计划与优化**，包括：
+- 查询优化器架构
+- 成本估算模型
+- 计划空间搜索
+- 统计信息管理
+
+---
+
+**核心概念**：现代查询执行引擎需要结合向量化、并行化和自适应优化技术，才能充分发挥硬件性能！

@@ -1,0 +1,1174 @@
+---
+title: "Week 5 - 数据结构"
+description: "CS50第5周（2025版本）：学习栈、队列、哈希表、树等数据结构"
+---
+
+# Week 5 - 数据结构
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/5" title="CS50 2025 - Week 5" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **数据结构基础**：抽象数据类型、时间复杂度分析
+- **线性结构**：栈、队列、双向链表
+- **树结构**：二叉搜索树、平衡树
+- **哈希表**：哈希函数、冲突解决
+- **字典和Trie**：字符串搜索、前缀匹配
+- **数据结构选择**：根据应用场景选择合适的数据结构
+
+## 核心概念
+
+### 数据结构基础
+
+#### 什么是数据结构
+
+数据结构是计算机中组织和存储数据的方式。不同的数据结构有不同的特点和适用场景。
+
+#### 时间复杂度比较
+
+| 数据结构 | 访问 | 搜索 | 插入 | 删除 | 空间复杂度 |
+|----------|------|------|------|------|------------|
+| 数组 | O(1) | O(n) | O(n) | O(n) | O(n) |
+| 链表 | O(n) | O(n) | O(1) | O(1) | O(n) |
+| 栈 | O(n) | O(n) | O(1) | O(1) | O(n) |
+| 队列 | O(n) | O(n) | O(1) | O(1) | O(n) |
+| 哈希表 | O(1) | O(1) | O(1) | O(1) | O(n) |
+| 二叉搜索树 | O(log n) | O(log n) | O(log n) | O(log n) | O(n) |
+
+### 栈 (Stack - LIFO)
+
+栈是一种后进先出(LIFO)的数据结构。
+
+#### 栈的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+#define MAX_SIZE 100
+
+typedef struct {
+    int items[MAX_SIZE];
+    int top;
+} Stack;
+
+// 创建栈
+Stack* create_stack() {
+    Stack *stack = (Stack *)malloc(sizeof(Stack));
+    stack->top = -1;
+    return stack;
+}
+
+// 检查栈是否为空
+bool is_empty(Stack *stack) {
+    return stack->top == -1;
+}
+
+// 检查栈是否已满
+bool is_full(Stack *stack) {
+    return stack->top == MAX_SIZE - 1;
+}
+
+// 压栈操作
+void push(Stack *stack, int item) {
+    if (is_full(stack)) {
+        printf("栈已满，无法压入元素\n");
+        return;
+    }
+    stack->items[++stack->top] = item;
+    printf("%d 压入栈\n", item);
+}
+
+// 弹栈操作
+int pop(Stack *stack) {
+    if (is_empty(stack)) {
+        printf("栈为空，无法弹出元素\n");
+        return -1;
+    }
+    return stack->items[stack->top--];
+}
+
+// 查看栈顶元素
+int peek(Stack *stack) {
+    if (is_empty(stack)) {
+        printf("栈为空\n");
+        return -1;
+    }
+    return stack->items[stack->top];
+}
+
+int main(void) {
+    Stack *stack = create_stack();
+
+    push(stack, 10);
+    push(stack, 20);
+    push(stack, 30);
+
+    printf("栈顶元素: %d\n", peek(stack));
+
+    printf("弹出元素: %d\n", pop(stack));
+    printf("弹出元素: %d\n", pop(stack));
+
+    push(stack, 40);
+
+    while (!is_empty(stack)) {
+        printf("%d ", pop(stack));
+    }
+    printf("\n");
+
+    free(stack);
+
+    return 0;
+}
+```
+
+### 队列 (Queue - FIFO)
+
+队列是一种先进先出(FIFO)的数据结构。
+
+#### 队列的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+#define MAX_SIZE 100
+
+typedef struct {
+    int items[MAX_SIZE];
+    int front;
+    int rear;
+} Queue;
+
+// 创建队列
+Queue* create_queue() {
+    Queue *queue = (Queue *)malloc(sizeof(Queue));
+    queue->front = -1;
+    queue->rear = -1;
+    return queue;
+}
+
+// 检查队列是否为空
+bool is_empty(Queue *queue) {
+    return queue->front == -1;
+}
+
+// 检查队列是否已满
+bool is_full(Queue *queue) {
+    return queue->rear == MAX_SIZE - 1;
+}
+
+// 入队操作
+void enqueue(Queue *queue, int item) {
+    if (is_full(queue)) {
+        printf("队列已满，无法入队\n");
+        return;
+    }
+    if (queue->front == -1) {
+        queue->front = 0;
+    }
+    queue->items[++queue->rear] = item;
+    printf("%d 入队\n", item);
+}
+
+// 出队操作
+int dequeue(Queue *queue) {
+    if (is_empty(queue)) {
+        printf("队列为空，无法出队\n");
+        return -1;
+    }
+    int item = queue->items[queue->front];
+    if (queue->front == queue->rear) {
+        queue->front = queue->rear = -1;
+    } else {
+        queue->front++;
+    }
+    return item;
+}
+
+int main(void) {
+    Queue *queue = create_queue();
+
+    enqueue(queue, 10);
+    enqueue(queue, 20);
+    enqueue(queue, 30);
+
+    printf("出队元素: %d\n", dequeue(queue));
+    printf("出队元素: %d\n", dequeue(queue));
+
+    enqueue(queue, 40);
+
+    while (!is_empty(queue)) {
+        printf("%d ", dequeue(queue));
+    }
+    printf("\n");
+
+    free(queue);
+
+    return 0;
+}
+```
+
+### 双向链表
+
+双向链表允许双向遍历，每个节点包含指向前驱和后继的指针。
+
+#### 双向链表的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int data;
+    struct Node *prev;
+    struct Node *next;
+} Node;
+
+Node* create_node(int data) {
+    Node *new_node = (Node *)malloc(sizeof(Node));
+    if (new_node == NULL) return NULL;
+    new_node->data = data;
+    new_node->prev = NULL;
+    new_node->next = NULL;
+    return new_node;
+}
+
+// 在头部插入
+Node* insert_at_head(Node *head, int data) {
+    Node *new_node = create_node(data);
+    if (head != NULL) {
+        new_node->next = head;
+        head->prev = new_node;
+    }
+    return new_node;
+}
+
+// 在尾部插入
+Node* insert_at_tail(Node *head, int data) {
+    Node *new_node = create_node(data);
+    if (head == NULL) {
+        return new_node;
+    }
+
+    Node *current = head;
+    while (current->next != NULL) {
+        current = current->next;
+    }
+    current->next = new_node;
+    new_node->prev = current;
+    return head;
+}
+
+// 删除节点
+Node* delete_node(Node *head, int data) {
+    if (head == NULL) return NULL;
+
+    Node *current = head;
+    while (current != NULL && current->data != data) {
+        current = current->next;
+    }
+
+    if (current == NULL) return head;
+
+    if (current->prev != NULL) {
+        current->prev->next = current->next;
+    } else {
+        head = current->next;
+    }
+
+    if (current->next != NULL) {
+        current->next->prev = current->prev;
+    }
+
+    free(current);
+    return head;
+}
+
+// 正向打印
+void print_forward(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        printf("%d <-> ", current->data);
+        current = current->next;
+    }
+    printf("NULL\n");
+}
+
+// 反向打印
+void print_backward(Node *head) {
+    if (head == NULL) {
+        printf("NULL\n");
+        return;
+    }
+
+    Node *current = head;
+    while (current->next != NULL) {
+        current = current->next;
+    }
+
+    printf("NULL ");
+    while (current != NULL) {
+        printf("<-> %d ", current->data);
+        current = current->prev;
+    }
+    printf("\n");
+}
+
+void free_list(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        Node *temp = current;
+        current = current->next;
+        free(temp);
+    }
+}
+
+int main(void) {
+    Node *head = NULL;
+
+    head = insert_at_tail(head, 10);
+    head = insert_at_tail(head, 20);
+    head = insert_at_tail(head, 30);
+    head = insert_at_head(head, 5);
+
+    printf("正向遍历: ");
+    print_forward(head);
+
+    printf("反向遍历: ");
+    print_backward(head);
+
+    head = delete_node(head, 20);
+    printf("删除20后: ");
+    print_forward(head);
+
+    free_list(head);
+
+    return 0;
+}
+```
+
+### 二叉搜索树
+
+二叉搜索树是一种树形数据结构，每个节点的左子树所有值都小于该节点，右子树所有值都大于该节点。
+
+#### 二叉搜索树的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct TreeNode {
+    int data;
+    struct TreeNode *left;
+    struct TreeNode *right;
+} TreeNode;
+
+TreeNode* create_node(int data) {
+    TreeNode *new_node = (TreeNode *)malloc(sizeof(TreeNode));
+    if (new_node == NULL) return NULL;
+    new_node->data = data;
+    new_node->left = NULL;
+    new_node->right = NULL;
+    return new_node;
+}
+
+// 插入节点
+TreeNode* insert(TreeNode *root, int data) {
+    if (root == NULL) {
+        return create_node(data);
+    }
+
+    if (data < root->data) {
+        root->left = insert(root->left, data);
+    } else if (data > root->data) {
+        root->right = insert(root->right, data);
+    }
+
+    return root;
+}
+
+// 搜索节点
+TreeNode* search(TreeNode *root, int data) {
+    if (root == NULL || root->data == data) {
+        return root;
+    }
+
+    if (data < root->data) {
+        return search(root->left, data);
+    } else {
+        return search(root->right, data);
+    }
+}
+
+// 找到最小值节点
+TreeNode* find_min(TreeNode *root) {
+    if (root == NULL) return NULL;
+    while (root->left != NULL) {
+        root = root->left;
+    }
+    return root;
+}
+
+// 删除节点
+TreeNode* delete_node(TreeNode *root, int data) {
+    if (root == NULL) return NULL;
+
+    if (data < root->data) {
+        root->left = delete_node(root->left, data);
+    } else if (data > root->data) {
+        root->right = delete_node(root->right, data);
+    } else {
+        // 找到要删除的节点
+        if (root->left == NULL) {
+            TreeNode *temp = root->right;
+            free(root);
+            return temp;
+        } else if (root->right == NULL) {
+            TreeNode *temp = root->left;
+            free(root);
+            return temp;
+        }
+
+        // 有两个子节点的情况
+        TreeNode *temp = find_min(root->right);
+        root->data = temp->data;
+        root->right = delete_node(root->right, temp->data);
+    }
+
+    return root;
+}
+
+// 中序遍历（升序）
+void inorder_traversal(TreeNode *root) {
+    if (root != NULL) {
+        inorder_traversal(root->left);
+        printf("%d ", root->data);
+        inorder_traversal(root->right);
+    }
+}
+
+// 前序遍历
+void preorder_traversal(TreeNode *root) {
+    if (root != NULL) {
+        printf("%d ", root->data);
+        preorder_traversal(root->left);
+        preorder_traversal(root->right);
+    }
+}
+
+// 后序遍历
+void postorder_traversal(TreeNode *root) {
+    if (root != NULL) {
+        postorder_traversal(root->left);
+        postorder_traversal(root->right);
+        printf("%d ", root->data);
+    }
+}
+
+void free_tree(TreeNode *root) {
+    if (root != NULL) {
+        free_tree(root->left);
+        free_tree(root->right);
+        free(root);
+    }
+}
+
+int main(void) {
+    TreeNode *root = NULL;
+
+    // 插入节点
+    root = insert(root, 50);
+    root = insert(root, 30);
+    root = insert(root, 70);
+    root = insert(root, 20);
+    root = insert(root, 40);
+    root = insert(root, 60);
+    root = insert(root, 80);
+
+    printf("中序遍历: ");
+    inorder_traversal(root);
+    printf("\n");
+
+    printf("前序遍历: ");
+    preorder_traversal(root);
+    printf("\n");
+
+    printf("后序遍历: ");
+    postorder_traversal(root);
+    printf("\n");
+
+    // 搜索测试
+    TreeNode *found = search(root, 40);
+    if (found != NULL) {
+        printf("找到节点: %d\n", found->data);
+    }
+
+    // 删除测试
+    root = delete_node(root, 30);
+    printf("删除30后的中序遍历: ");
+    inorder_traversal(root);
+    printf("\n");
+
+    free_tree(root);
+
+    return 0;
+}
+```
+
+### 哈希表
+
+哈希表通过哈希函数将键映射到数组的索引，实现快速访问。
+
+#### 哈希表的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define TABLE_SIZE 10
+
+typedef struct HashNode {
+    char *key;
+    int value;
+    struct HashNode *next;
+} HashNode;
+
+typedef struct {
+    HashNode *buckets[TABLE_SIZE];
+} HashTable;
+
+// 哈希函数
+unsigned int hash(const char *key) {
+    unsigned int hash_value = 0;
+    for (int i = 0; key[i] != '\0'; i++) {
+        hash_value = (hash_value * 31 + key[i]) % TABLE_SIZE;
+    }
+    return hash_value;
+}
+
+// 创建哈希节点
+HashNode* create_hash_node(const char *key, int value) {
+    HashNode *new_node = (HashNode *)malloc(sizeof(HashNode));
+    if (new_node == NULL) return NULL;
+
+    new_node->key = strdup(key);
+    new_node->value = value;
+    new_node->next = NULL;
+    return new_node;
+}
+
+// 创建哈希表
+HashTable* create_hash_table() {
+    HashTable *table = (HashTable *)malloc(sizeof(HashTable));
+    if (table == NULL) return NULL;
+
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        table->buckets[i] = NULL;
+    }
+    return table;
+}
+
+// 插入键值对
+void insert(HashTable *table, const char *key, int value) {
+    unsigned int index = hash(key);
+    HashNode *new_node = create_hash_node(key, value);
+
+    if (table->buckets[index] == NULL) {
+        table->buckets[index] = new_node;
+    } else {
+        // 处理冲突：链地址法
+        HashNode *current = table->buckets[index];
+        while (current->next != NULL) {
+            current = current->next;
+        }
+        current->next = new_node;
+    }
+}
+
+// 查找值
+int get(HashTable *table, const char *key) {
+    unsigned int index = hash(key);
+    HashNode *current = table->buckets[index];
+
+    while (current != NULL) {
+        if (strcmp(current->key, key) == 0) {
+            return current->value;
+        }
+        current = current->next;
+    }
+
+    return -1; // 未找到
+}
+
+// 删除键值对
+void delete_key(HashTable *table, const char *key) {
+    unsigned int index = hash(key);
+    HashNode *current = table->buckets[index];
+    HashNode *prev = NULL;
+
+    while (current != NULL && strcmp(current->key, key) != 0) {
+        prev = current;
+        current = current->next;
+    }
+
+    if (current == NULL) return; // 未找到
+
+    if (prev == NULL) {
+        table->buckets[index] = current->next;
+    } else {
+        prev->next = current->next;
+    }
+
+    free(current->key);
+    free(current);
+}
+
+// 打印哈希表
+void print_hash_table(HashTable *table) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        printf("Bucket %d: ", i);
+        HashNode *current = table->buckets[i];
+        while (current != NULL) {
+            printf("(%s: %d) -> ", current->key, current->value);
+            current = current->next;
+        }
+        printf("NULL\n");
+    }
+}
+
+void free_hash_table(HashTable *table) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        HashNode *current = table->buckets[i];
+        while (current != NULL) {
+            HashNode *temp = current;
+            current = current->next;
+            free(temp->key);
+            free(temp);
+        }
+    }
+    free(table);
+}
+
+int main(void) {
+    HashTable *table = create_hash_table();
+
+    insert(table, "apple", 5);
+    insert(table, "banana", 3);
+    insert(table, "orange", 8);
+    insert(table, "grape", 2);
+
+    printf("哈希表内容:\n");
+    print_hash_table(table);
+
+    printf("apple的值: %d\n", get(table, "apple"));
+    printf("banana的值: %d\n", get(table, "banana"));
+
+    delete_key(table, "banana");
+    printf("删除banana后的哈希表:\n");
+    print_hash_table(table);
+
+    free_hash_table(table);
+
+    return 0;
+}
+```
+
+### Trie树
+
+Trie树是一种专门用于字符串搜索的数据结构，特别适合前缀匹配。
+
+#### Trie树的实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+
+#define ALPHABET_SIZE 26
+
+typedef struct TrieNode {
+    struct TrieNode *children[ALPHABET_SIZE];
+    bool is_end_of_word;
+} TrieNode;
+
+TrieNode* create_trie_node() {
+    TrieNode *node = (TrieNode *)malloc(sizeof(TrieNode));
+    if (node == NULL) return NULL;
+
+    node->is_end_of_word = false;
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        node->children[i] = NULL;
+    }
+    return node;
+}
+
+void insert_trie(TrieNode *root, const char *word) {
+    TrieNode *current = root;
+
+    for (int i = 0; word[i] != '\0'; i++) {
+        int index = word[i] - 'a';
+        if (current->children[index] == NULL) {
+            current->children[index] = create_trie_node();
+        }
+        current = current->children[index];
+    }
+    current->is_end_of_word = true;
+}
+
+bool search_trie(TrieNode *root, const char *word) {
+    TrieNode *current = root;
+
+    for (int i = 0; word[i] != '\0'; i++) {
+        int index = word[i] - 'a';
+        if (current->children[index] == NULL) {
+            return false;
+        }
+        current = current->children[index];
+    }
+    return current->is_end_of_word;
+}
+
+bool starts_with(TrieNode *root, const char *prefix) {
+    TrieNode *current = root;
+
+    for (int i = 0; prefix[i] != '\0'; i++) {
+        int index = prefix[i] - 'a';
+        if (current->children[index] == NULL) {
+            return false;
+        }
+        current = current->children[index];
+    }
+    return true;
+}
+
+void free_trie(TrieNode *root) {
+    if (root == NULL) return;
+
+    for (int i = 0; i < ALPHABET_SIZE; i++) {
+        free_trie(root->children[i]);
+    }
+    free(root);
+}
+
+int main(void) {
+    TrieNode *root = create_trie_node();
+
+    insert_trie(root, "hello");
+    insert_trie(root, "world");
+    insert_trie(root, "hey");
+    insert_trie(root, "hi");
+
+    printf("搜索测试:\n");
+    printf("hello: %s\n", search_trie(root, "hello") ? "找到" : "未找到");
+    printf("world: %s\n", search_trie(root, "world") ? "找到" : "未找到");
+    printf("hey: %s\n", search_trie(root, "hey") ? "找到" : "未找到");
+    printf("hi: %s\n", search_trie(root, "hi") ? "找到" : "未找到");
+    printf("he: %s\n", search_trie(root, "he") ? "找到" : "未找到");
+
+    printf("\n前缀匹配测试:\n");
+    printf("前缀 'he': %s\n", starts_with(root, "he") ? "存在" : "不存在");
+    printf("前缀 'wo': %s\n", starts_with(root, "wo") ? "存在" : "不存在");
+    printf("前缀 'xyz': %s\n", starts_with(root, "xyz") ? "存在" : "不存在");
+
+    free_trie(root);
+
+    return 0;
+}
+```
+
+## 练习题与答案
+
+### 1. 栈的应用
+
+**问题：** 使用栈实现括号匹配检查。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+
+#define MAX_SIZE 100
+
+typedef struct {
+    char items[MAX_SIZE];
+    int top;
+} Stack;
+
+Stack* create_stack() {
+    Stack *stack = (Stack *)malloc(sizeof(Stack));
+    stack->top = -1;
+    return stack;
+}
+
+bool is_empty(Stack *stack) {
+    return stack->top == -1;
+}
+
+bool is_full(Stack *stack) {
+    return stack->top == MAX_SIZE - 1;
+}
+
+void push(Stack *stack, char item) {
+    if (is_full(stack)) return;
+    stack->items[++stack->top] = item;
+}
+
+char pop(Stack *stack) {
+    if (is_empty(stack)) return '\0';
+    return stack->items[stack->top--];
+}
+
+char peek(Stack *stack) {
+    if (is_empty(stack)) return '\0';
+    return stack->items[stack->top];
+}
+
+bool is_matching_pair(char opening, char closing) {
+    return (opening == '(' && closing == ')') ||
+           (opening == '[' && closing == ']') ||
+           (opening == '{' && closing == '}');
+}
+
+bool check_balanced_parentheses(const char *expression) {
+    Stack *stack = create_stack();
+
+    for (int i = 0; expression[i] != '\0'; i++) {
+        if (expression[i] == '(' || expression[i] == '[' || expression[i] == '{') {
+            push(stack, expression[i]);
+        } else if (expression[i] == ')' || expression[i] == ']' || expression[i] == '}') {
+            if (is_empty(stack)) {
+                free(stack);
+                return false;
+            }
+            char top = pop(stack);
+            if (!is_matching_pair(top, expression[i])) {
+                free(stack);
+                return false;
+            }
+        }
+    }
+
+    bool result = is_empty(stack);
+    free(stack);
+    return result;
+}
+
+int main(void) {
+    const char *expressions[] = {
+        "((a+b)*(c-d))",
+        "({[a+b]*[c-d]})",
+        "((a+b)",
+        "([)]",
+        "{a+b)*(c-d)}"
+    };
+
+    for (int i = 0; i < 5; i++) {
+        printf("表达式: %s\n", expressions[i]);
+        if (check_balanced_parentheses(expressions[i])) {
+            printf("括号平衡\n");
+        } else {
+            printf("括号不平衡\n");
+        }
+        printf("\n");
+    }
+
+    return 0;
+}
+```
+
+### 2. 队列的应用
+
+**问题：** 使用队列实现广度优先搜索(BFS)。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+#define MAX_SIZE 100
+
+// 图的邻接表表示
+typedef struct Node {
+    int vertex;
+    struct Node *next;
+} Node;
+
+typedef struct {
+    Node *head;
+} Graph;
+
+typedef struct {
+    int items[MAX_SIZE];
+    int front;
+    int rear;
+} Queue;
+
+Queue* create_queue() {
+    Queue *queue = (Queue *)malloc(sizeof(Queue));
+    queue->front = -1;
+    queue->rear = -1;
+    return queue;
+}
+
+bool is_empty(Queue *queue) {
+    return queue->front == -1;
+}
+
+void enqueue(Queue *queue, int item) {
+    if (queue->rear == MAX_SIZE - 1) return;
+    if (queue->front == -1) {
+        queue->front = 0;
+    }
+    queue->items[++queue->rear] = item;
+}
+
+int dequeue(Queue *queue) {
+    if (is_empty(queue)) return -1;
+    int item = queue->items[queue->front];
+    if (queue->front == queue->rear) {
+        queue->front = queue->rear = -1;
+    } else {
+        queue->front++;
+    }
+    return item;
+}
+
+Graph* create_graph(int vertices) {
+    Graph *graph = (Graph *)malloc(vertices * sizeof(Graph));
+    for (int i = 0; i < vertices; i++) {
+        graph[i].head = NULL;
+    }
+    return graph;
+}
+
+void add_edge(Graph *graph, int src, int dest) {
+    // 添加 src -> dest
+    Node *new_node = (Node *)malloc(sizeof(Node));
+    new_node->vertex = dest;
+    new_node->next = graph[src].head;
+    graph[src].head = new_node;
+
+    // 添加 dest -> src（无向图）
+    new_node = (Node *)malloc(sizeof(Node));
+    new_node->vertex = src;
+    new_node->next = graph[dest].head;
+    graph[dest].head = new_node;
+}
+
+void bfs(Graph *graph, int start_vertex, int vertices) {
+    bool *visited = (bool *)malloc(vertices * sizeof(bool));
+    for (int i = 0; i < vertices; i++) {
+        visited[i] = false;
+    }
+
+    Queue *queue = create_queue();
+    visited[start_vertex] = true;
+    enqueue(queue, start_vertex);
+
+    printf("BFS遍历从顶点 %d 开始: ", start_vertex);
+
+    while (!is_empty(queue)) {
+        int current_vertex = dequeue(queue);
+        printf("%d ", current_vertex);
+
+        Node *temp = graph[current_vertex].head;
+        while (temp != NULL) {
+            int adj_vertex = temp->vertex;
+            if (!visited[adj_vertex]) {
+                visited[adj_vertex] = true;
+                enqueue(queue, adj_vertex);
+            }
+            temp = temp->next;
+        }
+    }
+
+    free(visited);
+    free(queue);
+    printf("\n");
+}
+
+int main(void) {
+    int vertices = 6;
+    Graph *graph = create_graph(vertices);
+
+    add_edge(graph, 0, 1);
+    add_edge(graph, 0, 2);
+    add_edge(graph, 1, 3);
+    add_edge(graph, 1, 4);
+    add_edge(graph, 2, 5);
+    add_edge(graph, 3, 4);
+    add_edge(graph, 4, 5);
+
+    bfs(graph, 0, vertices);
+
+    // 释放内存（省略清理代码）
+
+    return 0;
+}
+```
+
+### 3. 二叉搜索树应用
+
+**问题：** 实现一个简单的字典程序，使用二叉搜索树存储单词和定义。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MAX_WORD_LENGTH 50
+#define MAX_DEFINITION_LENGTH 200
+
+typedef struct DictionaryNode {
+    char word[MAX_WORD_LENGTH];
+    char definition[MAX_DEFINITION_LENGTH];
+    struct DictionaryNode *left;
+    struct DictionaryNode *right;
+} DictionaryNode;
+
+DictionaryNode* create_dict_node(const char *word, const char *definition) {
+    DictionaryNode *node = (DictionaryNode *)malloc(sizeof(DictionaryNode));
+    if (node == NULL) return NULL;
+
+    strncpy(node->word, word, MAX_WORD_LENGTH - 1);
+    node->word[MAX_WORD_LENGTH - 1] = '\0';
+
+    strncpy(node->definition, definition, MAX_DEFINITION_LENGTH - 1);
+    node->definition[MAX_DEFINITION_LENGTH - 1] = '\0';
+
+    node->left = NULL;
+    node->right = NULL;
+
+    return node;
+}
+
+DictionaryNode* insert_word(DictionaryNode *root, const char *word, const char *definition) {
+    if (root == NULL) {
+        return create_dict_node(word, definition);
+    }
+
+    int cmp = strcmp(word, root->word);
+    if (cmp < 0) {
+        root->left = insert_word(root->left, word, definition);
+    } else if (cmp > 0) {
+        root->right = insert_word(root->right, word, definition);
+    } else {
+        // 单词已存在，更新定义
+        strncpy(root->definition, definition, MAX_DEFINITION_LENGTH - 1);
+        root->definition[MAX_DEFINITION_LENGTH - 1] = '\0';
+    }
+
+    return root;
+}
+
+const char* lookup_word(DictionaryNode *root, const char *word) {
+    if (root == NULL) {
+        return NULL;
+    }
+
+    int cmp = strcmp(word, root->word);
+    if (cmp < 0) {
+        return lookup_word(root->left, word);
+    } else if (cmp > 0) {
+        return lookup_word(root->right, word);
+    } else {
+        return root->definition;
+    }
+}
+
+void print_dictionary(DictionaryNode *root) {
+    if (root != NULL) {
+        print_dictionary(root->left);
+        printf("%s: %s\n", root->word, root->definition);
+        print_dictionary(root->right);
+    }
+}
+
+void free_dictionary(DictionaryNode *root) {
+    if (root != NULL) {
+        free_dictionary(root->left);
+        free_dictionary(root->right);
+        free(root);
+    }
+}
+
+int main(void) {
+    DictionaryNode *dictionary = NULL;
+
+    // 插入单词和定义
+    dictionary = insert_word(dictionary, "algorithm", "一组解决问题的明确指令");
+    dictionary = insert_word(dictionary, "array", "相同类型元素的集合");
+    dictionary = insert_word(dictionary, "binary", "由0和1组成的数字系统");
+    dictionary = insert_word(dictionary, "compiler", "将源代码转换为机器码的程序");
+    dictionary = insert_word(dictionary, "data", "计算机处理的信息");
+
+    printf("字典内容（按字母顺序）：\n");
+    print_dictionary(dictionary);
+
+    printf("\n查询单词:\n");
+    const char *words_to_lookup[] = {"algorithm", "data", "function"};
+    for (int i = 0; i < 3; i++) {
+        const char *definition = lookup_word(dictionary, words_to_lookup[i]);
+        if (definition != NULL) {
+            printf("%s: %s\n", words_to_lookup[i], definition);
+        } else {
+            printf("未找到单词: %s\n", words_to_lookup[i]);
+        }
+    }
+
+    free_dictionary(dictionary);
+
+    return 0;
+}
+```
+
+## 学习建议
+
+1. **理解数据结构特点**：掌握各种数据结构的优缺点和适用场景
+2. **动手实现**：亲自实现各种数据结构的基本操作
+3. **分析复杂度**：理解每个操作的时间复杂度和空间复杂度
+4. **实际应用**：在实际编程中选择合适的数据结构
+5. **可视化学习**：使用可视化工具理解数据结构的工作原理
+
+## 扩展资源
+
+- **官方资源**：
+  - [CS50 Week 5 Lecture](https://cs50.harvard.edu/x/2025/weeks/5/)
+  - [CS50 Week 5 Notes](https://cs50.harvard.edu/x/2025/notes/5/)
+
+- **可视化工具**：
+  - [VisuAlgo 数据结构可视化](https://visualgo.net/en)
+  - [Data Structure Visualizations](https://www.cs.usfca.edu/~galles/visualization/Algorithms.html)
+
+- **深入学习**：
+  - [算法与数据结构](https://algs4.cs.princeton.edu/home/)
+  - [LeetCode 算法练习](https://leetcode.com/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 6: Python基础" icon="arrow-right" href="./week6">
+    开始学习Python编程语言
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 5的学习！现在你已经掌握了多种重要的数据结构，这为你解决复杂问题提供了强大的工具。选择合适的数据结构是高效编程的关键。*

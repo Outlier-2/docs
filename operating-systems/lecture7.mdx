@@ -1,0 +1,956 @@
+---
+title: "第7讲：可执行文件格式"
+description: "南京大学操作系统2025 - ELF文件格式详解、程序加载与链接、动态链接机制"
+---
+
+# 第7讲：可执行文件格式
+
+## 可执行文件概述
+
+### 什么是可执行文件？
+
+可执行文件是包含程序指令和数据的特殊文件格式，操作系统可以加载并执行这些文件。
+
+**可执行文件的作用**
+- **程序存储**：存储程序的机器码和数据
+- **加载支持**：提供操作系统加载程序所需的信息
+- **链接支持**：支持静态链接和动态链接
+- **调试支持**：包含调试信息和符号表
+
+### 常见的可执行文件格式
+
+| 格式 | 平台 | 特点 |
+|------|------|------|
+| ELF | Linux/Unix | 灵活，支持动态链接 |
+| PE | Windows | 复杂，支持资源 |
+| Mach-O | macOS | 简洁，支持胖二进制 |
+| COFF | 早期系统 | 基础功能 |
+
+## ELF文件格式详解
+
+### ELF文件结构
+
+```
+ELF Header
+├── Program Header Table
+├── .text section (代码段)
+├── .data section (数据段)
+├── .bss section (未初始化数据)
+├── .rodata section (只读数据)
+├── .symtab section (符号表)
+├── .strtab section (字符串表)
+├── .rel.text section (重定位信息)
+└── Section Header Table
+```
+
+### ELF头部结构
+
+```c
+// ELF头部定义
+typedef struct {
+    unsigned char e_ident[EI_NIDENT]; // ELF标识
+    uint16_t      e_type;             // 文件类型
+    uint16_t      e_machine;          // 机器架构
+    uint32_t      e_version;          // 版本
+    uint32_t      e_entry;            // 程序入口点
+    uint32_t      e_phoff;            // 程序头表偏移
+    uint32_t      e_shoff;            // 段头表偏移
+    uint32_t      e_flags;            // 标志
+    uint16_t      e_ehsize;           // ELF头部大小
+    uint16_t      e_phentsize;        // 程序头表项大小
+    uint16_t      e_phnum;            // 程序头表项数量
+    uint16_t      e_shentsize;        // 段头表项大小
+    uint16_t      e_shnum;            // 段头表项数量
+    uint16_t      e_shstrndx;         // 段名字符串表索引
+} Elf32_Ehdr;
+
+// 64位ELF头部
+typedef struct {
+    unsigned char e_ident[EI_NIDENT]; // ELF标识
+    uint16_t      e_type;             // 文件类型
+    uint16_t      e_machine;          // 机器架构
+    uint32_t      e_version;          // 版本
+    uint64_t      e_entry;            // 程序入口点
+    uint64_t      e_phoff;            // 程序头表偏移
+    uint64_t      e_shoff;            // 段头表偏移
+    uint32_t      e_flags;            // 标志
+    uint16_t      e_ehsize;           // ELF头部大小
+    uint16_t      e_phentsize;        // 程序头表项大小
+    uint16_t      e_phnum;            // 程序头表项数量
+    uint16_t      e_shentsize;        // 段头表项大小
+    uint16_t      e_shnum;            // 段头表项数量
+    uint16_t      e_shstrndx;         // 段名字符串表索引
+} Elf64_Ehdr;
+```
+
+### 程序头表
+
+```c
+// 程序头表项
+typedef struct {
+    uint32_t p_type;      // 段类型
+    uint32_t p_offset;    // 文件偏移
+    uint32_t p_vaddr;     // 虚拟地址
+    uint32_t p_paddr;     // 物理地址
+    uint32_t p_filesz;    // 文件大小
+    uint32_t p_memsz;     // 内存大小
+    uint32_t p_flags;     // 标志
+    uint32_t p_align;     // 对齐
+} Elf32_Phdr;
+
+// 64位程序头表项
+typedef struct {
+    uint32_t p_type;      // 段类型
+    uint32_t p_flags;     // 标志
+    uint64_t p_offset;    // 文件偏移
+    uint64_t p_vaddr;     // 虚拟地址
+    uint64_t p_paddr;     // 物理地址
+    uint64_t p_filesz;    // 文件大小
+    uint64_t p_memsz;     // 内存大小
+    uint64_t p_align;     // 对齐
+} Elf64_Phdr;
+
+// 段类型定义
+#define PT_NULL     0   // 空段
+#define PT_LOAD     1   // 可加载段
+#define PT_DYNAMIC  2   // 动态链接信息
+#define PT_INTERP   3   // 解释器信息
+#define PT_NOTE     4   // 辅助信息
+#define PT_SHLIB    5   // 保留
+#define PT_PHDR     6   // 程序头表
+#define PT_TLS      7   // 线程局部存储
+#define PT_NUM      8   // 段类型数量
+```
+
+### 段头表
+
+```c
+// 段头表项
+typedef struct {
+    uint32_t sh_name;      // 段名
+    uint32_t sh_type;      // 段类型
+    uint32_t sh_flags;     // 段标志
+    uint32_t sh_addr;      // 虚拟地址
+    uint32_t sh_offset;    // 文件偏移
+    uint32_t sh_size;      // 段大小
+    uint32_t sh_link;      // 链接信息
+    uint32_t sh_info;      // 附加信息
+    uint32_t sh_addralign; // 对齐
+    uint32_t sh_entsize;   // 项大小
+} Elf32_Shdr;
+
+// 64位段头表项
+typedef struct {
+    uint32_t sh_name;      // 段名
+    uint32_t sh_type;      // 段类型
+    uint64_t sh_flags;     // 段标志
+    uint64_t sh_addr;      // 虚拟地址
+    uint64_t sh_offset;    // 文件偏移
+    uint64_t sh_size;      // 段大小
+    uint32_t sh_link;      // 链接信息
+    uint32_t sh_info;      // 附加信息
+    uint64_t sh_addralign; // 对齐
+    uint64_t sh_entsize;   // 项大小
+} Elf64_Shdr;
+
+// 段类型定义
+#define SHT_NULL          0   // 空段
+#define SHT_PROGBITS      1   // 程序信息
+#define SHT_SYMTAB        2   // 符号表
+#define SHT_STRTAB        3   // 字符串表
+#define SHT_RELA          4   // 重定位信息(带加数)
+#define SHT_HASH          5   // 符号哈希表
+#define SHT_DYNAMIC       6   // 动态链接信息
+#define SHT_NOTE          7   // 注释信息
+#define SHT_NOBITS        8   // 不占用空间
+#define SHT_REL           9   // 重定位信息
+#define SHT_SHLIB         10  // 保留
+#define SHT_DYNSYM        11  // 动态链接符号表
+```
+
+### 符号表
+
+```c
+// 符号表项
+typedef struct {
+    uint32_t st_name;     // 符号名
+    uint32_t st_value;    // 符号值
+    uint32_t st_size;     // 符号大小
+    uint8_t  st_info;     // 符号类型和绑定
+    uint8_t  st_other;    // 符号可见性
+    uint16_t st_shndx;    // 段索引
+} Elf32_Sym;
+
+// 64位符号表项
+typedef struct {
+    uint32_t st_name;     // 符号名
+    uint8_t  st_info;     // 符号类型和绑定
+    uint8_t  st_other;    // 符号可见性
+    uint16_t st_shndx;    // 段索引
+    uint64_t st_value;    // 符号值
+    uint64_t st_size;     // 符号大小
+} Elf64_Sym;
+
+// 符号绑定类型
+#define STB_LOCAL    0   // 局部符号
+#define STB_GLOBAL   1   // 全局符号
+#define STB_WEAK     2   // 弱符号
+
+// 符号类型
+#define STT_NOTYPE   0   // 未定义类型
+#define STT_OBJECT   1   // 数据对象
+#define STT_FUNC     2   // 函数对象
+#define STT_SECTION  3   // 段
+#define STT_FILE     4   // 文件名
+```
+
+## 程序加载与链接
+
+### 静态链接
+
+**静态链接的过程**
+1. **符号解析**：解析目标文件中的符号引用
+2. **地址重定位**：调整代码和数据中的地址
+3. **库合并**：将所需的库代码合并到可执行文件中
+
+```c
+// 静态链接示例
+// main.c
+#include <stdio.h>
+#include "math.h"
+
+int main() {
+    int result = add(5, 3);
+    printf("Result: %d\n", result);
+    return 0;
+}
+
+// math.c
+int add(int a, int b) {
+    return a + b;
+}
+
+// 编译和静态链接
+// gcc -c main.c -o main.o
+// gcc -c math.c -o math.o
+// gcc main.o math.o -o static_program
+```
+
+### 动态链接
+
+**动态链接的优势**
+- **内存共享**：多个程序可以共享同一个库
+- **更新方便**：库更新后，使用该库的程序不需要重新编译
+- **磁盘空间**：减少磁盘空间占用
+
+```c
+// 动态链接示例
+// main.c
+#include <stdio.h>
+#include <dlfcn.h>
+
+int main() {
+    void *handle;
+    int (*add_func)(int, int);
+    char *error;
+
+    // 打开动态库
+    handle = dlopen("./libmath.so", RTLD_LAZY);
+    if (!handle) {
+        fprintf(stderr, "%s\n", dlerror());
+        return 1;
+    }
+
+    // 获取函数指针
+    add_func = dlsym(handle, "add");
+    if ((error = dlerror()) != NULL) {
+        fprintf(stderr, "%s\n", error);
+        return 1;
+    }
+
+    // 调用函数
+    int result = add_func(5, 3);
+    printf("Result: %d\n", result);
+
+    // 关闭动态库
+    dlclose(handle);
+    return 0;
+}
+
+// 编译动态库
+// gcc -fPIC -shared math.c -o libmath.so
+// gcc main.c -ldl -o dynamic_program
+```
+
+### 程序加载过程
+
+```c
+// 简化的程序加载器
+typedef struct {
+    Elf64_Ehdr *ehdr;          // ELF头部
+    Elf64_Phdr *phdr;          // 程序头表
+    void *base_addr;           // 基地址
+    int fd;                    // 文件描述符
+    size_t file_size;          // 文件大小
+} elf_loader_t;
+
+// 初始化ELF加载器
+elf_loader_t *elf_loader_init(const char *filename) {
+    elf_loader_t *loader = malloc(sizeof(elf_loader_t));
+    if (!loader) return NULL;
+
+    // 打开文件
+    loader->fd = open(filename, O_RDONLY);
+    if (loader->fd == -1) {
+        free(loader);
+        return NULL;
+    }
+
+    // 获取文件大小
+    struct stat st;
+    if (fstat(loader->fd, &st) == -1) {
+        close(loader->fd);
+        free(loader);
+        return NULL;
+    }
+    loader->file_size = st.st_size;
+
+    // 映射文件到内存
+    loader->base_addr = mmap(NULL, loader->file_size,
+                             PROT_READ, MAP_PRIVATE,
+                             loader->fd, 0);
+    if (loader->base_addr == MAP_FAILED) {
+        close(loader->fd);
+        free(loader);
+        return NULL;
+    }
+
+    // 获取ELF头部
+    loader->ehdr = (Elf64_Ehdr *)loader->base_addr;
+
+    // 检查ELF魔数
+    if (memcmp(loader->ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+        munmap(loader->base_addr, loader->file_size);
+        close(loader->fd);
+        free(loader);
+        return NULL;
+    }
+
+    // 获取程序头表
+    loader->phdr = (Elf64_Phdr *)((char *)loader->base_addr + loader->ehdr->e_phoff);
+
+    return loader;
+}
+
+// 加载程序段
+int load_program_segments(elf_loader_t *loader) {
+    for (int i = 0; i < loader->ehdr->e_phnum; i++) {
+        Elf64_Phdr *phdr = &loader->phdr[i];
+
+        if (phdr->p_type == PT_LOAD) {
+            // 计算映射地址
+            void *vaddr = (void *)(phdr->p_vaddr & ~(phdr->p_align - 1));
+            size_t offset = phdr->p_offset & ~(phdr->p_align - 1);
+            size_t size = phdr->p_filesz + (phdr->p_vaddr & (phdr->p_align - 1));
+
+            // 映射内存
+            void *mapped = mmap(vaddr, size,
+                               PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_FIXED,
+                               loader->fd, offset);
+            if (mapped == MAP_FAILED) {
+                return -1;
+            }
+
+            // 设置内存保护
+            int prot = 0;
+            if (phdr->p_flags & PF_R) prot |= PROT_READ;
+            if (phdr->p_flags & PF_W) prot |= PROT_WRITE;
+            if (phdr->p_flags & PF_X) prot |= PROT_EXEC;
+            mprotect(vaddr, size, prot);
+
+            // 清零bss段
+            if (phdr->p_memsz > phdr->p_filesz) {
+                size_t bss_size = phdr->p_memsz - phdr->p_filesz;
+                void *bss_start = (void *)((char *)vaddr + size);
+                memset(bss_start, 0, bss_size);
+            }
+        }
+    }
+
+    return 0;
+}
+
+// 执行程序
+int execute_program(elf_loader_t *loader) {
+    // 创建新的进程
+    pid_t pid = fork();
+    if (pid == 0) {
+        // 子进程
+        // 设置程序入口点
+        void (*entry_point)(void) = (void (*)(void))loader->ehdr->e_entry;
+
+        // 执行程序
+        entry_point();
+        exit(0);
+    } else if (pid > 0) {
+        // 父进程
+        waitpid(pid, NULL, 0);
+    } else {
+        perror("fork");
+        return -1;
+    }
+
+    return 0;
+}
+
+// 清理资源
+void elf_loader_cleanup(elf_loader_t *loader) {
+    if (loader) {
+        if (loader->base_addr) {
+            munmap(loader->base_addr, loader->file_size);
+        }
+        if (loader->fd != -1) {
+            close(loader->fd);
+        }
+        free(loader);
+    }
+}
+```
+
+### 重定位处理
+
+```c
+// 重定位类型定义
+#define R_X86_64_NONE      0   // 无重定位
+#define R_X86_64_64        1   // 64位绝对地址
+#define R_X86_64_PC32      2   // 32位PC相对地址
+#define R_X86_64_GOT32     3   // 32位GOT地址
+#define R_X86_64_PLT32     4   // 32位PLT地址
+#define R_X86_64_COPY      5   // 符号复制
+#define R_X86_64_GLOB_DAT  6   // GOT项
+#define R_X86_64_JUMP_SLOT 7   // GOT跳转项
+#define R_X86_64_RELATIVE  8   // 基地址重定位
+#define R_X86_64_GOTPCREL 9   // 32位GOT PC相对
+
+// 重定位处理函数
+int apply_relocations(elf_loader_t *loader) {
+    Elf64_Shdr *shdr = (Elf64_Shdr *)((char *)loader->base_addr + loader->ehdr->e_shoff);
+    Elf64_Shdr *symtab = NULL;
+    Elf64_Shdr *strtab = NULL;
+
+    // 查找符号表和字符串表
+    for (int i = 0; i < loader->ehdr->e_shnum; i++) {
+        if (shdr[i].sh_type == SHT_SYMTAB) {
+            symtab = &shdr[i];
+            strtab = &shdr[shdr[i].sh_link];
+        }
+    }
+
+    if (!symtab || !strtab) {
+        return 0;  // 没有重定位信息
+    }
+
+    Elf64_Sym *symbols = (Elf64_Sym *)((char *)loader->base_addr + symtab->sh_offset);
+    char *strings = (char *)((char *)loader->base_addr + strtab->sh_offset);
+
+    // 处理所有段的重定位
+    for (int i = 0; i < loader->ehdr->e_shnum; i++) {
+        if (shdr[i].sh_type == SHT_REL || shdr[i].sh_type == SHT_RELA) {
+            Elf64_Rel *rels = (Elf64_Rel *)((char *)loader->base_addr + shdr[i].sh_offset);
+            int rel_count = shdr[i].sh_size / shdr[i].sh_entsize;
+
+            for (int j = 0; j < rel_count; j++) {
+                Elf64_Rel *rel = &rels[j];
+                int type = ELF64_R_TYPE(rel->r_info);
+                int sym = ELF64_R_SYM(rel->r_info);
+
+                if (sym >= symtab->sh_size / symtab->sh_entsize) {
+                    continue;
+                }
+
+                Elf64_Sym *symbol = &symbols[sym];
+                char *sym_name = strings + symbol->st_name;
+
+                // 获取重定位地址
+                uint64_t *reloc_addr = (uint64_t *)((char *)loader->base_addr +
+                                                    shdr[shdr[i].sh_info].sh_offset + rel->r_offset);
+
+                // 根据重定位类型处理
+                switch (type) {
+                    case R_X86_64_64:
+                        *reloc_addr = symbol->st_value;
+                        break;
+
+                    case R_X86_64_PC32:
+                        *reloc_addr = symbol->st_value - (uint64_t)reloc_addr;
+                        break;
+
+                    case R_X86_64_RELATIVE:
+                        *reloc_addr = (uint64_t)loader->base_addr + rel->r_addend;
+                        break;
+
+                    default:
+                        printf("Unsupported relocation type: %d\n", type);
+                        break;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+```
+
+## 动态链接机制
+
+### 动态链接器
+
+**动态链接器的作用**
+- **加载依赖库**：自动加载程序依赖的共享库
+- **符号解析**：解析动态符号引用
+- **重定位处理**：处理运行时重定位
+- **初始化调用**：调用库的初始化函数
+
+```c
+// 动态链接器结构
+typedef struct {
+    char *program_name;       // 程序名称
+    char **argv;             // 参数数组
+    char **envp;             // 环境变量数组
+    Elf64_Ehdr *ehdr;        // ELF头部
+    Elf64_Phdr *phdr;        // 程序头表
+    void *base_addr;         // 基地址
+    struct link_map *link_map; // 链接映射
+} dynamic_linker_t;
+
+// 链接映射结构
+struct link_map {
+    struct link_map *l_next;    // 下一个链接映射
+    struct link_map *l_prev;    // 上一个链接映射
+    char *l_name;               // 库名称
+    void *l_addr;               // 库地址
+    Elf64_Dyn *l_ld;            // 动态段
+    Elf64_Sym *l_info;          // 符号信息
+    char *l_libname;            // 库文件名
+};
+
+// 动态段结构
+typedef struct {
+    uint64_t d_tag;             // 标签
+    uint64_t d_val;             // 值
+} Elf64_Dyn;
+
+// 动态段标签
+#define DT_NULL         0   // 结束标记
+#define DT_NEEDED       1   // 需要的库
+#define DT_PLTRELSZ     2   // PLT重定位大小
+#define DT_PLTGOT       3   // PLT GOT地址
+#define DT_HASH         4   // 符号哈希表
+#define DT_STRTAB       5   // 字符串表
+#define DT_SYMTAB       6   // 符号表
+#define DT_RELA         7   // 重定位信息
+#define DT_RELASZ       8   // 重定位信息大小
+#define DT_RELAENT      9   // 重定位项大小
+#define DT_STRSZ        10  // 字符串表大小
+#define DT_SYMENT       11  // 符号表项大小
+#define DT_INIT         12  // 初始化函数
+#define DT_FINI         13  // 终止函数
+#define DT_SONAME       14  // 共享库名称
+#define DT_RPATH        15  // 库搜索路径
+#define DT_SYMBOLIC     16  // 符号绑定
+#define DT_REL          17  // 重定位信息
+#define DT_RELSZ        18  // 重定位信息大小
+#define DT_RELENT       19  // 重定位项大小
+#define DT_PLTREL       20  // PLT重定位类型
+#define DT_DEBUG        21  // 调试信息
+#define DT_TEXTREL      22  // 文本重定位
+#define DT_JMPREL       23  // PLT重定位地址
+```
+
+### 动态链接过程
+
+```c
+// 初始化动态链接器
+dynamic_linker_t *init_dynamic_linker(const char *program_name,
+                                     char **argv, char **envp) {
+    dynamic_linker_t *dl = malloc(sizeof(dynamic_linker_t));
+    if (!dl) return NULL;
+
+    dl->program_name = strdup(program_name);
+    dl->argv = argv;
+    dl->envp = envp;
+    dl->link_map = NULL;
+
+    // 加载主程序
+    int fd = open(program_name, O_RDONLY);
+    if (fd == -1) {
+        free(dl);
+        return NULL;
+    }
+
+    // 映射程序到内存
+    struct stat st;
+    fstat(fd, &st);
+    dl->base_addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    dl->ehdr = (Elf64_Ehdr *)dl->base_addr;
+    dl->phdr = (Elf64_Phdr *)((char *)dl->base_addr + dl->ehdr->e_phoff);
+
+    close(fd);
+
+    // 创建主程序的链接映射
+    struct link_map *main_map = malloc(sizeof(struct link_map));
+    main_map->l_name = strdup(program_name);
+    main_map->l_addr = dl->base_addr;
+    main_map->l_next = NULL;
+    main_map->l_prev = NULL;
+    dl->link_map = main_map;
+
+    return dl;
+}
+
+// 加载依赖库
+int load_dependencies(dynamic_linker_t *dl) {
+    struct link_map *map = dl->link_map;
+
+    while (map) {
+        // 查找动态段
+        Elf64_Dyn *dyn = NULL;
+        Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map->l_addr + dl->ehdr->e_phoff);
+
+        for (int i = 0; i < dl->ehdr->e_phnum; i++) {
+            if (phdr[i].p_type == PT_DYNAMIC) {
+                dyn = (Elf64_Dyn *)((char *)map->l_addr + phdr[i].p_offset);
+                break;
+            }
+        }
+
+        if (dyn) {
+            // 处理需要的库
+            for (int i = 0; dyn[i].d_tag != DT_NULL; i++) {
+                if (dyn[i].d_tag == DT_NEEDED) {
+                    char *strtab = NULL;
+                    char *needed = NULL;
+
+                    // 获取字符串表
+                    for (int j = 0; dyn[j].d_tag != DT_NULL; j++) {
+                        if (dyn[j].d_tag == DT_STRTAB) {
+                            strtab = (char *)((char *)map->l_addr + dyn[j].d_val);
+                            break;
+                        }
+                    }
+
+                    if (strtab) {
+                        needed = strtab + dyn[i].d_val;
+
+                        // 检查库是否已加载
+                        if (!find_loaded_library(dl, needed)) {
+                            // 加载库
+                            load_library(dl, needed);
+                        }
+                    }
+                }
+            }
+        }
+
+        map = map->l_next;
+    }
+
+    return 0;
+}
+
+// 加载单个库
+int load_library(dynamic_linker_t *dl, const char *libname) {
+    // 构建库路径
+    char libpath[PATH_MAX];
+    snprintf(libpath, sizeof(libpath), "%s/%s", "/usr/lib", libname);
+
+    // 打开库文件
+    int fd = open(libpath, O_RDONLY);
+    if (fd == -1) {
+        return -1;
+    }
+
+    // 映射库到内存
+    struct stat st;
+    fstat(fd, &st);
+    void *lib_addr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    // 创建链接映射
+    struct link_map *lib_map = malloc(sizeof(struct link_map));
+    lib_map->l_name = strdup(libname);
+    lib_map->l_addr = lib_addr;
+    lib_map->l_next = dl->link_map;
+    lib_map->l_prev = NULL;
+    dl->link_map->l_prev = lib_map;
+    dl->link_map = lib_map;
+
+    return 0;
+}
+
+// 查找已加载的库
+struct link_map *find_loaded_library(dynamic_linker_t *dl, const char *libname) {
+    struct link_map *map = dl->link_map;
+
+    while (map) {
+        if (strcmp(map->l_name, libname) == 0) {
+            return map;
+        }
+        map = map->l_next;
+    }
+
+    return NULL;
+}
+
+// 执行动态重定位
+int apply_dynamic_relocations(dynamic_linker_t *dl) {
+    struct link_map *map = dl->link_map;
+
+    while (map) {
+        // 查找动态段
+        Elf64_Dyn *dyn = NULL;
+        Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map->l_addr + dl->ehdr->e_phoff);
+
+        for (int i = 0; i < dl->ehdr->e_phnum; i++) {
+            if (phdr[i].p_type == PT_DYNAMIC) {
+                dyn = (Elf64_Dyn *)((char *)map->l_addr + phdr[i].p_offset);
+                break;
+            }
+        }
+
+        if (dyn) {
+            // 处理重定位
+            Elf64_Sym *symtab = NULL;
+            char *strtab = NULL;
+            Elf64_Rela *rela = NULL;
+            size_t relasz = 0;
+
+            // 获取符号表和字符串表
+            for (int i = 0; dyn[i].d_tag != DT_NULL; i++) {
+                switch (dyn[i].d_tag) {
+                    case DT_SYMTAB:
+                        symtab = (Elf64_Sym *)((char *)map->l_addr + dyn[i].d_val);
+                        break;
+                    case DT_STRTAB:
+                        strtab = (char *)((char *)map->l_addr + dyn[i].d_val);
+                        break;
+                    case DT_JMPREL:
+                        rela = (Elf64_Rela *)((char *)map->l_addr + dyn[i].d_val);
+                        break;
+                    case DT_PLTRELSZ:
+                        relasz = dyn[i].d_val;
+                        break;
+                }
+            }
+
+            // 应用重定位
+            if (symtab && strtab && rela) {
+                size_t relacount = relasz / sizeof(Elf64_Rela);
+                for (size_t i = 0; i < relacount; i++) {
+                    apply_relocation(dl, map, &rela[i], symtab, strtab);
+                }
+            }
+        }
+
+        map = map->l_next;
+    }
+
+    return 0;
+}
+
+// 应用单个重定位
+void apply_relocation(dynamic_linker_t *dl, struct link_map *map,
+                     Elf64_Rela *rela, Elf64_Sym *symtab, char *strtab) {
+    int type = ELF64_R_TYPE(rela->r_info);
+    int sym = ELF64_R_SYM(rela->r_info);
+
+    Elf64_Sym *symbol = &symtab[sym];
+    char *sym_name = strtab + symbol->st_name;
+
+    // 获取重定位地址
+    uint64_t *reloc_addr = (uint64_t *)((char *)map->l_addr + rela->r_offset);
+
+    // 查找符号值
+    uint64_t sym_value = 0;
+    if (sym_name) {
+        sym_value = resolve_symbol(dl, sym_name, map);
+    }
+
+    // 根据重定位类型处理
+    switch (type) {
+        case R_X86_64_JUMP_SLOT:
+            *reloc_addr = sym_value;
+            break;
+
+        case R_X86_64_GLOB_DAT:
+            *reloc_addr = sym_value;
+            break;
+
+        case R_X86_64_RELATIVE:
+            *reloc_addr = (uint64_t)map->l_addr + rela->r_addend;
+            break;
+
+        default:
+            printf("Unknown relocation type: %d\n", type);
+            break;
+    }
+}
+
+// 解析符号
+uint64_t resolve_symbol(dynamic_linker_t *dl, const char *name, struct link_map *caller) {
+    struct link_map *map = dl->link_map;
+
+    while (map) {
+        // 查找动态段
+        Elf64_Dyn *dyn = NULL;
+        Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map->l_addr + dl->ehdr->e_phoff);
+
+        for (int i = 0; i < dl->ehdr->e_phnum; i++) {
+            if (phdr[i].p_type == PT_DYNAMIC) {
+                dyn = (Elf64_Dyn *)((char *)map->l_addr + phdr[i].p_offset);
+                break;
+            }
+        }
+
+        if (dyn) {
+            // 获取符号表和字符串表
+            Elf64_Sym *symtab = NULL;
+            char *strtab = NULL;
+            size_t syment = 0;
+
+            for (int i = 0; dyn[i].d_tag != DT_NULL; i++) {
+                switch (dyn[i].d_tag) {
+                    case DT_SYMTAB:
+                        symtab = (Elf64_Sym *)((char *)map->l_addr + dyn[i].d_val);
+                        break;
+                    case DT_STRTAB:
+                        strtab = (char *)((char *)map->l_addr + dyn[i].d_val);
+                        break;
+                    case DT_SYMENT:
+                        syment = dyn[i].d_val;
+                        break;
+                }
+            }
+
+            // 查找符号
+            if (symtab && strtab && syment > 0) {
+                size_t symcount = 0;
+                for (int i = 0; dyn[i].d_tag != DT_NULL; i++) {
+                    if (dyn[i].d_tag == DT_HASH) {
+                        uint32_t *hash = (uint32_t *)((char *)map->l_addr + dyn[i].d_val);
+                        symcount = hash[1];
+                        break;
+                    }
+                }
+
+                for (size_t i = 0; i < symcount; i++) {
+                    Elf64_Sym *sym = (Elf64_Sym *)((char *)symtab + i * syment);
+                    char *sym_name = strtab + sym->st_name;
+
+                    if (strcmp(sym_name, name) == 0 && sym->st_value != 0) {
+                        return (uint64_t)map->l_addr + sym->st_value;
+                    }
+                }
+            }
+        }
+
+        map = map->l_next;
+    }
+
+    return 0;
+}
+```
+
+### PLT（过程链接表）
+
+```c
+// PLT结构示例
+.section .plt
+.globl printf@plt
+printf@plt:
+    jmpq *printf@GOTPCREL(%rip)
+    pushq $index
+    jmp .PLT0
+
+.PLT0:
+    pushq *(GOT+8)
+    jmp *(GOT+16)
+    nop
+    nop
+    nop
+    nop
+    nop
+
+// GOT（全局偏移表）
+.section .got.plt
+printf@GOTPCREL: .quad 0
+```
+
+## 实验分析
+
+### ELF文件分析工具
+
+**readelf命令**
+```bash
+# 查看ELF头部
+readelf -h program
+
+# 查看程序头表
+readelf -l program
+
+# 查看段头表
+readelf -S program
+
+# 查看符号表
+readelf -s program
+
+# 查看重定位信息
+readelf -r program
+
+# 查看动态段信息
+readelf -d program
+```
+
+**objdump命令**
+```bash
+# 反汇编代码
+objdump -d program
+
+# 查看所有头部信息
+objdump -x program
+
+# 查看动态信息
+objdump -p program
+```
+
+### 动态链接分析
+
+**ldd命令**
+```bash
+# 查看动态库依赖
+ldd program
+
+# 输出示例：
+#   linux-vdso.so.1 (0x00007ffc...)
+#   libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f8b...)
+#   /lib64/ld-linux-x86-64.so.2 (0x00007f8b...)
+```
+
+## 课后练习
+
+1. **思考题**：分析静态链接和动态链接的优缺点，讨论在AI应用中如何选择合适的链接方式。
+
+2. **编程题**：实现一个简单的ELF文件解析器，能够解析ELF头部、程序头表和段头表。
+
+3. **设计题**：设计一个适合深度学习框架的动态链接策略，考虑大规模模型加载的需求。
+
+## 下一讲预告
+
+第8讲：链接与加载 - 静态链接与动态链接、加载器的实现、共享库管理。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第7讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect7.md](https://jyywiki.cn/OS/2025/lect7.md)*

@@ -1,0 +1,801 @@
+---
+title: "Week 4 - 内存管理"
+description: "CS50第4周（2025版本）：学习指针、内存管理、动态内存分配和链表"
+---
+
+# Week 4 - 内存管理
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/4" title="CS50 2025 - Week 4" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **指针基础**：指针声明、指针运算、地址操作
+- **内存管理**：内存布局、栈与堆
+- **动态内存分配**：malloc、calloc、realloc、free
+- **链表**：节点结构、链表操作
+- **指针高级应用**：函数指针、多级指针
+- **内存泄漏**：检测和预防
+
+## 核心概念
+
+### 指针基础
+
+#### 什么是指针
+
+指针是存储内存地址的变量。通过指针，我们可以直接访问和修改内存中的数据。
+
+![指针概念图示](https://cs50.harvard.edu/x/notes/4/cs50Week4Slide079.png)
+
+指针就像箭头，指向内存中的特定位置。
+
+#### 指针的声明和使用
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int number = 42;
+    int *ptr = &number;  // 声明指针并初始化
+
+    printf("number的值: %d\n", number);
+    printf("number的地址: %p\n", &number);
+    printf("ptr的值: %p\n", ptr);
+    printf("ptr指向的值: %d\n", *ptr);
+
+    // 通过指针修改值
+    *ptr = 100;
+    printf("修改后number的值: %d\n", number);
+
+    return 0;
+}
+```
+
+#### 指针运算
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int numbers[] = {10, 20, 30, 40, 50};
+    int *ptr = numbers;
+
+    printf("数组第一个元素: %d\n", *ptr);
+    printf("数组第二个元素: %d\n", *(ptr + 1));
+    printf("数组第三个元素: %d\n", *(ptr + 2));
+
+    // 指针遍历数组
+    printf("遍历数组:\n");
+    for (int i = 0; i < 5; i++) {
+        printf("numbers[%d] = %d\n", i, *(ptr + i));
+    }
+
+    return 0;
+}
+```
+
+### 内存管理
+
+#### 内存布局
+
+![内存布局图示](https://cs50.harvard.edu/x/notes/4/cs50Week4Slide163.png)
+
+程序内存分为几个区域：
+- **代码段**：存储程序指令
+- **数据段**：全局变量和静态变量
+- **堆**：动态内存分配
+- **栈**：函数调用和局部变量
+
+#### 栈与堆的区别
+
+| 特性 | 栈 | 堆 |
+|------|-----|-----|
+| 分配方式 | 自动分配 | 手动分配 |
+| 分配大小 | 固定且较小 | 灵活可变 |
+| 生命周期 | 函数结束时自动释放 | 需要手动释放 |
+| 访问速度 | 快 | 较慢 |
+| 碎片化 | 无碎片 | 可能产生碎片 |
+
+### 动态内存分配
+
+#### malloc和free
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    // 分配内存
+    int *numbers = (int *)malloc(5 * sizeof(int));
+
+    if (numbers == NULL) {
+        printf("内存分配失败\n");
+        return 1;
+    }
+
+    // 使用分配的内存
+    for (int i = 0; i < 5; i++) {
+        numbers[i] = (i + 1) * 10;
+    }
+
+    printf("动态数组内容:\n");
+    for (int i = 0; i < 5; i++) {
+        printf("numbers[%d] = %d\n", i, numbers[i]);
+    }
+
+    // 释放内存
+    free(numbers);
+
+    return 0;
+}
+```
+
+#### calloc和realloc
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    // 使用calloc分配并初始化为0
+    int *numbers = (int *)calloc(5, sizeof(int));
+
+    if (numbers == NULL) {
+        printf("内存分配失败\n");
+        return 1;
+    }
+
+    printf("calloc初始化后的数组:\n");
+    for (int i = 0; i < 5; i++) {
+        printf("numbers[%d] = %d\n", i, numbers[i]);
+    }
+
+    // 使用realloc调整大小
+    int *larger_array = (int *)realloc(numbers, 10 * sizeof(int));
+
+    if (larger_array == NULL) {
+        printf("内存重新分配失败\n");
+        free(numbers);
+        return 1;
+    }
+
+    numbers = larger_array;
+
+    // 初始化新增的元素
+    for (int i = 5; i < 10; i++) {
+        numbers[i] = (i + 1) * 10;
+    }
+
+    printf("realloc扩展后的数组:\n");
+    for (int i = 0; i < 10; i++) {
+        printf("numbers[%d] = %d\n", i, numbers[i]);
+    }
+
+    free(numbers);
+
+    return 0;
+}
+```
+
+### 链表
+
+#### 链表的基本概念
+
+链表是一种动态数据结构，由节点组成，每个节点包含数据和指向下一个节点的指针。
+
+#### 链表节点的定义
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+// 定义链表节点
+typedef struct Node {
+    int data;
+    struct Node *next;
+} Node;
+```
+
+#### 链表的基本操作
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int data;
+    struct Node *next;
+} Node;
+
+// 创建新节点
+Node* create_node(int data) {
+    Node *new_node = (Node *)malloc(sizeof(Node));
+    if (new_node == NULL) {
+        printf("内存分配失败\n");
+        return NULL;
+    }
+    new_node->data = data;
+    new_node->next = NULL;
+    return new_node;
+}
+
+// 在链表头部插入节点
+Node* insert_at_head(Node *head, int data) {
+    Node *new_node = create_node(data);
+    new_node->next = head;
+    return new_node;
+}
+
+// 在链表尾部插入节点
+Node* insert_at_tail(Node *head, int data) {
+    Node *new_node = create_node(data);
+
+    if (head == NULL) {
+        return new_node;
+    }
+
+    Node *current = head;
+    while (current->next != NULL) {
+        current = current->next;
+    }
+    current->next = new_node;
+    return head;
+}
+
+// 打印链表
+void print_list(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        printf("%d -> ", current->data);
+        current = current->next;
+    }
+    printf("NULL\n");
+}
+
+// 释放链表内存
+void free_list(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        Node *temp = current;
+        current = current->next;
+        free(temp);
+    }
+}
+
+int main(void) {
+    Node *head = NULL;
+
+    // 在头部插入节点
+    head = insert_at_head(head, 10);
+    head = insert_at_head(head, 20);
+    head = insert_at_head(head, 30);
+
+    printf("头部插入后的链表:\n");
+    print_list(head);
+
+    // 在尾部插入节点
+    head = insert_at_tail(head, 40);
+    head = insert_at_tail(head, 50);
+
+    printf("尾部插入后的链表:\n");
+    print_list(head);
+
+    // 释放链表
+    free_list(head);
+
+    return 0;
+}
+```
+
+### 指针高级应用
+
+#### 函数指针
+
+```c
+#include <stdio.h>
+
+// 定义函数指针类型
+typedef int (*CompareFunc)(int, int);
+
+// 比较函数
+int compare_asc(int a, int b) {
+    return a - b;
+}
+
+int compare_desc(int a, int b) {
+    return b - a;
+}
+
+// 使用函数指针的排序函数
+void bubble_sort_func(int arr[], int size, CompareFunc compare) {
+    for (int i = 0; i < size - 1; i++) {
+        for (int j = 0; j < size - i - 1; j++) {
+            if (compare(arr[j], arr[j + 1]) > 0) {
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
+
+int main(void) {
+    int numbers[] = {5, 2, 8, 1, 9};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("原始数组: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    // 升序排序
+    bubble_sort_func(numbers, size, compare_asc);
+    printf("升序排序: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    // 降序排序
+    bubble_sort_func(numbers, size, compare_desc);
+    printf("降序排序: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+#### 多级指针
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void) {
+    int number = 42;
+    int *ptr = &number;
+    int **ptr_to_ptr = &ptr;
+    int ***ptr_to_ptr_to_ptr = &ptr_to_ptr;
+
+    printf("number的值: %d\n", number);
+    printf("number的地址: %p\n", &number);
+    printf("ptr的值: %p\n", ptr);
+    printf("ptr的地址: %p\n", &ptr);
+    printf("ptr_to_ptr的值: %p\n", ptr_to_ptr);
+    printf("通过ptr_to_ptr访问number: %d\n", **ptr_to_ptr);
+    printf("通过ptr_to_ptr_to_ptr访问number: %d\n", ***ptr_to_ptr_to_ptr);
+
+    return 0;
+}
+```
+
+### 内存泄漏的检测和预防
+
+#### 常见的内存泄漏场景
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+// 错误示例1：忘记释放内存
+void memory_leak_example1() {
+    int *ptr = (int *)malloc(sizeof(int));
+    *ptr = 42;
+    // 忘记调用 free(ptr);
+}
+
+// 错误示例2：重新赋值指针导致内存泄漏
+void memory_leak_example2() {
+    int *ptr = (int *)malloc(sizeof(int));
+    *ptr = 42;
+
+    ptr = (int *)malloc(sizeof(int));  // 丢失了之前分配的内存
+    *ptr = 100;
+    free(ptr);  // 只释放了第二次分配的内存
+}
+
+// 错误示例3：循环中的内存泄漏
+void memory_leak_example3() {
+    for (int i = 0; i < 10; i++) {
+        int *ptr = (int *)malloc(sizeof(int));
+        *ptr = i;
+        // 每次循环都分配内存但没有释放
+    }
+}
+
+// 正确的内存管理
+void correct_memory_management() {
+    int *ptr1 = (int *)malloc(sizeof(int));
+    if (ptr1 != NULL) {
+        *ptr1 = 42;
+        free(ptr1);
+    }
+
+    int *ptr2 = (int *)malloc(sizeof(int));
+    if (ptr2 != NULL) {
+        *ptr2 = 100;
+        free(ptr2);
+    }
+
+    for (int i = 0; i < 10; i++) {
+        int *ptr = (int *)malloc(sizeof(int));
+        if (ptr != NULL) {
+            *ptr = i;
+            free(ptr);
+        }
+    }
+}
+
+int main(void) {
+    printf("演示内存管理示例\n");
+    correct_memory_management();
+    return 0;
+}
+```
+
+## 练习题与答案
+
+### 1. 指针基础练习
+
+**问题：** 编写一个函数，使用指针交换两个整数的值。
+
+**答案：**
+```c
+#include <stdio.h>
+
+// 使用指针交换两个变量的值
+void swap(int *a, int *b) {
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+int main(void) {
+    int x = 10, y = 20;
+
+    printf("交换前: x = %d, y = %d\n", x, y);
+    swap(&x, &y);
+    printf("交换后: x = %d, y = %d\n", x, y);
+
+    return 0;
+}
+```
+
+### 2. 动态数组实现
+
+**问题：** 实现一个动态数组类，支持添加元素、删除元素、调整大小等功能。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct {
+    int *data;
+    int size;
+    int capacity;
+} DynamicArray;
+
+DynamicArray* create_array() {
+    DynamicArray *arr = (DynamicArray *)malloc(sizeof(DynamicArray));
+    if (arr == NULL) return NULL;
+
+    arr->capacity = 4;
+    arr->size = 0;
+    arr->data = (int *)malloc(arr->capacity * sizeof(int));
+
+    if (arr->data == NULL) {
+        free(arr);
+        return NULL;
+    }
+
+    return arr;
+}
+
+void resize_array(DynamicArray *arr) {
+    int new_capacity = arr->capacity * 2;
+    int *new_data = (int *)realloc(arr->data, new_capacity * sizeof(int));
+
+    if (new_data == NULL) {
+        printf("内存重新分配失败\n");
+        return;
+    }
+
+    arr->data = new_data;
+    arr->capacity = new_capacity;
+}
+
+void push_back(DynamicArray *arr, int value) {
+    if (arr->size >= arr->capacity) {
+        resize_array(arr);
+    }
+    arr->data[arr->size++] = value;
+}
+
+void remove_at(DynamicArray *arr, int index) {
+    if (index < 0 || index >= arr->size) {
+        printf("索引超出范围\n");
+        return;
+    }
+
+    for (int i = index; i < arr->size - 1; i++) {
+        arr->data[i] = arr->data[i + 1];
+    }
+    arr->size--;
+}
+
+void print_array(DynamicArray *arr) {
+    printf("数组内容: [");
+    for (int i = 0; i < arr->size; i++) {
+        printf("%d", arr->data[i]);
+        if (i < arr->size - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+    printf("大小: %d, 容量: %d\n", arr->size, arr->capacity);
+}
+
+void free_array(DynamicArray *arr) {
+    free(arr->data);
+    free(arr);
+}
+
+int main(void) {
+    DynamicArray *arr = create_array();
+
+    push_back(arr, 10);
+    push_back(arr, 20);
+    push_back(arr, 30);
+    push_back(arr, 40);
+    push_back(arr, 50);
+
+    print_array(arr);
+
+    remove_at(arr, 2);
+    print_array(arr);
+
+    free_array(arr);
+
+    return 0;
+}
+```
+
+### 3. 链表操作
+
+**问题：** 实现链表的查找、删除、反转等操作。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int data;
+    struct Node *next;
+} Node;
+
+Node* create_node(int data) {
+    Node *new_node = (Node *)malloc(sizeof(Node));
+    if (new_node == NULL) return NULL;
+    new_node->data = data;
+    new_node->next = NULL;
+    return new_node;
+}
+
+// 查找节点
+Node* find_node(Node *head, int data) {
+    Node *current = head;
+    while (current != NULL) {
+        if (current->data == data) {
+            return current;
+        }
+        current = current->next;
+    }
+    return NULL;
+}
+
+// 删除指定值的节点
+Node* delete_node(Node *head, int data) {
+    if (head == NULL) return NULL;
+
+    if (head->data == data) {
+        Node *new_head = head->next;
+        free(head);
+        return new_head;
+    }
+
+    Node *current = head;
+    while (current->next != NULL && current->next->data != data) {
+        current = current->next;
+    }
+
+    if (current->next != NULL) {
+        Node *temp = current->next;
+        current->next = temp->next;
+        free(temp);
+    }
+
+    return head;
+}
+
+// 反转链表
+Node* reverse_list(Node *head) {
+    Node *prev = NULL;
+    Node *current = head;
+    Node *next = NULL;
+
+    while (current != NULL) {
+        next = current->next;
+        current->next = prev;
+        prev = current;
+        current = next;
+    }
+
+    return prev;
+}
+
+void print_list(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        printf("%d -> ", current->data);
+        current = current->next;
+    }
+    printf("NULL\n");
+}
+
+void free_list(Node *head) {
+    Node *current = head;
+    while (current != NULL) {
+        Node *temp = current;
+        current = current->next;
+        free(temp);
+    }
+}
+
+int main(void) {
+    Node *head = NULL;
+
+    // 创建链表
+    head = create_node(10);
+    head->next = create_node(20);
+    head->next->next = create_node(30);
+    head->next->next->next = create_node(40);
+
+    printf("原始链表:\n");
+    print_list(head);
+
+    // 查找节点
+    Node *found = find_node(head, 30);
+    if (found != NULL) {
+        printf("找到节点: %d\n", found->data);
+    }
+
+    // 删除节点
+    head = delete_node(head, 20);
+    printf("删除20后的链表:\n");
+    print_list(head);
+
+    // 反转链表
+    head = reverse_list(head);
+    printf("反转后的链表:\n");
+    print_list(head);
+
+    free_list(head);
+
+    return 0;
+}
+```
+
+### 4. 内存管理问题
+
+**问题：** 编写一个程序，检测和修复内存泄漏问题。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+// 全局变量跟踪内存分配情况
+static int malloc_count = 0;
+static int free_count = 0;
+
+// 自定义malloc函数
+void* tracked_malloc(size_t size) {
+    void *ptr = malloc(size);
+    if (ptr != NULL) {
+        malloc_count++;
+        printf("分配内存: %p (分配次数: %d)\n", ptr, malloc_count);
+    }
+    return ptr;
+}
+
+// 自定义free函数
+void tracked_free(void *ptr) {
+    if (ptr != NULL) {
+        free_count++;
+        printf("释放内存: %p (释放次数: %d)\n", ptr, free_count);
+        free(ptr);
+    }
+}
+
+// 打印内存使用情况
+void print_memory_status() {
+    printf("内存分配次数: %d\n", malloc_count);
+    printf("内存释放次数: %d\n", free_count);
+    printf("内存泄漏次数: %d\n", malloc_count - free_count);
+}
+
+int main(void) {
+    printf("=== 内存泄漏检测演示 ===\n");
+
+    // 正确的内存管理
+    int *ptr1 = (int *)tracked_malloc(sizeof(int));
+    *ptr1 = 42;
+    tracked_free(ptr1);
+
+    // 故意制造内存泄漏
+    int *ptr2 = (int *)tracked_malloc(sizeof(int));
+    *ptr2 = 100;
+    // 忘记释放 ptr2
+
+    // 数组分配和部分释放
+    int *array = (int *)tracked_malloc(5 * sizeof(int));
+    tracked_free(array);
+
+    printf("\n=== 内存使用状态 ===\n");
+    print_memory_status();
+
+    if (malloc_count != free_count) {
+        printf("\n警告: 检测到内存泄漏!\n");
+        printf("请检查未释放的内存块。\n");
+    }
+
+    return 0;
+}
+```
+
+## 学习建议
+
+1. **理解指针概念**：通过画图理解指针和内存地址的关系
+2. **练习内存管理**：熟练使用malloc、calloc、realloc、free
+3. **掌握链表操作**：实现链表的各种基本操作
+4. **注意内存安全**：避免野指针、内存泄漏等问题
+5. **使用调试工具**：学习使用Valgrind等工具检测内存问题
+
+## 扩展资源
+
+- **官方资源**：
+  - [CS50 Week 4 Lecture](https://cs50.harvard.edu/x/2025/weeks/4/)
+  - [CS50 Week 4 Notes](https://cs50.harvard.edu/x/2025/notes/4/)
+
+- **调试工具**：
+  - [Valgrind 内存检测工具](https://valgrind.org/)
+  - [GDB 调试器](https://www.gnu.org/software/gdb/)
+
+- **深入阅读**：
+  - [C指针详解](https://www.geeksforgeeks.org/pointers-in-c-cpp-examples/)
+  - [内存管理最佳实践](https://stackoverflow.com/questions/4099655/c-memory-management)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 5: 数据结构" icon="arrow-right" href="./week5">
+    学习栈、队列、哈希表等数据结构
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 4的学习！现在你已经掌握了指针和内存管理的核心概念，这是C语言编程的重要基础，也是理解更复杂数据结构的关键。*

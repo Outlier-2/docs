@@ -1,0 +1,573 @@
+---
+title: "Week 3 - 算法"
+description: "CS50第3周（2025版本）：学习搜索算法、排序算法、递归和算法效率分析"
+---
+
+# Week 3 - 算法
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/3" title="CS50 2025 - Week 3" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **搜索算法**：线性搜索、二分查找
+- **排序算法**：选择排序、冒泡排序、归并排序
+- **递归**：递归函数、基线条件、递归调用
+- **算法效率**：大O表示法、时间复杂度分析
+- **数据结构**：数组、链表基础
+- **问题解决**：算法设计思维
+
+## 核心概念
+
+### 算法效率分析
+
+算法的效率通过时间复杂度来衡量，大O表示法描述了算法运行时间与输入规模的关系。
+
+![算法复杂度对比图](https://cs50.harvard.edu/x/notes/3/cs50Week3Slide010.png)
+
+不同算法的效率差异巨大，选择合适的算法对程序性能至关重要。
+
+### 搜索算法
+
+#### 线性搜索 (Linear Search - O(n))
+
+```c
+#include <stdio.h>
+
+int linear_search(int arr[], int size, int target) {
+    for (int i = 0; i < size; i++) {
+        if (arr[i] == target) {
+            return i;  // 找到目标，返回索引
+        }
+    }
+    return -1;  // 未找到
+}
+
+int main(void) {
+    int numbers[] = {5, 2, 9, 1, 7, 6, 3};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+    int target = 7;
+
+    int result = linear_search(numbers, size, target);
+
+    if (result != -1) {
+        printf("数字 %d 在数组中的索引是: %d\n", target, result);
+    } else {
+        printf("数字 %d 不在数组中\n", target);
+    }
+
+    return 0;
+}
+```
+
+#### 二分查找 (Binary Search - O(log n))
+
+**前提条件**：数组必须是有序的
+
+```c
+#include <stdio.h>
+
+int binary_search(int arr[], int size, int target) {
+    int left = 0;
+    int right = size - 1;
+
+    while (left <= right) {
+        int middle = left + (right - left) / 2;
+
+        if (arr[middle] == target) {
+            return middle;  // 找到目标
+        } else if (arr[middle] < target) {
+            left = middle + 1;  // 搜索右半部分
+        } else {
+            right = middle - 1;  // 搜索左半部分
+        }
+    }
+
+    return -1;  // 未找到
+}
+
+int main(void) {
+    int sorted_numbers[] = {1, 2, 3, 5, 6, 7, 9};
+    int size = sizeof(sorted_numbers) / sizeof(sorted_numbers[0]);
+    int target = 6;
+
+    int result = binary_search(sorted_numbers, size, target);
+
+    if (result != -1) {
+        printf("数字 %d 在排序数组中的索引是: %d\n", target, result);
+    } else {
+        printf("数字 %d 不在数组中\n", target);
+    }
+
+    return 0;
+}
+```
+
+![大O表示法图示](https://cs50.harvard.edu/x/notes/3/cs50Week3Slide042.png)
+
+大O表示法帮助我们理解算法效率，O(log n)的算法比O(n)的算法效率高得多。
+
+### 排序算法
+
+#### 选择排序 (Selection Sort - O(n²))
+
+```c
+#include <stdio.h>
+
+void selection_sort(int arr[], int size) {
+    for (int i = 0; i < size - 1; i++) {
+        int min_index = i;
+
+        // 找到未排序部分的最小值
+        for (int j = i + 1; j < size; j++) {
+            if (arr[j] < arr[min_index]) {
+                min_index = j;
+            }
+        }
+
+        // 交换最小值到当前位置
+        if (min_index != i) {
+            int temp = arr[i];
+            arr[i] = arr[min_index];
+            arr[min_index] = temp;
+        }
+    }
+}
+
+int main(void) {
+    int numbers[] = {64, 25, 12, 22, 11};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    selection_sort(numbers, size);
+
+    printf("选择排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+#### 冒泡排序 (Bubble Sort - O(n²))
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+void bubble_sort(int arr[], int size) {
+    for (int i = 0; i < size - 1; i++) {
+        bool swapped = false;
+
+        for (int j = 0; j < size - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                // 交换相邻元素
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+                swapped = true;
+            }
+        }
+
+        // 如果没有交换，说明已经排序完成
+        if (!swapped) {
+            break;
+        }
+    }
+}
+
+int main(void) {
+    int numbers[] = {64, 34, 25, 12, 22, 11, 90};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    bubble_sort(numbers, size);
+
+    printf("冒泡排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 递归
+
+#### 递归的基本概念
+
+递归是一种函数调用自身的编程技巧，必须包含：
+1. **基线条件**：停止递归的条件
+2. **递归调用**：函数调用自身
+
+#### 递归示例
+
+```c
+#include <stdio.h>
+
+// 计算阶乘的递归函数
+int factorial(int n) {
+    // 基线条件
+    if (n <= 1) {
+        return 1;
+    }
+
+    // 递归调用
+    return n * factorial(n - 1);
+}
+
+// 斐波那契数列
+int fibonacci(int n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// 求数组的和
+int array_sum(int arr[], int size) {
+    if (size == 0) {
+        return 0;
+    }
+    return arr[0] + array_sum(arr + 1, size - 1);
+}
+
+int main(void) {
+    printf("5的阶乘: %d\n", factorial(5));
+    printf("第10个斐波那契数: %d\n", fibonacci(10));
+
+    int numbers[] = {1, 2, 3, 4, 5};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+    printf("数组元素和: %d\n", array_sum(numbers, size));
+
+    return 0;
+}
+```
+
+#### 递归实现二分查找
+
+```c
+#include <stdio.h>
+
+int binary_search_recursive(int arr[], int left, int right, int target) {
+    if (left > right) {
+        return -1;  // 基线条件：未找到
+    }
+
+    int middle = left + (right - left) / 2;
+
+    if (arr[middle] == target) {
+        return middle;  // 找到目标
+    } else if (arr[middle] < target) {
+        return binary_search_recursive(arr, middle + 1, right, target);
+    } else {
+        return binary_search_recursive(arr, left, middle - 1, target);
+    }
+}
+
+int main(void) {
+    int sorted_numbers[] = {1, 3, 5, 7, 9, 11, 13, 15};
+    int size = sizeof(sorted_numbers) / sizeof(sorted_numbers[0]);
+    int target = 7;
+
+    int result = binary_search_recursive(sorted_numbers, 0, size - 1, target);
+
+    if (result != -1) {
+        printf("找到数字 %d 在索引 %d\n", target, result);
+    } else {
+        printf("未找到数字 %d\n", target);
+    }
+
+    return 0;
+}
+```
+
+## 高级算法
+
+### 归并排序 (Merge Sort - O(n log n))
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+// 合并两个已排序的数组
+void merge(int arr[], int left, int middle, int right) {
+    int n1 = middle - left + 1;
+    int n2 = right - middle;
+
+    // 创建临时数组
+    int *L = (int *)malloc(n1 * sizeof(int));
+    int *R = (int *)malloc(n2 * sizeof(int));
+
+    // 复制数据到临时数组
+    for (int i = 0; i < n1; i++) {
+        L[i] = arr[left + i];
+    }
+    for (int j = 0; j < n2; j++) {
+        R[j] = arr[middle + 1 + j];
+    }
+
+    // 合并临时数组
+    int i = 0, j = 0, k = left;
+    while (i < n1 && j < n2) {
+        if (L[i] <= R[j]) {
+            arr[k] = L[i];
+            i++;
+        } else {
+            arr[k] = R[j];
+            j++;
+        }
+        k++;
+    }
+
+    // 复制剩余元素
+    while (i < n1) {
+        arr[k] = L[i];
+        i++;
+        k++;
+    }
+    while (j < n2) {
+        arr[k] = R[j];
+        j++;
+        k++;
+    }
+
+    free(L);
+    free(R);
+}
+
+// 归并排序主函数
+void merge_sort(int arr[], int left, int right) {
+    if (left < right) {
+        int middle = left + (right - left) / 2;
+
+        // 递归排序左右两部分
+        merge_sort(arr, left, middle);
+        merge_sort(arr, middle + 1, right);
+
+        // 合并已排序的部分
+        merge(arr, left, middle, right);
+    }
+}
+
+int main(void) {
+    int numbers[] = {12, 11, 13, 5, 6, 7};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    merge_sort(numbers, 0, size - 1);
+
+    printf("归并排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+## 算法性能比较
+
+### 时间复杂度总结
+
+| 算法 | 最好情况 | 平均情况 | 最坏情况 | 空间复杂度 |
+|------|----------|----------|----------|------------|
+| 线性搜索 | O(1) | O(n) | O(n) | O(1) |
+| 二分查找 | O(1) | O(log n) | O(log n) | O(1) |
+| 选择排序 | O(n²) | O(n²) | O(n²) | O(1) |
+| 冒泡排序 | O(n) | O(n²) | O(n²) | O(1) |
+| 归并排序 | O(n log n) | O(n log n) | O(n log n) | O(n) |
+
+## 练习题与答案
+
+### 1. 算法选择题
+
+**问题：** 在一个包含100万个元素的有序数组中查找一个元素，应该使用什么算法？为什么？
+
+**答案：** 应该使用二分查找。因为二分查找的时间复杂度是O(log n)，对于100万个元素最多只需要约20次比较就能找到目标。而线性搜索需要O(n)的时间，最坏情况下需要100万次比较。
+
+### 2. 排序算法实现
+
+**问题：** 实现插入排序算法。
+
+**答案：**
+```c
+#include <stdio.h>
+
+void insertion_sort(int arr[], int size) {
+    for (int i = 1; i < size; i++) {
+        int key = arr[i];
+        int j = i - 1;
+
+        // 将大于key的元素向后移动
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+}
+
+int main(void) {
+    int numbers[] = {12, 11, 13, 5, 6};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    insertion_sort(numbers, size);
+
+    printf("插入排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 3. 递归问题
+
+**问题：** 使用递归实现汉诺塔问题的解决方案。
+
+**答案：**
+```c
+#include <stdio.h>
+
+void hanoi(int n, char from_rod, char to_rod, char aux_rod) {
+    if (n == 1) {
+        printf("将圆盘 1 从 %c 移动到 %c\n", from_rod, to_rod);
+        return;
+    }
+
+    hanoi(n - 1, from_rod, aux_rod, to_rod);
+    printf("将圆盘 %d 从 %c 移动到 %c\n", n, from_rod, to_rod);
+    hanoi(n - 1, aux_rod, to_rod, from_rod);
+}
+
+int main(void) {
+    int n = 3;  // 圆盘数量
+
+    printf("汉诺塔解决方案 (%d 个圆盘):\n", n);
+    hanoi(n, 'A', 'C', 'B');
+
+    return 0;
+}
+```
+
+### 4. 算法优化
+
+**问题：** 如何优化冒泡排序，使其在最佳情况下（数组已经有序）时间复杂度为O(n)？
+
+**答案：** 在冒泡排序中添加一个标志位，如果在一次遍历中没有发生交换，说明数组已经有序，可以提前结束排序。
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+void optimized_bubble_sort(int arr[], int size) {
+    for (int i = 0; i < size - 1; i++) {
+        bool swapped = false;
+
+        for (int j = 0; j < size - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+                swapped = true;
+            }
+        }
+
+        // 如果没有交换，数组已经有序
+        if (!swapped) {
+            break;
+        }
+    }
+}
+
+int main(void) {
+    // 测试已排序的数组
+    int numbers[] = {1, 2, 3, 4, 5};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    optimized_bubble_sort(numbers, size);
+
+    printf("优化冒泡排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+## 学习建议
+
+1. **理解时间复杂度**：掌握大O表示法，能够分析算法效率
+2. **手写算法**：反复练习各种排序和搜索算法的手写实现
+3. **递归思维**：培养递归思考能力，理解基线条件的重要性
+4. **算法比较**：了解不同算法的适用场景和优缺点
+5. **实践应用**：在实际问题中应用所学算法
+
+## 扩展资源
+
+- **官方资源**：
+  - [CS50 Week 3 Lecture](https://cs50.harvard.edu/x/2025/weeks/3/)
+  - [CS50 Week 3 Notes](https://cs50.harvard.edu/x/2025/notes/3/)
+
+- **算法可视化**：
+  - [VisuAlgo](https://visualgo.net/en)
+  - [Algorithm Visualizer](https://algorithm-visualizer.org/)
+
+- **深入阅读**：
+  - [算法导论](https://mitpress.mit.edu/books/introduction-algorithms-third-edition)
+  - [编程珠玑](https://www.cs.bell-labs.com/cm/cs/pearls/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 4: 内存管理" icon="arrow-right" href="./week4">
+    学习指针、内存分配和数据结构
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 3的学习！现在你已经掌握了核心算法知识，包括搜索、排序和递归，这些是计算机科学的基础，也是面试中常考的内容。*

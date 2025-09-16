@@ -1,0 +1,1125 @@
+---
+title: "负载均衡与服务发现"
+description: "深入理解负载均衡策略、服务发现机制以及分布式系统的服务治理"
+---
+
+# 第5周：负载均衡与服务发现
+
+## 本周学习目标
+
+- 理解负载均衡的基本原理和核心算法
+- 掌握服务发现的机制和实现方式
+- 学习服务网格(Service Mesh)的概念
+- 实践分布式系统的服务治理
+
+## 负载均衡基础
+
+### 什么是负载均衡？
+
+负载均衡(Load Balancing)是将网络流量分配到多个服务器或服务实例的技术，旨在：
+- 提高系统可用性和可靠性
+- 优化资源使用效率
+- 增强系统扩展性
+- 减少响应时间
+
+### 负载均衡器分类
+
+```python
+# 负载均衡器分类枚举
+from enum import Enum
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+
+class LoadBalancerType(Enum):
+    """负载均衡器类型"""
+    L4 = "layer4"           # 四层负载均衡(传输层)
+    L7 = "layer7"           # 七层负载均衡(应用层)
+    DNS = "dns"             # DNS负载均衡
+    CLIENT_SIDE = "client"  # 客户端负载均衡
+
+class LoadBalancerAlgorithm(Enum):
+    """负载均衡算法"""
+    ROUND_ROBIN = "round_robin"
+    LEAST_CONNECTIONS = "least_connections"
+    LEAST_RESPONSE_TIME = "least_response_time"
+    WEIGHTED_ROUND_ROBIN = "weighted_round_robin"
+    IP_HASH = "ip_hash"
+    CONSISTENT_HASH = "consistent_hash"
+
+@dataclass
+class ServerInstance:
+    """服务实例"""
+    id: str
+    host: str
+    port: int
+    weight: int = 1
+    current_connections: int = 0
+    health_status: bool = True
+    response_time: float = 0.0
+    metadata: Dict = None
+
+class LoadBalancer:
+    """负载均衡器基类"""
+
+    def __init__(self, algorithm: LoadBalancerAlgorithm):
+        self.algorithm = algorithm
+        self.servers: List[ServerInstance] = []
+        self.index = 0
+
+    def add_server(self, server: ServerInstance):
+        """添加服务器"""
+        self.servers.append(server)
+
+    def remove_server(self, server_id: str):
+        """移除服务器"""
+        self.servers = [s for s in self.servers if s.id != server_id]
+
+    def get_server(self, client_ip: str = None) -> Optional[ServerInstance]:
+        """根据算法选择服务器"""
+        healthy_servers = [s for s in self.servers if s.health_status]
+        if not healthy_servers:
+            return None
+
+        if self.algorithm == LoadBalancerAlgorithm.ROUND_ROBIN:
+            return self._round_robin(healthy_servers)
+        elif self.algorithm == LoadBalancerAlgorithm.LEAST_CONNECTIONS:
+            return self._least_connections(healthy_servers)
+        elif self.algorithm == LoadBalancerAlgorithm.LEAST_RESPONSE_TIME:
+            return self._least_response_time(healthy_servers)
+        elif self.algorithm == LoadBalancerAlgorithm.WEIGHTED_ROUND_ROBIN:
+            return self._weighted_round_robin(healthy_servers)
+        elif self.algorithm == LoadBalancerAlgorithm.IP_HASH:
+            return self._ip_hash(healthy_servers, client_ip)
+        elif self.algorithm == LoadBalancerAlgorithm.CONSISTENT_HASH:
+            return self._consistent_hash(healthy_servers, client_ip)
+
+    def _round_robin(self, servers: List[ServerInstance]) -> ServerInstance:
+        """轮询算法"""
+        server = servers[self.index % len(servers)]
+        self.index += 1
+        return server
+
+    def _least_connections(self, servers: List[ServerInstance]) -> ServerInstance:
+        """最少连接数算法"""
+        return min(servers, key=lambda s: s.current_connections)
+
+    def _least_response_time(self, servers: List[ServerInstance]) -> ServerInstance:
+        """最少响应时间算法"""
+        return min(servers, key=lambda s: s.response_time)
+
+    def _weighted_round_robin(self, servers: List[ServerInstance]) -> ServerInstance:
+        """加权轮询算法"""
+        total_weight = sum(s.weight for s in servers)
+        if total_weight == 0:
+            return servers[0]
+
+        current_weight = self.index % total_weight
+        cumulative_weight = 0
+
+        for server in servers:
+            cumulative_weight += server.weight
+            if current_weight < cumulative_weight:
+                self.index += 1
+                return server
+
+        return servers[-1]
+
+    def _ip_hash(self, servers: List[ServerInstance], client_ip: str) -> ServerInstance:
+        """IP哈希算法"""
+        if not client_ip:
+            return servers[0]
+
+        hash_value = hash(client_ip) % len(servers)
+        return servers[hash_value]
+
+    def _consistent_hash(self, servers: List[ServerInstance], client_ip: str) -> ServerInstance:
+        """一致性哈希算法"""
+        if not client_ip:
+            return servers[0]
+
+        # 简化版一致性哈希
+        hash_values = []
+        for server in servers:
+            # 为每个服务器创建虚拟节点
+            for i in range(server.weight):
+                virtual_node = f"{server.id}:{i}"
+                hash_value = hash(virtual_node + client_ip)
+                hash_values.append((hash_value, server))
+
+        hash_values.sort(key=lambda x: x[0])
+        if hash_values:
+            return hash_values[0][1]
+        return servers[0]
+```
+
+## 四层负载均衡 vs 七层负载均衡
+
+### 四层负载均衡(L4)
+
+```python
+# 四层负载均衡模拟
+class Layer4LoadBalancer(LoadBalancer):
+    """四层负载均衡器(传输层)"""
+
+    def __init__(self, algorithm: LoadBalancerAlgorithm, listen_port: int):
+        super().__init__(algorithm)
+        self.listen_port = listen_port
+
+    def handle_connection(self, client_socket, client_ip: str):
+        """处理客户端连接"""
+        server = self.get_server(client_ip)
+        if not server:
+            client_socket.close()
+            return
+
+        # 记录连接数
+        server.current_connections += 1
+
+        try:
+            # 转发连接到目标服务器
+            # 这里简化实现，实际需要处理TCP连接转发
+            print(f"Forwarding connection from {client_ip} to {server.host}:{server.port}")
+
+        finally:
+            server.current_connections -= 1
+
+# 四层负载均衡特点
+L4_CHARACTERISTICS = {
+    "工作层级": "传输层(TCP/UDP)",
+    "基于信息": ["IP地址", "端口号"],
+    "性能": "高(不解析应用层协议)",
+    "功能": "简单的连接分发",
+    "适用场景": ["高并发", "简单路由"]
+}
+```
+
+### 七层负载均衡(L7)
+
+```python
+# 七层负载均衡模拟
+class Layer7LoadBalancer(LoadBalancer):
+    """七层负载均衡器(应用层)"""
+
+    def __init__(self, algorithm: LoadBalancerAlgorithm):
+        super().__init__(algorithm)
+        self.routing_rules = []
+
+    def add_routing_rule(self, rule: Dict):
+        """添加路由规则"""
+        self.routing_rules.append(rule)
+
+    def handle_request(self, request: Dict) -> Dict:
+        """处理HTTP请求"""
+        # 解析请求信息
+        path = request.get('path', '/')
+        method = request.get('method', 'GET')
+        headers = request.get('headers', {})
+
+        # 应用路由规则
+        server = self._apply_routing_rules(request)
+        if not server:
+            server = self.get_server(headers.get('x-forwarded-for'))
+
+        if not server:
+            return {"status": 503, "message": "Service Unavailable"}
+
+        # 记录响应时间
+        start_time = time.time()
+        try:
+            # 转发请求到目标服务器
+            response = self._forward_request(server, request)
+
+            # 更新响应时间
+            response_time = time.time() - start_time
+            server.response_time = server.response_time * 0.9 + response_time * 0.1
+
+            return response
+
+        except Exception as e:
+            # 标记服务器不健康
+            server.health_status = False
+            return {"status": 502, "message": "Bad Gateway"}
+
+    def _apply_routing_rules(self, request: Dict) -> Optional[ServerInstance]:
+        """应用路由规则"""
+        path = request.get('path', '/')
+
+        for rule in self.routing_rules:
+            if 'path_prefix' in rule and path.startswith(rule['path_prefix']):
+                server_id = rule['server_id']
+                for server in self.servers:
+                    if server.id == server_id and server.health_status:
+                        return server
+        return None
+
+    def _forward_request(self, server: ServerInstance, request: Dict) -> Dict:
+        """转发请求到服务器"""
+        # 简化实现，实际需要HTTP客户端
+        return {
+            "status": 200,
+            "message": f"Request handled by {server.host}:{server.port}",
+            "server_id": server.id
+        }
+
+# 七层负载均衡特点
+L7_CHARACTERISTICS = {
+    "工作层级": "应用层(HTTP/HTTPS)",
+    "基于信息": ["URL", "HTTP头", "Cookie", "请求方法"],
+    "性能": "较低(需要解析应用层协议)",
+    "功能": ["内容路由", "SSL终止", "缓存", "压缩"],
+    "适用场景": ["微服务", "API网关", "内容路由"]
+}
+```
+
+## 服务发现机制
+
+### 服务发现的核心概念
+
+```python
+# 服务发现核心组件
+from abc import ABC, abstractmethod
+from typing import List, Dict, Optional
+import time
+import threading
+
+class ServiceRegistry(ABC):
+    """服务注册中心抽象类"""
+
+    @abstractmethod
+    def register(self, service_name: str, instance: ServerInstance):
+        """注册服务实例"""
+        pass
+
+    @abstractmethod
+    def deregister(self, service_name: str, instance_id: str):
+        """注销服务实例"""
+        pass
+
+    @abstractmethod
+    def discover(self, service_name: str) -> List[ServerInstance]:
+        """发现服务实例"""
+        pass
+
+    @abstractmethod
+    def heartbeat(self, service_name: str, instance_id: str):
+        """心跳检测"""
+        pass
+
+class ConsulServiceRegistry(ServiceRegistry):
+    """Consul服务注册中心模拟"""
+
+    def __init__(self):
+        self.services: Dict[str, Dict[str, ServerInstance]] = {}
+        self.heartbeat_intervals: Dict[str, float] = {}
+        self.heartbeat_timeout = 30  # 30秒超时
+        self.lock = threading.Lock()
+
+    def register(self, service_name: str, instance: ServerInstance):
+        """注册服务实例"""
+        with self.lock:
+            if service_name not in self.services:
+                self.services[service_name] = {}
+
+            self.services[service_name][instance.id] = instance
+            self.heartbeat_intervals[f"{service_name}:{instance.id}"] = time.time()
+            print(f"Service {service_name} instance {instance.id} registered")
+
+    def deregister(self, service_name: str, instance_id: str):
+        """注销服务实例"""
+        with self.lock:
+            if service_name in self.services and instance_id in self.services[service_name]:
+                del self.services[service_name][instance_id]
+                del self.heartbeat_intervals[f"{service_name}:{instance_id}"]
+                print(f"Service {service_name} instance {instance_id} deregistered")
+
+    def discover(self, service_name: str) -> List[ServerInstance]:
+        """发现服务实例"""
+        with self.lock:
+            instances = list(self.services.get(service_name, {}).values())
+            # 过滤掉超时的实例
+            current_time = time.time()
+            healthy_instances = []
+
+            for instance in instances:
+                key = f"{service_name}:{instance.id}"
+                if key in self.heartbeat_intervals:
+                    last_heartbeat = self.heartbeat_intervals[key]
+                    if current_time - last_heartbeat < self.heartbeat_timeout:
+                        healthy_instances.append(instance)
+                    else:
+                        # 移除超时实例
+                        del self.services[service_name][instance.id]
+                        del self.heartbeat_intervals[key]
+
+            return healthy_instances
+
+    def heartbeat(self, service_name: str, instance_id: str):
+        """心跳检测"""
+        with self.lock:
+            key = f"{service_name}:{instance_id}"
+            self.heartbeat_intervals[key] = time.time()
+
+class EurekaServiceRegistry(ServiceRegistry):
+    """Eureka服务注册中心模拟"""
+
+    def __init__(self):
+        self.services: Dict[str, Dict[str, ServerInstance]] = {}
+        self.renewal_intervals: Dict[str, float] = {}
+        self.lease_duration = 90  # 90秒租约
+        self.renewal_interval = 30  # 30秒续约
+        self.lock = threading.Lock()
+
+    def register(self, service_name: str, instance: ServerInstance):
+        """注册服务实例"""
+        with self.lock:
+            if service_name not in self.services:
+                self.services[service_name] = {}
+
+            self.services[service_name][instance.id] = instance
+            self.renewal_intervals[f"{service_name}:{instance.id}"] = time.time()
+            print(f"Service {service_name} instance {instance.id} registered with Eureka")
+
+    def deregister(self, service_name: str, instance_id: str):
+        """注销服务实例"""
+        with self.lock:
+            if service_name in self.services and instance_id in self.services[service_name]:
+                del self.services[service_name][instance_id]
+                del self.renewal_intervals[f"{service_name}:{instance_id}"]
+                print(f"Service {service_name} instance {instance_id} deregistered from Eureka")
+
+    def discover(self, service_name: str) -> List[ServerInstance]:
+        """发现服务实例"""
+        with self.lock:
+            instances = list(self.services.get(service_name, {}).values())
+            # Eureka的自我保护机制：默认会保留所有注册信息
+            return instances
+
+    def heartbeat(self, service_name: str, instance_id: str):
+        """心跳检测(续约)"""
+        with self.lock:
+            key = f"{service_name}:{instance_id}"
+            self.renewal_intervals[key] = time.time()
+```
+
+### 客户端服务发现
+
+```python
+# 客户端服务发现
+class ClientServiceDiscovery:
+    """客户端服务发现"""
+
+    def __init__(self, registry: ServiceRegistry):
+        self.registry = registry
+        self.local_cache: Dict[str, List[ServerInstance]] = {}
+        self.cache_ttl = 60  # 60秒缓存
+        self.last_update: Dict[str, float] = {}
+        self.load_balancer = LoadBalancer(LoadBalancerAlgorithm.ROUND_ROBIN)
+
+    def get_service_instance(self, service_name: str) -> Optional[ServerInstance]:
+        """获取服务实例"""
+        instances = self._get_service_instances(service_name)
+        if not instances:
+            return None
+
+        # 更新负载均衡器的服务器列表
+        self.load_balancer.servers = instances
+        return self.load_balancer.get_server()
+
+    def _get_service_instances(self, service_name: str) -> List[ServerInstance]:
+        """获取服务实例列表(带缓存)"""
+        current_time = time.time()
+
+        # 检查缓存
+        if (service_name in self.last_update and
+            current_time - self.last_update[service_name] < self.cache_ttl):
+            return self.local_cache.get(service_name, [])
+
+        # 从注册中心获取最新实例
+        instances = self.registry.discover(service_name)
+
+        # 更新缓存
+        self.local_cache[service_name] = instances
+        self.last_update[service_name] = current_time
+
+        return instances
+
+    def refresh_cache(self, service_name: str = None):
+        """刷新缓存"""
+        if service_name:
+            self._get_service_instances(service_name)
+        else:
+            for service in list(self.local_cache.keys()):
+                self._get_service_instances(service)
+
+# 客户端服务发现流程
+def client_discovery_workflow():
+    """客户端服务发现工作流程"""
+    # 1. 创建服务注册中心
+    registry = ConsulServiceRegistry()
+
+    # 2. 注册服务实例
+    service_instances = [
+        ServerInstance("user-service-1", "192.168.1.10", 8080),
+        ServerInstance("user-service-2", "192.168.1.11", 8080),
+        ServerInstance("user-service-3", "192.168.1.12", 8080)
+    ]
+
+    for instance in service_instances:
+        registry.register("user-service", instance)
+
+    # 3. 客户端发现服务
+    client_discovery = ClientServiceDiscovery(registry)
+
+    # 4. 获取服务实例
+    for i in range(5):
+        instance = client_discovery.get_service_instance("user-service")
+        if instance:
+            print(f"Request {i+1} routed to {instance.host}:{instance.port}")
+        time.sleep(1)
+```
+
+### 服务端服务发现
+
+```python
+# 服务端服务发现
+class ServerServiceDiscovery:
+    """服务端服务发现"""
+
+    def __init__(self, registry: ServiceRegistry, load_balancer: LoadBalancer):
+        self.registry = registry
+        self.load_balancer = load_balancer
+
+    def register_service(self, service_name: str, instance: ServerInstance):
+        """注册服务"""
+        self.registry.register(service_name, instance)
+
+        # 启动心跳线程
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_worker,
+            args=(service_name, instance.id)
+        )
+        heartbeat_thread.daemon = True
+        heartbeat_thread.start()
+
+    def _heartbeat_worker(self, service_name: str, instance_id: str):
+        """心跳工作线程"""
+        while True:
+            try:
+                self.registry.heartbeat(service_name, instance_id)
+                time.sleep(10)  # 每10秒发送一次心跳
+            except Exception as e:
+                print(f"Heartbeat failed for {service_name}:{instance_id}: {e}")
+                break
+
+# 服务端服务发现流程
+def server_discovery_workflow():
+    """服务端服务发现工作流程"""
+    # 1. 创建服务注册中心和负载均衡器
+    registry = ConsulServiceRegistry()
+    load_balancer = Layer7LoadBalancer(LoadBalancerAlgorithm.LEAST_CONNECTIONS)
+
+    # 2. 创建服务发现
+    server_discovery = ServerServiceDiscovery(registry, load_balancer)
+
+    # 3. 服务注册
+    service_instance = ServerInstance("order-service-1", "192.168.1.20", 8080)
+    server_discovery.register_service("order-service", service_instance)
+
+    # 4. 客户端请求通过负载均衡器
+    def handle_client_request(request):
+        instances = registry.discover("order-service")
+        load_balancer.servers = instances
+        return load_balancer.handle_request(request)
+```
+
+## 服务网格(Service Mesh)
+
+### 服务网格基础概念
+
+```python
+# 服务网格组件
+class ServiceMesh:
+    """服务网格"""
+
+    def __init__(self):
+        self.data_plane = DataPlane()
+        self.control_plane = ControlPlane()
+        self.services: Dict[str, ServiceInstance] = {}
+
+    def add_service(self, service_name: str, instance: ServiceInstance):
+        """添加服务到网格"""
+        self.services[service_name] = instance
+        self.data_plane.add_sidecar(service_name, instance)
+
+    def configure_traffic_rules(self, rules: List[Dict]):
+        """配置流量规则"""
+        self.control_plane.apply_traffic_rules(rules)
+
+    def get_metrics(self) -> Dict:
+        """获取网格指标"""
+        return self.data_plane.collect_metrics()
+
+class DataPlane:
+    """数据平面"""
+
+    def __init__(self):
+        self.sidecars: Dict[str, SidecarProxy] = {}
+
+    def add_sidecar(self, service_name: str, instance: ServiceInstance):
+        """添加Sidecar代理"""
+        sidecar = SidecarProxy(service_name, instance)
+        self.sidecars[service_name] = sidecar
+
+    def collect_metrics(self) -> Dict:
+        """收集指标"""
+        metrics = {}
+        for service_name, sidecar in self.sidecars.items():
+            metrics[service_name] = sidecar.get_metrics()
+        return metrics
+
+class ControlPlane:
+    """控制平面"""
+
+    def __init__(self):
+        self.traffic_rules = []
+        self.service_discovery = ServiceDiscovery()
+        self.load_balancing = LoadBalancingPolicy()
+
+    def apply_traffic_rules(self, rules: List[Dict]):
+        """应用流量规则"""
+        self.traffic_rules = rules
+        # 分发规则到数据平面
+        self._distribute_rules(rules)
+
+    def _distribute_rules(self, rules: List[Dict]):
+        """分发规则到数据平面"""
+        # 简化实现
+        print(f"Distributing {len(rules)} traffic rules to data plane")
+
+class SidecarProxy:
+    """Sidecar代理"""
+
+    def __init__(self, service_name: str, instance: ServiceInstance):
+        self.service_name = service_name
+        self.instance = instance
+        self.request_count = 0
+        self.response_times = []
+
+    def handle_request(self, request: Dict) -> Dict:
+        """处理请求"""
+        start_time = time.time()
+        self.request_count += 1
+
+        # 记录请求指标
+        metrics = {
+            "service": self.service_name,
+            "timestamp": time.time(),
+            "request_count": self.request_count,
+            "response_time": time.time() - start_time
+        }
+
+        self.response_times.append(metrics["response_time"])
+
+        # 转发请求到实际服务
+        response = self._forward_to_service(request)
+
+        return response
+
+    def _forward_to_service(self, request: Dict) -> Dict:
+        """转发请求到实际服务"""
+        # 简化实现
+        return {"status": 200, "message": f"Handled by {self.service_name}"}
+
+    def get_metrics(self) -> Dict:
+        """获取指标"""
+        return {
+            "request_count": self.request_count,
+            "avg_response_time": sum(self.response_times) / len(self.response_times) if self.response_times else 0,
+            "instance": self.instance.host
+        }
+```
+
+### Istio服务网格示例
+
+```python
+# Istio服务网格配置
+class IstioServiceMesh:
+    """Istio服务网格模拟"""
+
+    def __init__(self):
+        self.virtual_services = []
+        self.destination_rules = []
+        self.gateway_rules = []
+
+    def create_virtual_service(self, name: str, host: str, routes: List[Dict]):
+        """创建虚拟服务"""
+        virtual_service = {
+            "name": name,
+            "host": host,
+            "routes": routes
+        }
+        self.virtual_services.append(virtual_service)
+
+    def create_destination_rule(self, name: str, host: str, subsets: List[Dict]):
+        """创建目标规则"""
+        destination_rule = {
+            "name": name,
+            "host": host,
+            "subsets": subsets
+        }
+        self.destination_rules.append(destination_rule)
+
+    def create_gateway(self, name: str, servers: List[Dict]):
+        """创建网关"""
+        gateway = {
+            "name": name,
+            "servers": servers
+        }
+        self.gateway_rules.append(gateway)
+
+# Istio配置示例
+def istio_configuration_example():
+    """Istio配置示例"""
+    mesh = IstioServiceMesh()
+
+    # 创建网关
+    mesh.create_gateway("bookinfo-gateway", [
+        {
+            "port": {"number": 80, "name": "http", "protocol": "HTTP"},
+            "hosts": ["*"]
+        }
+    ])
+
+    # 创建虚拟服务
+    mesh.create_virtual_service("bookinfo", "bookinfo.com", [
+        {
+            "name": "reviews",
+            "uri": {"prefix": "/reviews"},
+            "route": [
+                {
+                    "destination": {"host": "reviews", "subset": "v1"},
+                    "weight": 90
+                },
+                {
+                    "destination": {"host": "reviews", "subset": "v2"},
+                    "weight": 10
+                }
+            ]
+        }
+    ])
+
+    # 创建目标规则
+    mesh.create_destination_rule("reviews", "reviews", [
+        {
+            "name": "v1",
+            "labels": {"version": "v1"}
+        },
+        {
+            "name": "v2",
+            "labels": {"version": "v2"}
+        }
+    ])
+
+    return mesh
+```
+
+## 实战项目：构建微服务负载均衡系统
+
+### 项目架构设计
+
+```python
+# 微服务负载均衡系统架构
+class MicroserviceLoadBalancer:
+    """微服务负载均衡系统"""
+
+    def __init__(self):
+        self.registry = ConsulServiceRegistry()
+        self.load_balancers = {}
+        self.health_checker = HealthChecker()
+        self.metrics_collector = MetricsCollector()
+
+    def register_service(self, service_name: str, instance: ServerInstance):
+        """注册服务"""
+        self.registry.register(service_name, instance)
+
+        # 创建服务的负载均衡器
+        if service_name not in self.load_balancers:
+            self.load_balancers[service_name] = Layer7LoadBalancer(
+                LoadBalancerAlgorithm.LEAST_CONNECTIONS
+            )
+
+        # 添加健康检查
+        self.health_checker.add_check(service_name, instance)
+
+    def handle_request(self, service_name: str, request: Dict) -> Dict:
+        """处理请求"""
+        # 获取健康实例
+        instances = self.registry.discover(service_name)
+
+        if not instances:
+            return {"status": 503, "message": "Service Unavailable"}
+
+        # 获取负载均衡器
+        lb = self.load_balancers[service_name]
+        lb.servers = instances
+
+        # 处理请求
+        response = lb.handle_request(request)
+
+        # 记录指标
+        self.metrics_collector.record_request(service_name, request, response)
+
+        return response
+
+class HealthChecker:
+    """健康检查器"""
+
+    def __init__(self):
+        self.checks = {}
+        self.check_thread = threading.Thread(target=self._check_loop)
+        self.check_thread.daemon = True
+        self.check_thread.start()
+
+    def add_check(self, service_name: str, instance: ServerInstance):
+        """添加健康检查"""
+        key = f"{service_name}:{instance.id}"
+        self.checks[key] = {
+            "service": service_name,
+            "instance": instance,
+            "last_check": time.time()
+        }
+
+    def _check_loop(self):
+        """健康检查循环"""
+        while True:
+            for key, check in self.checks.items():
+                self._perform_health_check(check)
+            time.sleep(30)  # 每30秒检查一次
+
+    def _perform_health_check(self, check: Dict):
+        """执行健康检查"""
+        instance = check["instance"]
+
+        try:
+            # 简化的健康检查 - 实际应该发送HTTP请求
+            response_time = random.uniform(0.1, 1.0)
+
+            if response_time < 5.0:  # 5秒内响应为健康
+                instance.health_status = True
+                instance.response_time = response_time
+            else:
+                instance.health_status = False
+
+        except Exception:
+            instance.health_status = False
+
+class MetricsCollector:
+    """指标收集器"""
+
+    def __init__(self):
+        self.metrics = defaultdict(list)
+
+    def record_request(self, service_name: str, request: Dict, response: Dict):
+        """记录请求指标"""
+        metric = {
+            "timestamp": time.time(),
+            "service": service_name,
+            "status": response.get("status"),
+            "response_time": response.get("response_time", 0)
+        }
+
+        self.metrics[service_name].append(metric)
+
+    def get_service_metrics(self, service_name: str) -> Dict:
+        """获取服务指标"""
+        if service_name not in self.metrics:
+            return {}
+
+        metrics = self.metrics[service_name]
+        recent_metrics = metrics[-1000:]  # 最近1000个请求
+
+        return {
+            "total_requests": len(recent_metrics),
+            "success_rate": sum(1 for m in recent_metrics if m["status"] == 200) / len(recent_metrics),
+            "avg_response_time": sum(m["response_time"] for m in recent_metrics) / len(recent_metrics),
+            "p95_response_time": sorted(m["response_time"] for m in recent_metrics)[int(len(recent_metrics) * 0.95)]
+        }
+```
+
+### 系统部署和测试
+
+```python
+# 系统部署和测试
+def deploy_and_test_system():
+    """部署和测试系统"""
+    # 1. 创建负载均衡系统
+    lb_system = MicroserviceLoadBalancer()
+
+    # 2. 注册服务实例
+    services = [
+        ("user-service", [
+            ServerInstance("user-1", "10.0.1.10", 8080),
+            ServerInstance("user-2", "10.0.1.11", 8080),
+            ServerInstance("user-3", "10.0.1.12", 8080)
+        ]),
+        ("order-service", [
+            ServerInstance("order-1", "10.0.2.10", 8080),
+            ServerInstance("order-2", "10.0.2.11", 8080)
+        ]),
+        ("product-service", [
+            ServerInstance("product-1", "10.0.3.10", 8080),
+            ServerInstance("product-2", "10.0.3.11", 8080),
+            ServerInstance("product-3", "10.0.3.12", 8080)
+        ])
+    ]
+
+    for service_name, instances in services:
+        for instance in instances:
+            lb_system.register_service(service_name, instance)
+
+    # 3. 模拟请求
+    def simulate_requests(service_name: str, num_requests: int):
+        """模拟请求"""
+        results = []
+
+        for i in range(num_requests):
+            request = {
+                "path": f"/api/{service_name}",
+                "method": "GET",
+                "headers": {"x-request-id": str(i)}
+            }
+
+            response = lb_system.handle_request(service_name, request)
+            results.append(response)
+
+            time.sleep(0.1)  # 100ms间隔
+
+        return results
+
+    # 4. 测试各个服务
+    for service_name, _ in services:
+        print(f"\nTesting {service_name}:")
+        results = simulate_requests(service_name, 10)
+
+        success_count = sum(1 for r in results if r.get("status") == 200)
+        print(f"Success rate: {success_count}/10")
+
+        # 获取指标
+        metrics = lb_system.metrics_collector.get_service_metrics(service_name)
+        print(f"Average response time: {metrics.get('avg_response_time', 0):.3f}s")
+
+    return lb_system
+```
+
+## 本周作业
+
+### 作业1：实现自定义负载均衡算法
+
+```python
+# 自定义负载均衡算法
+class CustomLoadBalancer(LoadBalancer):
+    """自定义负载均衡器"""
+
+    def __init__(self):
+        super().__init__(LoadBalancerAlgorithm.ROUND_ROBIN)
+        self.custom_weights = {}
+
+    def set_custom_weight(self, server_id: str, weight: float):
+        """设置自定义权重"""
+        self.custom_weights[server_id] = weight
+
+    def get_server(self, client_ip: str = None) -> Optional[ServerInstance]:
+        """自定义选择算法"""
+        healthy_servers = [s for s in self.servers if s.health_status]
+        if not healthy_servers:
+            return None
+
+        # 基于响应时间和自定义权重的复合算法
+        scores = []
+        for server in healthy_servers:
+            custom_weight = self.custom_weights.get(server.id, 1.0)
+            response_score = 1.0 / (server.response_time + 0.001)  # 避免除零
+            connection_score = 1.0 / (server.current_connections + 1)
+
+            total_score = custom_weight * response_score * connection_score
+            scores.append((server, total_score))
+
+        # 选择分数最高的服务器
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[0][0]
+
+# 测试自定义算法
+def test_custom_algorithm():
+    """测试自定义负载均衡算法"""
+    custom_lb = CustomLoadBalancer()
+
+    # 添加服务器
+    servers = [
+        ServerInstance("s1", "192.168.1.1", 8080, response_time=0.1),
+        ServerInstance("s2", "192.168.1.2", 8080, response_time=0.2),
+        ServerInstance("s3", "192.168.1.3", 8080, response_time=0.3)
+    ]
+
+    for server in servers:
+        custom_lb.add_server(server)
+
+    # 设置自定义权重
+    custom_lb.set_custom_weight("s1", 2.0)  # s1权重更高
+    custom_lb.set_custom_weight("s2", 1.0)
+    custom_lb.set_custom_weight("s3", 0.5)  # s3权重较低
+
+    # 测试请求分发
+    distribution = defaultdict(int)
+    for _ in range(100):
+        server = custom_lb.get_server()
+        if server:
+            distribution[server.id] += 1
+
+    print("Request distribution:", dict(distribution))
+    return custom_lb
+```
+
+### 作业2：实现服务注册中心
+
+```python
+# 服务注册中心实现
+class RedisServiceRegistry(ServiceRegistry):
+    """基于Redis的服务注册中心"""
+
+    def __init__(self, redis_client):
+        self.redis = redis_client
+        self.service_key_prefix = "service:"
+        self.instance_key_prefix = "instance:"
+        self.heartbeat_timeout = 30
+
+    def register(self, service_name: str, instance: ServerInstance):
+        """注册服务实例"""
+        # 使用Redis Hash存储服务信息
+        service_key = f"{self.service_key_prefix}{service_name}"
+        instance_key = f"{self.instance_key_prefix}{instance.id}"
+
+        # 存储实例信息
+        instance_data = {
+            "host": instance.host,
+            "port": instance.port,
+            "weight": instance.weight,
+            "metadata": json.dumps(instance.metadata or {})
+        }
+
+        # 使用Redis事务
+        with self.redis.pipeline() as pipe:
+            pipe.hset(service_key, instance.id, json.dumps(instance_data))
+            pipe.expire(service_key, self.heartbeat_timeout * 2)  # 设置过期时间
+            pipe.execute()
+
+        print(f"Registered {instance.id} to {service_name}")
+
+    def deregister(self, service_name: str, instance_id: str):
+        """注销服务实例"""
+        service_key = f"{self.service_key_prefix}{service_name}"
+
+        self.redis.hdel(service_key, instance_id)
+        print(f"Deregistered {instance_id} from {service_name}")
+
+    def discover(self, service_name: str) -> List[ServerInstance]:
+        """发现服务实例"""
+        service_key = f"{self.service_key_prefix}{service_name}"
+        instances_data = self.redis.hgetall(service_key)
+
+        instances = []
+        for instance_id, data in instances_data.items():
+            try:
+                instance_dict = json.loads(data)
+                instance = ServerInstance(
+                    id=instance_id.decode(),
+                    host=instance_dict["host"],
+                    port=instance_dict["port"],
+                    weight=instance_dict.get("weight", 1),
+                    metadata=json.loads(instance_dict.get("metadata", "{}"))
+                )
+                instances.append(instance)
+            except Exception as e:
+                print(f"Error parsing instance {instance_id}: {e}")
+
+        return instances
+
+    def heartbeat(self, service_name: str, instance_id: str):
+        """心跳检测"""
+        service_key = f"{self.service_key_prefix}{service_name}"
+
+        # 更新心跳时间
+        heartbeat_key = f"heartbeat:{service_name}:{instance_id}"
+        self.redis.setex(heartbeat_key, self.heartbeat_timeout, "1")
+
+        # 更新服务过期时间
+        self.redis.expire(service_key, self.heartbeat_timeout * 2)
+```
+
+## 本周总结
+
+### 核心知识点
+
+1. **负载均衡算法**
+   - 轮询(Round Robin)
+   - 最少连接数(Least Connections)
+   - 最少响应时间(Least Response Time)
+   - 加权轮询(Weighted Round Robin)
+   - IP哈希(IP Hash)
+   - 一致性哈希(Consistent Hash)
+
+2. **负载均衡类型**
+   - 四层负载均衡(L4)：传输层，基于IP和端口
+   - 七层负载均衡(L7)：应用层，基于HTTP内容
+   - DNS负载均衡：基于DNS解析
+   - 客户端负载均衡：客户端选择服务器
+
+3. **服务发现机制**
+   - 服务注册：服务启动时向注册中心注册
+   - 服务发现：客户端查询可用服务实例
+   - 健康检查：定期检查服务健康状态
+   - 心跳机制：服务定期发送心跳
+
+4. **服务网格**
+   - 数据平面：Sidecar代理处理实际流量
+   - 控制平面：管理和配置策略
+   - 服务治理：流量管理、安全策略、监控
+
+### 实践经验
+
+1. **负载均衡器选择**
+   - 高性能场景选择四层负载均衡
+   - 需要内容路由选择七层负载均衡
+   - 根据业务特点选择合适的算法
+
+2. **服务注册中心选择**
+   - Consul：强一致性，适合小规模集群
+   - Eureka：高可用性，适合大规模集群
+   - etcd：分布式键值存储，适合Kubernetes
+
+3. **服务网格部署**
+   - 逐步迁移，先试点后推广
+   - 监控性能影响，优化资源使用
+   - 建立完善的运维体系
+
+### 下周预告
+
+下周我们将学习**容错与高可用设计**，包括：
+- 熔断器模式(Circuit Breaker)
+- 重试机制(Retry Pattern)
+- 限流策略(Rate Limiting)
+- 降级策略(Degradation)
+- 集群高可用设计
+- 灾备和故障转移
+
+---
+
+**思考题：**
+1. 你的项目中使用了哪种负载均衡策略？为什么选择这种策略？
+2. 服务发现和负载均衡的关系是什么？如何设计一个高效的服务发现系统？
+3. 服务网格的引入会带来哪些优势和挑战？如何评估是否需要引入服务网格？
+
+**扩展阅读：**
+- 《Designing Data-Intensive Applications》第6章
+- 《微服务设计》第4章
+- Istio官方文档
+- Consul和Eureka的最佳实践

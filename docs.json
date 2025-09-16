@@ -1,11 +1,11 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "maple",
+  "theme": "mint",
   "name": "L13Z",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#000000",
+    "light": "#333333",
+    "dark": "#000000"
   },
   "favicon": "/favicon.svg",
   "navigation": {
@@ -14,55 +14,149 @@
         "tab": "Guides",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "入门指南",
             "pages": [
               "index",
-              "quickstart",
-              "development"
-            ]
-          },
-          {
-            "group": "Customization",
-            "pages": [
-              "essentials/settings",
-              "essentials/navigation"
-            ]
-          },
-          {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "API reference",
-        "groups": [
-          {
-            "group": "API documentation",
-            "pages": [
-              "api-reference/introduction"
-            ]
-          },
-          {
-            "group": "Endpoint examples",
-            "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "installation",
+              "choose-path",
+              {
+                "group": "计算机导论CS50",
+                "pages": [
+                  "cs50/overview",
+                  "cs50/week0",
+                  "cs50/week1",
+                  "cs50/week2",
+                  "cs50/week3",
+                  "cs50/week4",
+                  "cs50/week5",
+                  "cs50/week6",
+                  "cs50/week7",
+                  "cs50/week8",
+                  "cs50/week9",
+                  "cs50/week10"
+                ]
+              },
+              {
+                "group": "计算机网络",
+                "pages": [
+                  "cs144/overview",
+                  "cs144/week1",
+                  "cs144/week2",
+                  "cs144/week3",
+                  "cs144/week4",
+                  "cs144/week5",
+                  "cs144/week6",
+                  "cs144/week7",
+                  "cs144/week8",
+                  "cs144/week9",
+                  "cs144/week10"
+                ]
+              },
+              {
+                "group": "操作系统",
+                "pages": [
+                  "operating-systems/overview",
+                  "operating-systems/lecture1",
+                  "operating-systems/lecture2",
+                  "operating-systems/lecture3",
+                  "operating-systems/lecture4",
+                  "operating-systems/lecture5",
+                  "operating-systems/lecture6",
+                  "operating-systems/lecture7",
+                  "operating-systems/lecture8",
+                  "operating-systems/lecture9",
+                  "operating-systems/lecture10",
+                  "operating-systems/lecture11",
+                  "operating-systems/lecture12",
+                  "operating-systems/lecture13",
+                  "operating-systems/lecture14",
+                  "operating-systems/lecture15",
+                  "operating-systems/lecture16"
+                ]
+              },
+              {
+                "group": "计算机组成原理",
+                "pages": [
+                  "computer-organization/overview",
+                  "computer-organization/lecture1",
+                  "computer-organization/lecture2",
+                  "computer-organization/lecture3",
+                  "computer-organization/lecture4",
+                  "computer-organization/lecture5",
+                  "computer-organization/lecture6",
+                  "computer-organization/lecture7",
+                  "computer-organization/lecture8",
+                  "computer-organization/lecture9",
+                  "computer-organization/lecture10",
+                  "computer-organization/lecture11",
+                  "computer-organization/lecture12"
+                ]
+              },
+              {
+                "group": "软件设计",
+                "pages": [
+                  "system-design/overview",
+                  "system-design/week0",
+                  "system-design/week1",
+                  "system-design/week2",
+                  "system-design/week3",
+                  "system-design/week4",
+                  "system-design/week5",
+                  "system-design/week6",
+                  "system-design/week7",
+                  "system-design/week8",
+                  "system-design/week9",
+                  "system-design/week10",
+                  "system-design/project-example",
+                  "system-design/course-summary"
+                ]
+              },
+              {
+                "group": "数据库原理",
+                "pages": [
+                  "database-systems/overview",
+                  "database-systems/lecture21",
+                  "database-systems/lecture22",
+                  "database-systems/lecture23",
+                  "database-systems/lecture24",
+                  "database-systems/lecture25"
+                ]
+              },
+              {
+                "group": "数据结构与算法",
+                "pages": [
+                  "mit6006-algorithms/course-navigation",
+                  "mit6006-algorithms/lectures/L01-algorithm-complexity",
+                  "mit6006-algorithms/lectures/L02-sorting-algorithms",
+                  "mit6006-algorithms/lectures/L03-basic-data-structures",
+                  "mit6006-algorithms/lectures/L04-trees-and-binary-search",
+                  "mit6006-algorithms/lectures/L05-hash-tables",
+                  "mit6006-algorithms/lectures/L06-graph-algorithms-basics",
+                  "mit6006-algorithms/lectures/L07-shortest-path-algorithms",
+                  "mit6006-algorithms/lectures/L08-minimum-spanning-tree",
+                  "mit6006-algorithms/lectures/L09-dynamic-programming"
+                ]
+              },
+              {
+                "group": "Python编程",
+                "pages": [
+                  "mit6006-enhanced/00-python-foundation-essentials",
+                  "mit6006-enhanced/01-functional-programming-fundamentals",
+                  "mit6006-enhanced/02-higher-order-functions-lambda",
+                  "mit6006-enhanced/03-functional-datastructures-implementation",
+                  "mit6006-enhanced/04-functional-sorting-algorithms"
+                ]
+              },
+              {
+                "group": "嵌入式系统",
+                "pages": [
+                  "embedded-systems/01-introduction",
+                  "embedded-systems/02-microcontrollers",
+                  "embedded-systems/03-hardware-interaction",
+                  "embedded-systems/04-communication-protocols",
+                  "embedded-systems/05-real-time-os"
+                ]
+              }
             ]
           }
         ]
@@ -70,21 +164,7 @@
     ],
     "global": {
       "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Community",
-          "href": "https://mintlify.com/community",
-          "icon": "slack"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
+
       ]
     }
   },
@@ -93,17 +173,7 @@
     "dark": "/logo/dark.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
+
   },
   "contextual": {
     "options": [
@@ -116,6 +186,9 @@
      "cursor",
      "vscode"
    ]
+  },
+  "comments": {
+    "enabled": true
   },
   "footer": {
     "socials": {

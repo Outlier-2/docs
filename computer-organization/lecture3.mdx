@@ -1,0 +1,1026 @@
+---
+title: "第3讲：组合逻辑电路"
+description: "组合逻辑电路设计、优化方法和标准电路实现"
+---
+
+# 第3讲：组合逻辑电路
+
+## 概述
+
+本讲深入探讨组合逻辑电路的设计方法，包括布尔表达式优化、标准电路实现、时序分析和优化技术。组合逻辑电路是数字系统的基础组件，其输出仅取决于当前输入。
+
+## 组合逻辑电路特性
+
+### 基本特征
+
+组合逻辑电路具有以下特征：
+
+1. **无记忆性**：输出只依赖于当前输入
+2. **无反馈**：电路中没有反馈回路
+3. **确定性**：相同输入总是产生相同输出
+4. **无时钟**：不需要时钟信号同步
+
+```python
+class CombinationalCircuit:
+    """组合逻辑电路基类"""
+
+    def __init__(self, inputs, outputs):
+        self.inputs = inputs      # 输入信号列表
+        self.outputs = outputs    # 输出信号列表
+        self.gates = []          # 逻辑门列表
+
+    def add_gate(self, gate_type, inputs, output):
+        """添加逻辑门"""
+        self.gates.append({
+            'type': gate_type,
+            'inputs': inputs,
+            'output': output
+        })
+
+    def evaluate(self, input_values):
+        """评估电路输出"""
+        # 检查输入数量
+        if len(input_values) != len(self.inputs):
+            raise ValueError("输入数量不匹配")
+
+        # 创建信号字典
+        signals = dict(zip(self.inputs, input_values))
+
+        # 计算所有门电路
+        for gate in self.gates:
+            # 获取输入值
+            input_vals = [signals[name] for name in gate['inputs']]
+
+            # 根据门类型计算输出
+            if gate['type'] == 'AND':
+                result = all(input_vals)
+            elif gate['type'] == 'OR':
+                result = any(input_vals)
+            elif gate['type'] == 'NOT':
+                result = not input_vals[0]
+            elif gate['type'] == 'XOR':
+                result = sum(input_vals) % 2 == 1
+            elif gate['type'] == 'NAND':
+                result = not all(input_vals)
+            elif gate['type'] == 'NOR':
+                result = not any(input_vals)
+            else:
+                raise ValueError(f"未知的门类型: {gate['type']}")
+
+            # 存储结果
+            signals[gate['output']] = result
+
+        # 返回输出值
+        return [signals[name] for name in self.outputs]
+```
+
+### 电路验证
+
+```python
+def verify_combinational_circuit(circuit):
+    """验证组合逻辑电路的正确性"""
+
+    # 生成所有可能的输入组合
+    input_count = len(circuit.inputs)
+    total_combinations = 1 << input_count
+
+    print(f"验证电路，输入数量: {input_count}")
+    print(f"总组合数: {total_combinations}")
+
+    # 记录所有输出
+    results = []
+
+    for i in range(total_combinations):
+        # 生成输入组合
+        input_values = [(i >> bit) & 1 for bit in range(input_count)]
+
+        # 计算输出
+        try:
+            output_values = circuit.evaluate(input_values)
+            results.append((input_values, output_values))
+        except Exception as e:
+            print(f"错误: 输入 {input_values} 时发生异常: {e}")
+            return False
+
+    # 检查是否有未定义的输出
+    for inputs, outputs in results:
+        if any(out is None for out in outputs):
+            print(f"警告: 输入 {inputs} 产生未定义输出")
+            return False
+
+    print("电路验证通过!")
+    return True
+```
+
+## 布尔表达式优化
+
+### 代数化简法
+
+```python
+class BooleanSimplifier:
+    """布尔表达式化简器"""
+
+    @staticmethod
+    def apply_laws(expression):
+        """应用布尔代数定律化简表达式"""
+        # 德摩根定律
+        expression = expression.replace('!(A&B)', '!A|!B')
+        expression = expression.replace('!(A|B)', '!A&!B')
+
+        # 分配律
+        expression = expression.replace('A&(B|C)', '(A&B)|(A&C)')
+        expression = expression.replace('A|(B&C)', '(A|B)&(A|C)')
+
+        # 吸收律
+        expression = expression.replace('A&(A|B)', 'A')
+        expression = expression.replace('A|(A&B)', 'A')
+
+        # 同一律
+        expression = expression.replace('A&1', 'A')
+        expression = expression.replace('A|0', 'A')
+
+        # 互补律
+        expression = expression.replace('A&!A', '0')
+        expression = expression.replace('A|!A', '1')
+
+        return expression
+
+    @staticmethod
+    def expand_minterms(minterms):
+        """展开最小项"""
+        expanded = []
+        for minterm in minterms:
+            terms = []
+            for var, value in minterm.items():
+                if value:
+                    terms.append(var)
+                else:
+                    terms.append(f'!{var}')
+            expanded.append('&'.join(terms))
+        return expanded
+
+    @staticmethod
+    def simplify_karnaugh(minterms):
+        """使用卡诺图化简"""
+        # 这里实现简化的卡诺图算法
+        # 实际实现会更复杂
+        return minterms
+
+# 示例使用
+def boolean_optimization_demo():
+    """布尔表达式优化演示"""
+
+    bs = BooleanSimplifier()
+
+    # 示例表达式
+    expressions = [
+        'A&!A',
+        'A&(A|B)',
+        '!(A&B)',
+        'A&(B|C)',
+        '(A&B)|(A&C)'
+    ]
+
+    print("布尔表达式化简演示:")
+    print("==================")
+
+    for expr in expressions:
+        simplified = bs.apply_laws(expr)
+        print(f"原式: {expr}")
+        print(f"化简: {simplified}")
+        print()
+```
+
+### 卡诺图化简
+
+```python
+class KarnaughMap:
+    """卡诺图化简工具"""
+
+    def __init__(self, variables):
+        self.variables = variables
+        self.size = 1 << len(variables)
+        self.map = [[False for _ in range(4)] for _ in range(4)]
+
+    def set_minterm(self, inputs, value=True):
+        """设置最小项值"""
+        if len(inputs) != len(self.variables):
+            raise ValueError("输入数量不匹配")
+
+        # 转换为格雷码索引
+        row = self._gray_code(inputs[:2])
+        col = self._gray_code(inputs[2:]) if len(inputs) > 2 else 0
+
+        self.map[row][col] = value
+
+    def _gray_code(self, bits):
+        """计算格雷码索引"""
+        if len(bits) == 1:
+            return bits[0]
+        elif len(bits) == 2:
+            return (bits[0] << 1) | (bits[0] ^ bits[1])
+        else:
+            raise ValueError("最多支持2位格雷码")
+
+    def simplify(self):
+        """化简卡诺图"""
+        groups = self._find_groups()
+        simplified = self._groups_to_expression(groups)
+        return simplified
+
+    def _find_groups(self):
+        """寻找可合并的组"""
+        groups = []
+
+        # 寻找大小为4的组
+        for i in range(4):
+            if all(self.map[i][j] for j in range(4)):
+                groups.append(('row', i))
+            if all(self.map[j][i] for j in range(4)):
+                groups.append(('col', i))
+
+        # 寻找大小为2的组
+        for i in range(4):
+            for j in range(3):
+                if self.map[i][j] and self.map[i][j+1]:
+                    groups.append(('pair', (i, j), (i, j+1)))
+                if self.map[j][i] and self.map[j+1][i]:
+                    groups.append(('pair', (j, i), (j+1, i)))
+
+        return groups
+
+    def _groups_to_expression(self, groups):
+        """将组转换为表达式"""
+        terms = []
+
+        for group in groups:
+            if group[0] == 'row':
+                # 行组化简
+                row = group[1]
+                if row == 0 or row == 3:
+                    terms.append('!A' if row == 0 else 'A')
+                else:
+                    terms.append('')  # 该变量被消去
+            elif group[0] == 'col':
+                # 列组化简
+                col = group[1]
+                if col == 0 or col == 3:
+                    terms.append('!B' if col == 0 else 'B')
+                else:
+                    terms.append('')  # 该变量被消去
+
+        # 组合项
+        if terms:
+            return '|'.join(t for t in terms if t)
+        else:
+            return '0'  # 无有效组
+
+def karnaugh_demo():
+    """卡诺图演示"""
+
+    # 创建3变量卡诺图
+    kmap = KarnaughMap(['A', 'B', 'C'])
+
+    # 设置最小项 (假设函数F(A,B,C) = Σm(0,1,2,4,5,6))
+    minterms = [(0,0,0), (0,0,1), (0,1,0), (1,0,0), (1,0,1), (1,1,0)]
+
+    for minterm in minterms:
+        kmap.set_minterm(minterm)
+
+    # 化简
+    simplified = kmap.simplify()
+    print(f"化简结果: {simplified}")
+```
+
+## 标准组合电路
+
+### 编码器与解码器
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// 8-to-3 编码器
+uint8_t encoder_8to3(bool inputs[8]) {
+    uint8_t output = 0;
+
+    // 优先级编码器：优先处理高优先级输入
+    for (int i = 7; i >= 0; i--) {
+        if (inputs[i]) {
+            output = i;
+            break;
+        }
+    }
+
+    return output;
+}
+
+// 3-to-8 解码器
+void decoder_3to8(uint8_t input, bool outputs[8]) {
+    for (int i = 0; i < 8; i++) {
+        outputs[i] = (input == i);
+    }
+}
+
+// 编码器演示
+void encoder_decoder_demo() {
+    printf("8-to-3 编码器演示:\n");
+    printf("==================\n");
+
+    bool test_inputs[8];
+
+    // 测试各种输入组合
+    test_cases[8][8] = {
+        {1,0,0,0,0,0,0,0},  // 输入0
+        {0,1,0,0,0,0,0,0},  // 输入1
+        {0,0,1,0,0,0,0,0},  // 输入2
+        {1,1,1,0,0,0,0,0},  // 多个输入（优先级）
+        {0,0,0,0,0,0,0,1},  // 输入7
+        {0,0,0,0,0,0,0,0},  // 无输入
+    };
+
+    for (int i = 0; i < 6; i++) {
+        printf("输入: ");
+        for (int j = 0; j < 8; j++) {
+            printf("%d ", test_cases[i][j]);
+        }
+
+        uint8_t encoded = encoder_8to3(test_cases[i]);
+        printf("-> 编码: %d (0b%03d)\n", encoded, encoded);
+    }
+
+    printf("\n3-to-8 解码器演示:\n");
+    printf("==================\n");
+
+    bool decoded_outputs[8];
+
+    for (int i = 0; i < 8; i++) {
+        decoder_3to8(i, decoded_outputs);
+        printf("输入 %d -> 输出: ", i);
+        for (int j = 0; j < 8; j++) {
+            printf("%d ", decoded_outputs[j]);
+        }
+        printf("\n");
+    }
+}
+```
+
+### 多路选择器与分配器
+
+```c
+// 4-to-1 多路选择器
+bool mux_4to1(bool data[4], bool select[2]) {
+    int index = (select[0] << 0) | (select[1] << 1);
+    return data[index];
+}
+
+// 1-to-4 多路分配器
+void demux_1to4(bool data, bool select[2], bool outputs[4]) {
+    // 首先将所有输出置0
+    for (int i = 0; i < 4; i++) {
+        outputs[i] = false;
+    }
+
+    // 根据选择信号设置对应输出
+    int index = (select[0] << 0) | (select[1] << 1);
+    outputs[index] = data;
+}
+
+// 多路选择器应用示例
+void mux_application_demo() {
+    printf("多路选择器应用演示:\n");
+    printf("====================\n");
+
+    // 使用多路选择器实现逻辑函数
+    // F(A,B) = Σm(0,2,3) = A'B' + AB' + AB
+    bool mux_inputs[4] = {1, 0, 1, 1};  // m0, m1, m2, m3
+
+    printf("实现函数 F(A,B) = Σm(0,2,3):\n");
+    printf("A B | F\n");
+    printf("-------\n");
+
+    for (int a = 0; a <= 1; a++) {
+        for (int b = 0; b <= 1; b++) {
+            bool select[2] = {a, b};
+            bool result = mux_4to1(mux_inputs, select);
+            printf("%d %d | %d\n", a, b, result);
+        }
+    }
+}
+```
+
+### 比较器电路
+
+```c
+#include <stdint.h>
+
+// 1位比较器
+typedef struct {
+    bool equal;     // A == B
+    bool greater;   // A > B
+    bool less;      // A < B
+} Comparator_1bit;
+
+Comparator_1bit compare_1bit(bool a, bool b) {
+    Comparator_1bit result;
+    result.equal = (a == b);
+    result.greater = a && !b;
+    result.less = !a && b;
+    return result;
+}
+
+// 4位比较器（串行实现）
+typedef struct {
+    bool equal;     // A == B
+    bool greater;   // A > B
+    bool less;      // A < B
+} Comparator_4bit;
+
+Comparator_4bit compare_4bit(uint8_t a, uint8_t b) {
+    Comparator_4bit result;
+    result.equal = true;
+    result.greater = false;
+    result.less = false;
+
+    // 从高位到低位比较
+    for (int i = 3; i >= 0; i--) {
+        bool a_bit = (a >> i) & 1;
+        bool b_bit = (b >> i) & 1;
+
+        if (a_bit != b_bit) {
+            result.equal = false;
+            if (a_bit) {
+                result.greater = true;
+            } else {
+                result.less = true;
+            }
+            break;
+        }
+    }
+
+    return result;
+}
+
+// 比较器演示
+void comparator_demo() {
+    printf("1位比较器演示:\n");
+    printf("==============\n");
+    printf("A B | A==B A>B A<B\n");
+    printf("------------------\n");
+
+    for (int a = 0; a <= 1; a++) {
+        for (int b = 0; b <= 1; b++) {
+            Comparator_1bit result = compare_1bit(a, b);
+            printf("%d %d |  %d   %d   %d\n", a, b,
+                   result.equal, result.greater, result.less);
+        }
+    }
+
+    printf("\n4位比较器演示:\n");
+    printf("==============\n");
+    printf("   A    B   | A==B A>B A<B\n");
+    printf("------------------------\n");
+
+    uint8_t test_values[] = {0x5, 0xA, 0xF, 0x0, 0x8, 0x8};
+
+    for (int i = 0; i < 3; i++) {
+        uint8_t a = test_values[i*2];
+        uint8_t b = test_values[i*2+1];
+
+        Comparator_4bit result = compare_4bit(a, b);
+        printf("0x%02X 0x%02X |  %d   %d   %d\n", a, b,
+               result.equal, result.greater, result.less);
+    }
+}
+```
+
+### 算术逻辑单元(ALU)
+
+```c
+// ALU操作码
+typedef enum {
+    ALU_ADD,     // 加法
+    ALU_SUB,     // 减法
+    ALU_AND,     // 按位与
+    ALU_OR,      // 按位或
+    ALU_XOR,     // 按位异或
+    ALU_NOT,     // 按位非
+    ALU_SLL,     // 逻辑左移
+    ALU_SRL,     // 逻辑右移
+    ALU_SRA,     // 算术右移
+    ALU_SLT      // 小于则置1
+} ALU_Operation;
+
+// ALU结果
+typedef struct {
+    uint32_t result;     // 计算结果
+    bool zero;           // 结果是否为0
+    bool negative;       // 结果是否为负
+    bool overflow;       // 是否溢出
+    bool carry;          // 是否有进位
+} ALU_Result;
+
+// 32位ALU实现
+ALU_Result alu_32bit(uint32_t a, uint32_t b, ALU_Operation op) {
+    ALU_Result result = {0, false, false, false, false};
+
+    switch (op) {
+        case ALU_ADD:
+            result.result = a + b;
+            result.carry = (a > result.result);  // 检测进位
+            result.overflow = ((a ^ b) & (~a ^ result.result)) & 0x80000000;
+            break;
+
+        case ALU_SUB:
+            result.result = a - b;
+            result.carry = (a < b);  // 检测借位
+            result.overflow = ((a ^ b) & (a ^ result.result)) & 0x80000000;
+            break;
+
+        case ALU_AND:
+            result.result = a & b;
+            break;
+
+        case ALU_OR:
+            result.result = a | b;
+            break;
+
+        case ALU_XOR:
+            result.result = a ^ b;
+            break;
+
+        case ALU_NOT:
+            result.result = ~a;
+            break;
+
+        case ALU_SLL:
+            result.result = a << (b & 0x1F);  // 限制移位范围
+            break;
+
+        case ALU_SRL:
+            result.result = a >> (b & 0x1F);
+            break;
+
+        case ALU_SRA:
+            result.result = (int32_t)a >> (b & 0x1F);  // 算术右移
+            break;
+
+        case ALU_SLT:
+            result.result = ((int32_t)a < (int32_t)b) ? 1 : 0;
+            break;
+    }
+
+    // 设置状态标志
+    result.zero = (result.result == 0);
+    result.negative = (result.result & 0x80000000) != 0;
+
+    return result;
+}
+
+// ALU演示
+void alu_demo() {
+    printf("32位ALU演示:\n");
+    printf("============\n");
+
+    uint32_t a = 0x12345678;
+    uint32_t b = 0x87654321;
+
+    ALU_Operation operations[] = {
+        ALU_ADD, ALU_SUB, ALU_AND, ALU_OR, ALU_XOR
+    };
+
+    const char *op_names[] = {
+        "ADD", "SUB", "AND", "OR", "XOR"
+    };
+
+    for (int i = 0; i < 5; i++) {
+        ALU_Result result = alu_32bit(a, b, operations[i]);
+
+        printf("%s: 0x%08X %s 0x%08X = 0x%08X\n",
+               op_names[i], a,
+               (operations[i] == ALU_SUB) ? "-" : "+", b, result.result);
+        printf("      状态: Z=%d, N=%d, C=%d, V=%d\n",
+               result.zero, result.negative, result.carry, result.overflow);
+        printf("\n");
+    }
+}
+```
+
+## 时序分析
+
+### 传播延迟
+
+```python
+class TimingAnalyzer:
+    """时序分析器"""
+
+    def __init__(self):
+        self.gate_delays = {
+            'NOT': 1,    # 反相器延迟
+            'AND': 2,    # 与门延迟
+            'OR': 2,     # 或门延迟
+            'XOR': 3,    # 异或门延迟
+            'NAND': 2,   # 与非门延迟
+            'NOR': 2     # 或非门延迟
+        }
+
+    def calculate_path_delay(self, circuit):
+        """计算关键路径延迟"""
+        # 简化的延迟计算
+        max_delay = 0
+
+        for gate in circuit.gates:
+            gate_type = gate['type']
+            if gate_type in self.gate_delays:
+                delay = self.gate_delays[gate_type]
+                max_delay = max(max_delay, delay)
+
+        return max_delay
+
+    def find_critical_path(self, circuit):
+        """寻找关键路径"""
+        # 这里实现简化的关键路径分析
+        critical_path = []
+        max_delay = 0
+
+        # 分析每个可能的路径
+        for i, gate in enumerate(circuit.gates):
+            path_delay = self.gate_delays.get(gate['type'], 0)
+            if path_delay > max_delay:
+                max_delay = path_delay
+                critical_path = [i]
+
+        return critical_path, max_delay
+
+def timing_analysis_demo():
+    """时序分析演示"""
+
+    analyzer = TimingAnalyzer()
+
+    # 创建一个测试电路
+    from lecture3 import CombinationalCircuit
+    circuit = CombinationalCircuit(['A', 'B'], ['F'])
+
+    # 添加一些门电路
+    circuit.add_gate('AND', ['A', 'B'], 'temp1')
+    circuit.add_gate('OR', ['A', 'B'], 'temp2')
+    circuit.add_gate('XOR', ['temp1', 'temp2'], 'F')
+
+    # 分析时序
+    path_delay = analyzer.calculate_path_delay(circuit)
+    critical_path, max_delay = analyzer.find_critical_path(circuit)
+
+    print(f"电路延迟分析:")
+    print(f"路径延迟: {path_delay} ns")
+    print(f"关键路径: {critical_path}")
+    print(f"最大延迟: {max_delay} ns")
+```
+
+### 冒险分析
+
+```python
+class HazardAnalyzer:
+    """冒险分析器"""
+
+    def __init__(self):
+        self.hazards = []
+
+    def analyze_static_hazards(self, circuit):
+        """分析静态冒险"""
+        hazards = []
+
+        # 检查每个输出
+        for output in circuit.outputs:
+            # 查找所有影响该输出的门
+            relevant_gates = [g for g in circuit.gates if g['output'] == output]
+
+            for gate in relevant_gates:
+                # 简化的冒险检测
+                if self._has_static_hazard(gate):
+                    hazards.append({
+                        'type': 'static',
+                        'output': output,
+                        'gate': gate
+                    })
+
+        return hazards
+
+    def analyze_dynamic_hazards(self, circuit):
+        """分析动态冒险"""
+        hazards = []
+
+        # 动态冒险通常出现在多级逻辑中
+        for i, gate1 in enumerate(circuit.gates):
+            for j, gate2 in enumerate(circuit.gates):
+                if i != j and self._has_dynamic_hazard(gate1, gate2):
+                    hazards.append({
+                        'type': 'dynamic',
+                        'gate1': gate1,
+                        'gate2': gate2
+                    })
+
+        return hazards
+
+    def _has_static_hazard(self, gate):
+        """检查是否有静态冒险"""
+        # 简化的静态冒险检测
+        # 实际实现会更复杂
+        return gate['type'] in ['AND', 'OR'] and len(gate['inputs']) > 2
+
+    def _has_dynamic_hazard(self, gate1, gate2):
+        """检查是否有动态冒险"""
+        # 动态冒险的简化检测
+        return (gate1['output'] in gate2['inputs'] and
+                gate1['type'] != gate2['type'])
+
+def hazard_analysis_demo():
+    """冒险分析演示"""
+
+    analyzer = HazardAnalyzer()
+
+    # 创建一个可能产生冒险的电路
+    from lecture3 import CombinationalCircuit
+    circuit = CombinationalCircuit(['A', 'B', 'C'], ['F'])
+
+    # 添加可能产生冒险的门电路
+    circuit.add_gate('AND', ['A', 'B'], 'temp1')
+    circuit.add_gate('AND', ['A', 'C'], 'temp2')
+    circuit.add_gate('OR', ['temp1', 'temp2'], 'F')
+
+    # 分析冒险
+    static_hazards = analyzer.analyze_static_hazards(circuit)
+    dynamic_hazards = analyzer.analyze_dynamic_hazards(circuit)
+
+    print("冒险分析结果:")
+    print(f"静态冒险数量: {len(static_hazards)}")
+    print(f"动态冒险数量: {len(dynamic_hazards)}")
+
+    if static_hazards:
+        print("\n静态冒险:")
+        for hazard in static_hazards:
+            print(f"  输出: {hazard['output']}")
+            print(f"  门类型: {hazard['gate']['type']}")
+```
+
+## 实验项目：组合逻辑电路设计工具
+
+### 项目概述
+
+创建一个组合逻辑电路设计工具，能够：
+1. 设计和仿真组合逻辑电路
+2. 自动化简布尔表达式
+3. 生成电路图和真值表
+4. 进行时序和冒险分析
+
+### 完整实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+
+#define MAX_VARS 10
+#define MAX_TERMS 100
+#define MAX_NAME_LEN 20
+
+typedef struct {
+    char variables[MAX_VARS][MAX_NAME_LEN];
+    int var_count;
+    int terms[MAX_TERMS];  // 最小项索引
+    int term_count;
+    char expression[256];
+} BooleanFunction;
+
+// 解析布尔表达式
+BooleanFunction parse_boolean_expression(const char *expr) {
+    BooleanFunction func;
+    memset(&func, 0, sizeof(func));
+
+    // 简化的表达式解析
+    // 实际实现需要完整的语法分析
+
+    // 提取变量
+    const char *p = expr;
+    while (*p) {
+        if (isalpha(*p)) {
+            // 检查是否已存在
+            bool found = false;
+            for (int i = 0; i < func.var_count; i++) {
+                if (func.variables[i][0] == *p) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found && func.var_count < MAX_VARS) {
+                func.variables[func.var_count][0] = *p;
+                func.variables[func.var_count][1] = '\0';
+                func.var_count++;
+            }
+        }
+        p++;
+    }
+
+    strncpy(func.expression, expr, sizeof(func.expression) - 1);
+    func.expression[sizeof(func.expression) - 1] = '\0';
+
+    return func;
+}
+
+// 计算最小项
+void calculate_minterms(BooleanFunction *func) {
+    func->term_count = 0;
+    int total_combinations = 1 << func->var_count;
+
+    for (int i = 0; i < total_combinations; i++) {
+        // 设置变量值
+        bool values[MAX_VARS];
+        for (int j = 0; j < func->var_count; j++) {
+            values[j] = (i >> j) & 1;
+        }
+
+        // 计算表达式值（简化版本）
+        bool result = false;
+        // 这里应该实现完整的表达式计算
+        // 为演示目的，我们使用一个简单的函数
+        if (strstr(func->expression, "A&B") && values[0] && values[1]) {
+            result = true;
+        }
+        if (strstr(func->expression, "A|B") && (values[0] || values[1])) {
+            result = true;
+        }
+
+        if (result) {
+            func->terms[func->term_count++] = i;
+        }
+    }
+}
+
+// 生成真值表
+void generate_truth_table(BooleanFunction *func) {
+    printf("真值表 (F = %s):\n", func->expression);
+
+    // 打印表头
+    for (int i = 0; i < func->var_count; i++) {
+        printf("%s ", func->variables[i]);
+    }
+    printf("| F\n");
+
+    for (int i = 0; i < func->var_count + 3; i++) {
+        printf("-");
+    }
+    printf("\n");
+
+    // 生成所有组合
+    int total_combinations = 1 << func->var_count;
+    for (int i = 0; i < total_combinations; i++) {
+        // 打印输入值
+        for (int j = 0; j < func->var_count; j++) {
+            printf("%d ", (i >> j) & 1);
+        }
+
+        // 计算并打印输出值
+        bool is_minterm = false;
+        for (int k = 0; k < func->term_count; k++) {
+            if (func->terms[k] == i) {
+                is_minterm = true;
+                break;
+            }
+        }
+
+        printf("| %d\n", is_minterm);
+    }
+}
+
+// 简化的Quine-McCluskey算法
+void quine_mccluskey_simplify(BooleanFunction *func) {
+    printf("Quine-McCluskey化简:\n");
+    printf("原函数: F = %s\n", func->expression);
+    printf("最小项: ");
+
+    for (int i = 0; i < func->term_count; i++) {
+        printf("m%d", func->terms[i]);
+        if (i < func->term_count - 1) printf(", ");
+    }
+    printf("\n");
+
+    // 这里应该实现完整的Q-M算法
+    // 为演示目的，我们给出一个简化的结果
+    printf("化简结果: F = A'B + AB' + AB\n");
+}
+
+// 主函数
+int main() {
+    printf("组合逻辑电路设计工具\n");
+    printf("====================\n\n");
+
+    while (1) {
+        printf("1. 输入布尔表达式\n");
+        printf("2. 生成真值表\n");
+        printf("3. 化简表达式\n");
+        printf("4. 退出\n");
+        printf("选择: ");
+
+        int choice;
+        scanf("%d", &choice);
+
+        static BooleanFunction current_func;
+
+        switch (choice) {
+            case 1: {
+                printf("输入布尔表达式 (例如: A&B|A&!B): ");
+                char expr[256];
+                scanf("%s", expr);
+
+                current_func = parse_boolean_expression(expr);
+                calculate_minterms(&current_func);
+
+                printf("解析成功! 变量数量: %d\n", current_func.var_count);
+                printf("最小项数量: %d\n", current_func.term_count);
+                break;
+            }
+
+            case 2:
+                if (current_func.var_count == 0) {
+                    printf("请先输入布尔表达式\n");
+                } else {
+                    generate_truth_table(&current_func);
+                }
+                break;
+
+            case 3:
+                if (current_func.var_count == 0) {
+                    printf("请先输入布尔表达式\n");
+                } else {
+                    quine_mccluskey_simplify(&current_func);
+                }
+                break;
+
+            case 4:
+                return 0;
+
+            default:
+                printf("无效选择!\n");
+        }
+
+        printf("\n");
+    }
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **组合逻辑特性**：
+   - 为什么组合逻辑电路没有记忆功能？
+   - 如何判断一个电路是组合逻辑还是时序逻辑？
+
+2. **布尔代数**：
+   - 使用德摩根定律化简：!(A + !(B + C))
+   - 证明：A ⊕ B = (A + B) · !(A · B)
+
+3. **卡诺图**：
+   - 使用卡诺图化简：F(A,B,C,D) = Σm(0,1,2,4,5,6,8,9,12,13,14)
+   - 什么情况下不能使用卡诺图化简？
+
+4. **冒险问题**：
+   - 什么是静态冒险？什么是动态冒险？
+   - 如何消除电路中的冒险？
+
+### 编程练习
+
+1. **布尔函数计算器**：实现完整的布尔表达式计算器
+
+2. **Q-M算法**：实现完整的Quine-McCluskey化简算法
+
+3. **电路仿真器**：创建图形化的电路仿真工具
+
+4. **优化算法**：实现启发式的电路优化算法
+
+### 实验挑战
+
+1. **ALU设计**：设计一个完整的32位ALU
+
+2. **乘法器**：实现8位×8位乘法器
+
+3. **除法器**：实现32位÷16位除法器
+
+## 扩展阅读
+
+- **教材章节**：*Digital Design and Computer Architecture* 第3章
+- **在线资源**：
+  - [Logic Friday](http://sontrak.com/) - 免费的逻辑设计工具
+  - [Circuit Simulator](https://www.falstad.com/circuit/) - 在线电路仿真
+- **推荐视频**：
+  - [Boolean Logic (YouTube)](https://www.youtube.com/watch?v=gI-qXk7XojA)
+  - [Karnaugh Maps (YouTube)](https://www.youtube.com/watch?v=7EucwfL2zrM)
+
+---
+
+*下一讲将深入探讨时序逻辑电路，包括触发器、寄存器和状态机的设计。*

@@ -1,0 +1,1118 @@
+---
+title: "第12讲：并发Bug分析"
+description: "南京大学操作系统2025 - 常见并发错误类型、死锁检测与避免、数据竞争分析"
+---
+
+# 第12讲：并发Bug分析
+
+## 并发错误概述
+
+### 并发错误的特征
+
+并发错误具有以下特征：
+- **不可重现性**：由于线程调度的不确定性，错误难以重现
+- **时序相关**：错误依赖于线程的执行顺序
+- **环境依赖**：错误可能只在特定的硬件或系统配置下出现
+- **调试困难**：传统的调试方法难以定位并发错误
+
+### 常见的并发错误类型
+
+| 错误类型 | 描述 | 典型症状 |
+|----------|------|----------|
+| 数据竞争 | 多个线程同时访问共享数据 | 结果不一致、程序崩溃 |
+| 死锁 | 线程相互等待对方释放资源 | 程序挂起、无响应 |
+| 活锁 | 线程不断重试但无法进展 | CPU占用率高、无进展 |
+| 饥饿 | 线程长时间无法获得资源 | 响应慢、性能下降 |
+| 顺序违反 | 操作顺序不符合预期 | 逻辑错误、状态不一致 |
+
+## 数据竞争分析
+
+### 数据竞争的定义
+
+数据竞争是指两个或更多线程并发访问同一内存位置，且至少有一个访问是写操作，且没有使用适当的同步机制。
+
+### 数据竞争的检测
+
+**静态检测**
+```c
+// 数据竞争示例
+#include <pthread.h>
+
+int shared_counter = 0;
+
+void* increment_counter(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        shared_counter++;  // 数据竞争：未加锁的共享变量访问
+    }
+    return NULL;
+}
+
+// 静态分析工具可以检测到此数据竞争
+```
+
+**动态检测**
+```c
+// 使用ThreadSanitizer进行动态检测
+// 编译选项：gcc -fsanitize=thread -g
+
+#include <pthread.h>
+
+int shared_counter = 0;
+pthread_mutex_t counter_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void* safe_increment(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        pthread_mutex_lock(&counter_mutex);
+        shared_counter++;  // 安全的访问
+        pthread_mutex_unlock(&counter_mutex);
+    }
+    return NULL;
+}
+
+void* unsafe_increment(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        shared_counter++;  // ThreadSanitizer会检测到数据竞争
+    }
+    return NULL;
+}
+```
+
+### 数据竞争的预防
+
+**同步机制的使用**
+```c
+#include <stdatomic.h>
+
+// 使用原子操作
+atomic_int atomic_counter = ATOMIC_VAR_INIT(0);
+
+void* atomic_increment(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        atomic_fetch_add(&atomic_counter, 1);
+    }
+    return NULL;
+}
+
+// 使用互斥锁
+typedef struct {
+    int value;
+    pthread_mutex_t mutex;
+} safe_counter_t;
+
+void safe_counter_init(safe_counter_t *counter) {
+    counter->value = 0;
+    pthread_mutex_init(&counter->mutex, NULL);
+}
+
+void safe_counter_increment(safe_counter_t *counter) {
+    pthread_mutex_lock(&counter->mutex);
+    counter->value++;
+    pthread_mutex_unlock(&counter->mutex);
+}
+```
+
+**线程局部存储**
+```c
+#include <pthread.h>
+
+__thread int thread_local_counter = 0;  // 线程局部变量
+
+void* thread_local_increment(void *arg) {
+    for (int i = 0; i < 1000000; i++) {
+        thread_local_counter++;  // 每个线程有自己的副本
+    }
+    printf("Thread local counter: %d\n", thread_local_counter);
+    return NULL;
+}
+```
+
+### 数据竞争的分析工具
+
+**Valgrind Helgrind**
+```bash
+# 使用Helgrind检测数据竞争
+valgrind --tool=helgrind ./program
+```
+
+**ThreadSanitizer**
+```bash
+# 编译时启用ThreadSanitizer
+gcc -fsanitize=thread -g program.c -o program
+
+# 运行程序
+./program
+```
+
+**自定义数据竞争检测器**
+```c
+#include <pthread.h>
+#include <stdatomic.h>
+
+typedef struct {
+    void *address;
+    size_t size;
+    int thread_id;
+    int is_write;
+    pthread_mutex_t lock;
+} access_record_t;
+
+#define MAX_RECORDS 10000
+access_record_t access_records[MAX_RECORDS];
+atomic_int record_count = ATOMIC_VAR_INIT(0);
+
+void record_access(void *address, size_t size, int is_write) {
+    int current_count = atomic_fetch_add(&record_count, 1);
+    if (current_count < MAX_RECORDS) {
+        access_records[current_count].address = address;
+        access_records[current_count].size = size;
+        access_records[current_count].thread_id = pthread_self();
+        access_records[current_count].is_write = is_write;
+    }
+}
+
+void check_data_race(void *address, size_t size, int is_write) {
+    for (int i = 0; i < record_count; i++) {
+        access_record_t *record = &access_records[i];
+
+        // 检查是否访问同一内存区域
+        if (record->address <= address &&
+            (char *)record->address + record->size > (char *)address &&
+            record->thread_id != pthread_self()) {
+
+            // 检查是否至少有一个是写操作
+            if (record->is_write || is_write) {
+                printf("Potential data race detected!\n");
+                printf("Address: %p, Size: %zu\n", address, size);
+                printf("Thread %d %s, Thread %d %s\n",
+                       record->thread_id, record->is_write ? "write" : "read",
+                       pthread_self(), is_write ? "write" : "read");
+            }
+        }
+    }
+}
+```
+
+## 死锁分析与处理
+
+### 死锁的必要条件
+
+死锁的四个必要条件（Coffman条件）：
+1. **互斥条件**：资源一次只能被一个线程使用
+2. **占有并等待**：线程持有资源的同时等待其他资源
+3. **不可剥夺**：资源不能被强制剥夺
+4. **循环等待**：存在线程间的环形等待链
+
+### 死锁的示例
+
+**经典死锁示例**
+```c
+#include <pthread.h>
+
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
+
+void* thread1_function(void *arg) {
+    pthread_mutex_lock(&mutex1);
+    printf("Thread 1: Locked mutex 1\n");
+
+    sleep(1);  // 增加死锁概率
+
+    pthread_mutex_lock(&mutex2);  // 等待mutex2
+    printf("Thread 1: Locked mutex 2\n");
+
+    pthread_mutex_unlock(&mutex2);
+    pthread_mutex_unlock(&mutex1);
+
+    return NULL;
+}
+
+void* thread2_function(void *arg) {
+    pthread_mutex_lock(&mutex2);
+    printf("Thread 2: Locked mutex 2\n");
+
+    sleep(1);  // 增加死锁概率
+
+    pthread_mutex_lock(&mutex1);  // 等待mutex1
+    printf("Thread 2: Locked mutex 1\n");
+
+    pthread_mutex_unlock(&mutex1);
+    pthread_mutex_unlock(&mutex2);
+
+    return NULL;
+}
+
+int main() {
+    pthread_t thread1, thread2;
+
+    pthread_create(&thread1, NULL, thread1_function, NULL);
+    pthread_create(&thread2, NULL, thread2_function, NULL);
+
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+
+    return 0;
+}
+```
+
+### 死锁的预防策略
+
+**破坏互斥条件**
+```c
+// 使用读写锁允许多个读者
+pthread_rwlock_t rwlock = PTHREAD_RWLOCK_INITIALIZER;
+
+void* reader_function(void *arg) {
+    pthread_rwlock_rdlock(&rwlock);
+    // 读取共享数据
+    pthread_rwlock_unlock(&rwlock);
+    return NULL;
+}
+```
+
+**破坏占有并等待**
+```c
+// 一次性获取所有资源
+int try_lock_all(pthread_mutex_t *mutexes, int count) {
+    for (int i = 0; i < count; i++) {
+        if (pthread_mutex_trylock(&mutexes[i]) != 0) {
+            // 获取失败，释放已获取的锁
+            for (int j = 0; j < i; j++) {
+                pthread_mutex_unlock(&mutexes[j]);
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void safe_function() {
+    pthread_mutex_t mutexes[] = {mutex1, mutex2};
+
+    while (try_lock_all(mutexes, 2) != 0) {
+        usleep(1000);  // 短暂等待后重试
+    }
+
+    // 执行临界区代码
+
+    for (int i = 0; i < 2; i++) {
+        pthread_mutex_unlock(&mutexes[i]);
+    }
+}
+```
+
+**破坏不可剥夺条件**
+```c
+// 使用带超时的锁
+int try_lock_with_timeout(pthread_mutex_t *mutex, int timeout_ms) {
+    struct timespec abs_time;
+    clock_gettime(CLOCK_REALTIME, &abs_time);
+
+    abs_time.tv_sec += timeout_ms / 1000;
+    abs_time.tv_nsec += (timeout_ms % 1000) * 1000000;
+
+    if (abs_time.tv_nsec >= 1000000000) {
+        abs_time.tv_sec++;
+        abs_time.tv_nsec -= 1000000000;
+    }
+
+    return pthread_mutex_timedlock(mutex, &abs_time);
+}
+```
+
+**破坏循环等待**
+```c
+// 按固定顺序获取锁
+void ordered_lock(pthread_mutex_t *lower_mutex, pthread_mutex_t *higher_mutex) {
+    if (lower_mutex < higher_mutex) {
+        pthread_mutex_lock(lower_mutex);
+        pthread_mutex_lock(higher_mutex);
+    } else {
+        pthread_mutex_lock(higher_mutex);
+        pthread_mutex_lock(lower_mutex);
+    }
+}
+
+void ordered_unlock(pthread_mutex_t *lower_mutex, pthread_mutex_t *higher_mutex) {
+    pthread_mutex_unlock(higher_mutex);
+    pthread_mutex_unlock(lower_mutex);
+}
+
+void safe_thread_function() {
+    // 确保按地址顺序获取锁
+    ordered_lock(&mutex1, &mutex2);
+
+    // 执行临界区代码
+
+    ordered_unlock(&mutex1, &mutex2);
+}
+```
+
+### 死锁的检测与恢复
+
+**资源分配图检测**
+```c
+typedef struct {
+    int thread_id;
+    int *held_resources;
+    int held_count;
+    int *waiting_for;
+    int waiting_count;
+} thread_state_t;
+
+#define MAX_THREADS 10
+#define MAX_RESOURCES 20
+
+thread_state_t threads[MAX_THREADS];
+int resource_allocations[MAX_RESOURCES][MAX_THREADS];
+
+int detect_deadlock() {
+    // 构建等待图
+    int wait_graph[MAX_THREADS][MAX_THREADS] = {0};
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        for (int j = 0; j < threads[i].waiting_count; j++) {
+            int resource = threads[i].waiting_for[j];
+            for (int k = 0; k < MAX_THREADS; k++) {
+                if (resource_allocations[resource][k]) {
+                    wait_graph[i][k] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 检测环路
+    int visited[MAX_THREADS] = {0};
+    int recursion_stack[MAX_THREADS] = {0};
+
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (has_cycle(wait_graph, i, visited, recursion_stack)) {
+            return 1;  // 发现死锁
+        }
+    }
+
+    return 0;  // 无死锁
+}
+
+int has_cycle(int graph[MAX_THREADS][MAX_THREADS], int node,
+              int visited[], int recursion_stack[]) {
+    if (!visited[node]) {
+        visited[node] = 1;
+        recursion_stack[node] = 1;
+
+        for (int i = 0; i < MAX_THREADS; i++) {
+            if (graph[node][i]) {
+                if (!visited[i] && has_cycle(graph, i, visited, recursion_stack)) {
+                    return 1;
+                } else if (recursion_stack[i]) {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    recursion_stack[node] = 0;
+    return 0;
+}
+```
+
+**超时机制**
+```c
+#include <signal.h>
+#include <time.h>
+
+timer_t deadlock_timer;
+
+void deadlock_timeout_handler(int sig) {
+    printf("Deadlock timeout detected!\n");
+    // 执行死锁恢复操作
+    exit(1);
+}
+
+void setup_deadlock_detection() {
+    struct sigaction sa;
+    sa.sa_handler = deadlock_timeout_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    sigaction(SIGALRM, &sa, NULL);
+
+    struct itimerval timer;
+    timer.it_value.tv_sec = 30;  // 30秒超时
+    timer.it_value.tv_usec = 0;
+    timer.it_interval.tv_sec = 0;
+    timer.it_interval.tv_usec = 0;
+
+    setitimer(ITIMER_REAL, &timer, NULL);
+}
+```
+
+## 活锁和饥饿分析
+
+### 活锁的检测与解决
+
+**活锁示例**
+```c
+#include <pthread.h>
+
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
+
+void* livelock_thread1(void *arg) {
+    while (1) {
+        if (pthread_mutex_trylock(&mutex1) == 0) {
+            printf("Thread 1: Got mutex 1\n");
+
+            if (pthread_mutex_trylock(&mutex2) == 0) {
+                printf("Thread 1: Got both mutexes\n");
+                // 执行工作
+                pthread_mutex_unlock(&mutex2);
+                pthread_mutex_unlock(&mutex1);
+                break;
+            } else {
+                printf("Thread 1: Failed to get mutex 2, releasing mutex 1\n");
+                pthread_mutex_unlock(&mutex1);
+                usleep(1000);  // 避免活锁
+            }
+        }
+    }
+    return NULL;
+}
+
+void* livelock_thread2(void *arg) {
+    while (1) {
+        if (pthread_mutex_trylock(&mutex2) == 0) {
+            printf("Thread 2: Got mutex 2\n");
+
+            if (pthread_mutex_trylock(&mutex1) == 0) {
+                printf("Thread 2: Got both mutexes\n");
+                // 执行工作
+                pthread_mutex_unlock(&mutex1);
+                pthread_mutex_unlock(&mutex2);
+                break;
+            } else {
+                printf("Thread 2: Failed to get mutex 1, releasing mutex 2\n");
+                pthread_mutex_unlock(&mutex2);
+                usleep(1500);  // 避免活锁
+            }
+        }
+    }
+    return NULL;
+}
+```
+
+**活锁的解决方案**
+```c
+// 使用指数退避算法
+#include <stdlib.h>
+#include <time.h>
+
+void exponential_backoff(int attempt) {
+    int max_delay = 1000000;  // 1秒
+    int delay = (rand() % (1 << attempt)) * 1000;  // 指数退避
+    delay = (delay > max_delay) ? max_delay : delay;
+
+    usleep(delay);
+}
+
+void* backoff_thread1(void *arg) {
+    int attempt = 0;
+
+    while (1) {
+        if (pthread_mutex_trylock(&mutex1) == 0) {
+            if (pthread_mutex_trylock(&mutex2) == 0) {
+                // 成功获取两个锁
+                break;
+            } else {
+                pthread_mutex_unlock(&mutex1);
+                exponential_backoff(attempt++);
+            }
+        } else {
+            exponential_backoff(attempt++);
+        }
+    }
+
+    // 执行工作
+    pthread_mutex_unlock(&mutex2);
+    pthread_mutex_unlock(&mutex1);
+
+    return NULL;
+}
+```
+
+### 饥饿的预防
+
+**公平调度**
+```c
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int waiting_threads;
+    int current_ticket;
+    int next_ticket;
+} fair_mutex_t;
+
+void fair_mutex_init(fair_mutex_t *fmutex) {
+    pthread_mutex_init(&fmutex->mutex, NULL);
+    pthread_cond_init(&fmutex->cond, NULL);
+    fmutex->waiting_threads = 0;
+    fmutex->current_ticket = 0;
+    fmutex->next_ticket = 0;
+}
+
+void fair_mutex_lock(fair_mutex_t *fmutex) {
+    pthread_mutex_lock(&fmutex->mutex);
+
+    int my_ticket = fmutex->next_ticket++;
+    fmutex->waiting_threads++;
+
+    while (my_ticket != fmutex->current_ticket) {
+        pthread_cond_wait(&fmutex->cond, &fmutex->mutex);
+    }
+
+    fmutex->waiting_threads--;
+    pthread_mutex_unlock(&fmutex->mutex);
+}
+
+void fair_mutex_unlock(fair_mutex_t *fmutex) {
+    pthread_mutex_lock(&fmutex->mutex);
+
+    fmutex->current_ticket++;
+    pthread_cond_broadcast(&fmutex->cond);  // 唤醒所有线程
+
+    pthread_mutex_unlock(&fmutex->mutex);
+}
+```
+
+## 顺序违反分析
+
+### 内存顺序问题
+
+**内存重排序示例**
+```c
+#include <stdatomic.h>
+
+int x = 0, y = 0;
+atomic_int flag1 = ATOMIC_VAR_INIT(0);
+atomic_int flag2 = ATOMIC_VAR_INIT(0);
+
+void* thread1(void *arg) {
+    x = 1;
+    atomic_store(&flag1, 1);
+    return NULL;
+}
+
+void* thread2(void *arg) {
+    y = 1;
+    atomic_store(&flag2, 1);
+    return NULL;
+}
+
+void* observer_thread(void *arg) {
+    while (atomic_load(&flag1) == 0 || atomic_load(&flag2) == 0) {
+        // 等待
+    }
+
+    // 由于内存重排序，可能观察到 x=0 && y=0
+    printf("x=%d, y=%d\n", x, y);
+    return NULL;
+}
+```
+
+**内存屏障的使用**
+```c
+#include <stdatomic.h>
+
+void* thread1_with_barrier(void *arg) {
+    x = 1;
+    atomic_thread_fence(memory_order_release);
+    atomic_store(&flag1, 1);
+    return NULL;
+}
+
+void* thread2_with_barrier(void *arg) {
+    y = 1;
+    atomic_thread_fence(memory_order_release);
+    atomic_store(&flag2, 1);
+    return NULL;
+}
+
+void* observer_thread_with_barrier(void *arg) {
+    while (atomic_load(&flag1) == 0 || atomic_load(&flag2) == 0) {
+        // 等待
+    }
+
+    atomic_thread_fence(memory_order_acquire);
+
+    // 由于内存屏障，不会观察到 x=0 && y=0
+    printf("x=%d, y=%d\n", x, y);
+    return NULL;
+}
+```
+
+## 并发调试技术
+
+### 日志记录
+
+**线程安全日志**
+```c
+#include <pthread.h>
+#include <time.h>
+#include <stdarg.h>
+
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void thread_safe_log(const char *format, ...) {
+    pthread_mutex_lock(&log_mutex);
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    printf("[%s] [Thread %lu] ", timestamp, (unsigned long)pthread_self());
+
+    va_list args;
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+
+    fflush(stdout);
+
+    pthread_mutex_unlock(&log_mutex);
+}
+```
+
+### 断言检查
+
+**并发断言**
+```c
+#include <assert.h>
+
+#define CONCURRENT_ASSERT(condition) \
+    do { \
+        pthread_mutex_lock(&assert_mutex); \
+        assert(condition); \
+        pthread_mutex_unlock(&assert_mutex); \
+    } while (0)
+
+void critical_section_with_assert() {
+    static pthread_mutex_t assert_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+    pthread_mutex_lock(&resource_mutex);
+
+    // 确保资源状态正确
+    CONCURRENT_ASSERT(resource != NULL);
+    CONCURRENT_ASSERT(resource->state == READY);
+
+    // 执行操作
+    process_resource(resource);
+
+    pthread_mutex_unlock(&resource_mutex);
+}
+```
+
+## 实验项目：并发Bug检测器
+
+### 实验目标
+
+实现一个并发Bug检测器，能够检测数据竞争、死锁和顺序违反等常见的并发错误。
+
+### 实验代码框架
+
+```c
+// concurrent_bug_detector.h
+#ifndef CONCURRENT_BUG_DETECTOR_H
+#define CONCURRENT_BUG_DETECTOR_H
+
+#include <pthread.h>
+
+// 检测器状态
+typedef enum {
+    DETECTOR_DISABLED,
+    DETECTOR_ENABLED,
+    DETECTOR_PAUSED
+} detector_state_t;
+
+// 内存访问记录
+typedef struct {
+    void *address;
+    size_t size;
+    pthread_t thread_id;
+    int is_write;
+    struct timespec timestamp;
+    int lock_held;
+} memory_access_t;
+
+// 锁获取记录
+typedef struct {
+    pthread_mutex_t *mutex;
+    pthread_t thread_id;
+    struct timespec timestamp;
+} lock_record_t;
+
+// 检测器配置
+typedef struct {
+    detector_state_t state;
+    int detect_data_races;
+    int detect_deadlocks;
+    int detect_order_violations;
+    int max_records;
+    memory_access_t *access_records;
+    lock_record_t *lock_records;
+    int access_count;
+    int lock_count;
+    pthread_mutex_t detector_mutex;
+} concurrent_bug_detector_t;
+
+// 函数声明
+void detector_init(concurrent_bug_detector_t *detector, int max_records);
+void detector_destroy(concurrent_bug_detector_t *detector);
+void detector_enable(concurrent_bug_detector_t *detector);
+void detector_disable(concurrent_bug_detector_t *detector);
+
+void detector_record_access(concurrent_bug_detector_t *detector,
+                           void *address, size_t size, int is_write);
+void detector_record_lock_acquire(concurrent_bug_detector_t *detector,
+                                  pthread_mutex_t *mutex);
+void detector_record_lock_release(concurrent_bug_detector_t *detector,
+                                  pthread_mutex_t *mutex);
+
+int detector_check_data_races(concurrent_bug_detector_t *detector);
+int detector_check_deadlocks(concurrent_bug_detector_t *detector);
+int detector_check_order_violations(concurrent_bug_detector_t *detector);
+
+void detector_report_issues(concurrent_bug_detector_t *detector);
+
+// 宏定义，用于插桩代码
+#define DETECTOR_RECORD_READ(detector, addr, size) \
+    do { \
+        if (detector->state == DETECTOR_ENABLED) { \
+            detector_record_access(detector, addr, size, 0); \
+        } \
+    } while (0)
+
+#define DETECTOR_RECORD_WRITE(detector, addr, size) \
+    do { \
+        if (detector->state == DETECTOR_ENABLED) { \
+            detector_record_access(detector, addr, size, 1); \
+        } \
+    } while (0)
+
+#define DETECTOR_RECORD_LOCK_ACQUIRE(detector, mutex) \
+    do { \
+        if (detector->state == DETECTOR_ENABLED) { \
+            detector_record_lock_acquire(detector, mutex); \
+        } \
+    } while (0)
+
+#define DETECTOR_RECORD_LOCK_RELEASE(detector, mutex) \
+    do { \
+        if (detector->state == DETECTOR_ENABLED) { \
+            detector_record_lock_release(detector, mutex); \
+        } \
+    } while (0)
+
+#endif // CONCURRENT_BUG_DETECTOR_H
+```
+
+```c
+// concurrent_bug_detector.c
+#include "concurrent_bug_detector.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+void detector_init(concurrent_bug_detector_t *detector, int max_records) {
+    detector->state = DETECTOR_ENABLED;
+    detector->detect_data_races = 1;
+    detector->detect_deadlocks = 1;
+    detector->detect_order_violations = 1;
+    detector->max_records = max_records;
+    detector->access_count = 0;
+    detector->lock_count = 0;
+
+    detector->access_records = malloc(max_records * sizeof(memory_access_t));
+    detector->lock_records = malloc(max_records * sizeof(lock_record_t));
+
+    pthread_mutex_init(&detector->detector_mutex, NULL);
+}
+
+void detector_destroy(concurrent_bug_detector_t *detector) {
+    free(detector->access_records);
+    free(detector->lock_records);
+    pthread_mutex_destroy(&detector->detector_mutex);
+}
+
+void detector_record_access(concurrent_bug_detector_t *detector,
+                           void *address, size_t size, int is_write) {
+    pthread_mutex_lock(&detector->detector_mutex);
+
+    if (detector->access_count < detector->max_records) {
+        memory_access_t *record = &detector->access_records[detector->access_count];
+        record->address = address;
+        record->size = size;
+        record->thread_id = pthread_self();
+        record->is_write = is_write;
+        clock_gettime(CLOCK_REALTIME, &record->timestamp);
+
+        // 检查当前线程是否持有锁
+        record->lock_held = 0;
+        for (int i = 0; i < detector->lock_count; i++) {
+            if (detector->lock_records[i].thread_id == pthread_self()) {
+                record->lock_held = 1;
+                break;
+            }
+        }
+
+        detector->access_count++;
+
+        // 实时检测数据竞争
+        if (detector->detect_data_races) {
+            detector_check_data_races(detector);
+        }
+    }
+
+    pthread_mutex_unlock(&detector->detector_mutex);
+}
+
+void detector_record_lock_acquire(concurrent_bug_detector_t *detector,
+                                  pthread_mutex_t *mutex) {
+    pthread_mutex_lock(&detector->detector_mutex);
+
+    if (detector->lock_count < detector->max_records) {
+        lock_record_t *record = &detector->lock_records[detector->lock_count];
+        record->mutex = mutex;
+        record->thread_id = pthread_self();
+        clock_gettime(CLOCK_REALTIME, &record->timestamp);
+
+        detector->lock_count++;
+
+        // 检测死锁
+        if (detector->detect_deadlocks) {
+            detector_check_deadlocks(detector);
+        }
+    }
+
+    pthread_mutex_unlock(&detector->detector_mutex);
+}
+
+void detector_record_lock_release(concurrent_bug_detector_t *detector,
+                                  pthread_mutex_t *mutex) {
+    pthread_mutex_lock(&detector->detector_mutex);
+
+    // 移除对应的锁记录
+    for (int i = 0; i < detector->lock_count; i++) {
+        if (detector->lock_records[i].mutex == mutex &&
+            detector->lock_records[i].thread_id == pthread_self()) {
+
+            // 移动最后一个记录到当前位置
+            if (i < detector->lock_count - 1) {
+                detector->lock_records[i] = detector->lock_records[detector->lock_count - 1];
+            }
+
+            detector->lock_count--;
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&detector->detector_mutex);
+}
+
+int detector_check_data_races(concurrent_bug_detector_t *detector) {
+    int found_races = 0;
+    memory_access_t *current = &detector->access_records[detector->access_count - 1];
+
+    // 检查与之前访问的冲突
+    for (int i = 0; i < detector->access_count - 1; i++) {
+        memory_access_t *previous = &detector->access_records[i];
+
+        // 检查是否访问重叠的内存区域
+        if (previous->address <= current->address &&
+            (char *)previous->address + previous->size > (char *)current->address &&
+            previous->thread_id != current->thread_id) {
+
+            // 检查是否至少有一个是写操作
+            if (previous->is_write || current->is_write) {
+                // 检查时间重叠
+                if (!previous->lock_held || !current->lock_held) {
+                    printf("Data race detected!\n");
+                    printf("Thread %lu %s at %p (size %zu) at %ld.%09ld\n",
+                           (unsigned long)previous->thread_id,
+                           previous->is_write ? "write" : "read",
+                           previous->address, previous->size,
+                           previous->timestamp.tv_sec, previous->timestamp.tv_nsec);
+                    printf("Thread %lu %s at %p (size %zu) at %ld.%09ld\n",
+                           (unsigned long)current->thread_id,
+                           current->is_write ? "write" : "read",
+                           current->address, current->size,
+                           current->timestamp.tv_sec, current->timestamp.tv_nsec);
+                    found_races = 1;
+                }
+            }
+        }
+    }
+
+    return found_races;
+}
+
+int detector_check_deadlocks(concurrent_bug_detector_t *detector) {
+    // 简化的死锁检测
+    // 实际实现需要更复杂的算法
+
+    // 检查是否有线程长时间持有锁
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+
+    for (int i = 0; i < detector->lock_count; i++) {
+        lock_record_t *record = &detector->lock_records[i];
+        double elapsed = now.tv_sec - record->timestamp.tv_sec +
+                        (now.tv_nsec - record->timestamp.tv_nsec) / 1e9;
+
+        if (elapsed > 5.0) {  // 5秒阈值
+            printf("Potential deadlock: Thread %lu holding lock for %.2f seconds\n",
+                   (unsigned long)record->thread_id, elapsed);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+void detector_report_issues(concurrent_bug_detector_t *detector) {
+    printf("\n=== Concurrent Bug Detector Report ===\n");
+    printf("Total access records: %d\n", detector->access_count);
+    printf("Total lock records: %d\n", detector->lock_count);
+
+    if (detector->detect_data_races) {
+        printf("\nData race detection: ");
+        if (detector_check_data_races(detector)) {
+            printf("Found issues\n");
+        } else {
+            printf("No issues found\n");
+        }
+    }
+
+    if (detector->detect_deadlocks) {
+        printf("\nDeadlock detection: ");
+        if (detector_check_deadlocks(detector)) {
+            printf("Found issues\n");
+        } else {
+            printf("No issues found\n");
+        }
+    }
+
+    printf("=======================================\n");
+}
+```
+
+### 测试程序
+
+```c
+// test_bug_detector.c
+#include "concurrent_bug_detector.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+int shared_variable = 0;
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex2 = PTHREAD_MUTEX_INITIALIZER;
+
+concurrent_bug_detector_t detector;
+
+void* data_race_thread(void *arg) {
+    for (int i = 0; i < 1000; i++) {
+        DETECTOR_RECORD_WRITE(&detector, &shared_variable, sizeof(int));
+        shared_variable++;
+        DETECTOR_RECORD_READ(&detector, &shared_variable, sizeof(int));
+    }
+    return NULL;
+}
+
+void* deadlock_thread1(void *arg) {
+    DETECTOR_RECORD_LOCK_ACQUIRE(&detector, &mutex1);
+    printf("Thread 1: Acquired mutex1\n");
+    sleep(1);
+
+    DETECTOR_RECORD_LOCK_ACQUIRE(&detector, &mutex2);
+    printf("Thread 1: Acquired mutex2\n");
+
+    DETECTOR_RECORD_LOCK_RELEASE(&detector, &mutex2);
+    DETECTOR_RECORD_LOCK_RELEASE(&detector, &mutex1);
+
+    return NULL;
+}
+
+void* deadlock_thread2(void *arg) {
+    sleep(1);
+    DETECTOR_RECORD_LOCK_ACQUIRE(&detector, &mutex2);
+    printf("Thread 2: Acquired mutex2\n");
+
+    DETECTOR_RECORD_LOCK_ACQUIRE(&detector, &mutex1);
+    printf("Thread 2: Acquired mutex1\n");
+
+    DETECTOR_RECORD_LOCK_RELEASE(&detector, &mutex1);
+    DETECTOR_RECORD_LOCK_RELEASE(&detector, &mutex2);
+
+    return NULL;
+}
+
+int main() {
+    pthread_t t1, t2, t3, t4;
+
+    // 初始化检测器
+    detector_init(&detector, 10000);
+
+    // 测试数据竞争
+    printf("Testing data race detection...\n");
+    pthread_create(&t1, NULL, data_race_thread, NULL);
+    pthread_create(&t2, NULL, data_race_thread, NULL);
+
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    // 测试死锁（设置超时避免程序挂起）
+    printf("\nTesting deadlock detection...\n");
+    pthread_create(&t3, NULL, deadlock_thread1, NULL);
+    pthread_create(&t4, NULL, deadlock_thread2, NULL);
+
+    // 等待一段时间检测死锁
+    sleep(3);
+
+    // 生成报告
+    detector_report_issues(&detector);
+
+    // 清理
+    detector_destroy(&detector);
+
+    return 0;
+}
+```
+
+### 实验扩展
+
+1. **性能优化**：优化检测器的性能，减少对目标程序的影响
+2. **可视化**：添加并发错误的可视化展示功能
+3. **机器学习**：使用机器学习技术提高检测准确性
+4. **分布式支持**：扩展检测器以支持分布式系统
+
+## 课后练习
+
+1. **思考题**：分析数据竞争和死锁的区别，讨论它们在实际系统中的影响。
+
+2. **编程题**：实现一个能够检测顺序违反的并发Bug检测器。
+
+3. **设计题**：设计一个适合AI训练框架的并发Bug检测系统，考虑GPU和CPU之间的同步问题。
+
+## 下一讲预告
+
+第13讲：并发性能优化 - 并发算法设计、无锁数据结构、内存模型。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第12讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect12.md](https://jyywiki.cn/OS/2025/lect12.md)*

@@ -1,0 +1,1466 @@
+---
+title: "容错与高可用设计"
+description: "深入理解分布式系统的容错机制、熔断器模式、重试策略和高可用架构设计"
+---
+
+# 第7周：容错与高可用设计
+
+## 本周学习目标
+
+- 理解分布式系统中的容错概念和重要性
+- 掌握熔断器模式及其实现
+- 学习各种重试策略和退避算法
+- 掌握限流、降级和隔仓模式
+- 理解高可用架构设计原则
+
+## 容错基础概念
+
+### 什么是容错？
+
+容错(Fault Tolerance)是指系统在遇到硬件故障、软件错误或网络问题时仍能继续正常工作的能力。容错设计的目标是：
+- 提高系统可靠性
+- 保证服务质量
+- 减少故障影响范围
+- 实现快速恢复
+
+### 故障类型分类
+
+```python
+# 故障类型枚举
+from enum import Enum
+from typing import List, Dict, Optional, Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import time
+import random
+from functools import wraps
+
+class FaultType(Enum):
+    """故障类型"""
+    HARDWARE = "hardware"           # 硬件故障
+    SOFTWARE = "software"           # 软件故障
+    NETWORK = "network"            # 网络故障
+    TIMEOUT = "timeout"            # 超时故障
+    OVERLOAD = "overload"          # 过载故障
+    DATA_CORRUPTION = "data_corruption"  # 数据损坏
+
+class FaultSeverity(Enum):
+    """故障严重程度"""
+    LOW = "low"                    # 低严重度
+    MEDIUM = "medium"              # 中等严重度
+    HIGH = "high"                  # 高严重度
+    CRITICAL = "critical"          # 严重故障
+
+@dataclass
+class Fault:
+    """故障事件"""
+    id: str
+    type: FaultType
+    severity: FaultSeverity
+    timestamp: datetime
+    service: str
+    description: str
+    affected_components: List[str]
+    estimated_recovery_time: Optional[timedelta] = None
+
+class FaultDetector:
+    """故障检测器"""
+
+    def __init__(self):
+        self.detected_faults: List[Fault] = []
+        self.detection_rules = {}
+
+    def add_detection_rule(self, fault_type: FaultType, condition: Callable):
+        """添加故障检测规则"""
+        self.detection_rules[fault_type] = condition
+
+    def check_system(self, system_metrics: Dict) -> List[Fault]:
+        """检查系统状态"""
+        detected = []
+
+        for fault_type, condition in self.detection_rules.items():
+            if condition(system_metrics):
+                fault = Fault(
+                    id=f"fault_{int(time.time())}_{random.randint(1000, 9999)}",
+                    type=fault_type,
+                    severity=self._determine_severity(fault_type, system_metrics),
+                    timestamp=datetime.now(),
+                    service=system_metrics.get('service', 'unknown'),
+                    description=f"Detected {fault_type.value} fault",
+                    affected_components=self._identify_affected_components(fault_type, system_metrics)
+                )
+                detected.append(fault)
+                self.detected_faults.append(fault)
+
+        return detected
+
+    def _determine_severity(self, fault_type: FaultType, metrics: Dict) -> FaultSeverity:
+        """确定故障严重程度"""
+        error_rate = metrics.get('error_rate', 0)
+        response_time = metrics.get('response_time', 0)
+
+        if error_rate > 0.5 or response_time > 5.0:
+            return FaultSeverity.CRITICAL
+        elif error_rate > 0.2 or response_time > 2.0:
+            return FaultSeverity.HIGH
+        elif error_rate > 0.1 or response_time > 1.0:
+            return FaultSeverity.MEDIUM
+        else:
+            return FaultSeverity.LOW
+
+    def _identify_affected_components(self, fault_type: FaultType, metrics: Dict) -> List[str]:
+        """识别受影响的组件"""
+        components = []
+        service = metrics.get('service', 'unknown')
+
+        if fault_type in [FaultType.NETWORK, FaultType.TIMEOUT]:
+            components.extend([f"{service}_api", f"{service}_database"])
+        elif fault_type == FaultType.OVERLOAD:
+            components.extend([f"{service}_server", f"{service}_cache"])
+        elif fault_type == FaultType.DATA_CORRUPTION:
+            components.extend([f"{service}_database", f"{service}_storage"])
+
+        return components
+```
+
+## 熔断器模式
+
+### 熔断器原理
+
+熔断器模式(Circuit Breaker)是一种防止级联故障的设计模式。当某个服务持续失败时，熔断器会打开，暂时阻止对该服务的调用，避免资源浪费和系统崩溃。
+
+```python
+# 熔断器状态枚举
+from enum import Enum
+from typing import Optional, Callable, Any
+import time
+
+class CircuitState(Enum):
+    """熔断器状态"""
+    CLOSED = "closed"      # 关闭状态：正常调用
+    OPEN = "open"          # 打开状态：快速失败
+    HALF_OPEN = "half_open" # 半开状态：尝试恢复
+
+class CircuitBreaker:
+    """熔断器实现"""
+
+    def __init__(self,
+                 failure_threshold: int = 5,
+                 recovery_timeout: float = 60.0,
+                 expected_exception: tuple = (Exception,)):
+        """
+        初始化熔断器
+
+        Args:
+            failure_threshold: 失败阈值，达到此值后熔断器打开
+            recovery_timeout: 恢复超时时间，单位秒
+            expected_exception: 预期的异常类型
+        """
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.expected_exception = expected_exception
+
+        self.state = CircuitState.CLOSED
+        self.failure_count = 0
+        self.last_failure_time: Optional[float] = None
+        self.success_count = 0
+        self.success_threshold = 3  # 半开状态下的成功调用阈值
+
+    def __call__(self, func: Callable) -> Callable:
+        """装饰器方式使用"""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return self.call(func, *args, **kwargs)
+        return wrapper
+
+    def call(self, func: Callable, *args, **kwargs) -> Any:
+        """调用受保护的函数"""
+        if self.state == CircuitState.OPEN:
+            if self._should_attempt_reset():
+                self.state = CircuitState.HALF_OPEN
+                self.success_count = 0
+            else:
+                raise CircuitBreakerOpenError("Circuit breaker is open")
+
+        try:
+            result = func(*args, **kwargs)
+            self._on_success()
+            return result
+        except self.expected_exception as e:
+            self._on_failure()
+            raise e
+
+    def _should_attempt_reset(self) -> bool:
+        """判断是否应该尝试重置"""
+        if self.last_failure_time is None:
+            return True
+
+        return time.time() - self.last_failure_time >= self.recovery_timeout
+
+    def _on_success(self):
+        """成功调用后的处理"""
+        self.failure_count = 0
+
+        if self.state == CircuitState.HALF_OPEN:
+            self.success_count += 1
+            if self.success_count >= self.success_threshold:
+                self.state = CircuitState.CLOSED
+                self.success_count = 0
+
+    def _on_failure(self):
+        """失败调用后的处理"""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.OPEN
+        elif (self.state == CircuitState.CLOSED and
+              self.failure_count >= self.failure_threshold):
+            self.state = CircuitState.OPEN
+
+    def get_state(self) -> Dict:
+        """获取熔断器状态"""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "last_failure_time": self.last_failure_time
+        }
+
+class CircuitBreakerOpenError(Exception):
+    """熔断器打开异常"""
+    pass
+```
+
+### 熔断器实践应用
+
+```python
+# 熔断器实践应用
+class ServiceCircuitBreaker:
+    """服务熔断器管理"""
+
+    def __init__(self):
+        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
+
+    def get_circuit_breaker(self, service_name: str) -> CircuitBreaker:
+        """获取服务的熔断器"""
+        if service_name not in self.circuit_breakers:
+            # 为不同服务配置不同的熔断器参数
+            if service_name.endswith("database"):
+                # 数据库服务：更严格的熔断策略
+                self.circuit_breakers[service_name] = CircuitBreaker(
+                    failure_threshold=3,
+                    recovery_timeout=30.0,
+                    expected_exception=(ConnectionError, TimeoutError)
+                )
+            elif service_name.endswith("cache"):
+                # 缓存服务：较宽松的熔断策略
+                self.circuit_breakers[service_name] = CircuitBreaker(
+                    failure_threshold=10,
+                    recovery_timeout=10.0,
+                    expected_exception=(ConnectionError,)
+                )
+            else:
+                # 默认配置
+                self.circuit_breakers[service_name] = CircuitBreaker()
+
+        return self.circuit_breakers[service_name]
+
+    def call_service(self, service_name: str, func: Callable, *args, **kwargs) -> Any:
+        """调用服务"""
+        circuit_breaker = self.get_circuit_breaker(service_name)
+        return circuit_breaker.call(func, *args, **kwargs)
+
+    def get_all_states(self) -> Dict[str, Dict]:
+        """获取所有熔断器状态"""
+        return {name: cb.get_state() for name, cb in self.circuit_breakers.items()}
+
+# 熔断器使用示例
+def circuit_breaker_demo():
+    """熔断器演示"""
+    service_cb = ServiceCircuitBreaker()
+
+    # 模拟服务调用
+    def unreliable_database_call():
+        """不可靠的数据库调用"""
+        if random.random() < 0.7:  # 70%概率失败
+            raise ConnectionError("Database connection failed")
+        return "Database result"
+
+    def unreliable_cache_call():
+        """不可靠的缓存调用"""
+        if random.random() < 0.3:  # 30%概率失败
+            raise ConnectionError("Cache connection failed")
+        return "Cache result"
+
+    # 调用数据库服务
+    for i in range(10):
+        try:
+            result = service_cb.call_service("user_database", unreliable_database_call)
+            print(f"Call {i+1}: Success - {result}")
+        except CircuitBreakerOpenError:
+            print(f"Call {i+1}: Circuit breaker open")
+        except ConnectionError as e:
+            print(f"Call {i+1}: Failed - {e}")
+
+    # 查看熔断器状态
+    print("\nCircuit breaker states:")
+    states = service_cb.get_all_states()
+    for service, state in states.items():
+        print(f"{service}: {state}")
+```
+
+## 重试机制
+
+### 重试策略设计
+
+```python
+# 重试策略实现
+import time
+from typing import Callable, Optional, List
+from functools import wraps
+from enum import Enum
+
+class RetryStrategy(Enum):
+    """重试策略"""
+    FIXED_DELAY = "fixed_delay"           # 固定延迟
+    EXPONENTIAL_BACKOFF = "exponential"   # 指数退避
+    LINEAR_BACKOFF = "linear"            # 线性退避
+    FIBONACCI_BACKOFF = "fibonacci"      # 斐波那契退避
+
+class RetryConfig:
+    """重试配置"""
+
+    def __init__(self,
+                 max_attempts: int = 3,
+                 strategy: RetryStrategy = RetryStrategy.EXPONENTIAL_BACKOFF,
+                 base_delay: float = 1.0,
+                 max_delay: float = 60.0,
+                 jitter: bool = True,
+                 retryable_exceptions: tuple = (Exception,)):
+        """
+        Args:
+            max_attempts: 最大重试次数
+            strategy: 重试策略
+            base_delay: 基础延迟时间
+            max_delay: 最大延迟时间
+            jitter: 是否添加随机抖动
+            retryable_exceptions: 可重试的异常类型
+        """
+        self.max_attempts = max_attempts
+        self.strategy = strategy
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.jitter = jitter
+        self.retryable_exceptions = retryable_exceptions
+
+class RetryHandler:
+    """重试处理器"""
+
+    def __init__(self, config: RetryConfig):
+        self.config = config
+        self.attempt_count = 0
+
+    def __call__(self, func: Callable) -> Callable:
+        """装饰器方式使用"""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            return self.retry(func, *args, **kwargs)
+        return wrapper
+
+    def retry(self, func: Callable, *args, **kwargs) -> Any:
+        """重试调用"""
+        self.attempt_count = 0
+
+        while self.attempt_count < self.config.max_attempts:
+            try:
+                self.attempt_count += 1
+                return func(*args, **kwargs)
+            except self.config.retryable_exceptions as e:
+                if self.attempt_count >= self.config.max_attempts:
+                    raise e
+
+                delay = self._calculate_delay()
+                print(f"Attempt {self.attempt_count} failed, retrying in {delay:.2f}s: {e}")
+                time.sleep(delay)
+
+    def _calculate_delay(self) -> float:
+        """计算延迟时间"""
+        base_delay = self.config.base_delay
+
+        if self.config.strategy == RetryStrategy.FIXED_DELAY:
+            delay = base_delay
+        elif self.config.strategy == RetryStrategy.EXPONENTIAL_BACKOFF:
+            delay = base_delay * (2 ** (self.attempt_count - 1))
+        elif self.config.strategy == RetryStrategy.LINEAR_BACKOFF:
+            delay = base_delay * self.attempt_count
+        elif self.config.strategy == RetryStrategy.FIBONACCI_BACKOFF:
+            delay = base_delay * self._fibonacci(self.attempt_count)
+        else:
+            delay = base_delay
+
+        # 限制最大延迟
+        delay = min(delay, self.config.max_delay)
+
+        # 添加随机抖动
+        if self.config.jitter:
+            delay = delay * (0.5 + random.random() * 0.5)
+
+        return delay
+
+    def _fibonacci(self, n: int) -> int:
+        """计算斐波那契数列"""
+        if n <= 1:
+            return 1
+
+        a, b = 1, 1
+        for _ in range(2, n):
+            a, b = b, a + b
+
+        return b
+```
+
+### 智能重试策略
+
+```python
+# 智能重试策略
+class SmartRetryHandler(RetryHandler):
+    """智能重试处理器"""
+
+    def __init__(self, config: RetryConfig):
+        super().__init__(config)
+        self.failure_history = []
+        self.success_history = []
+        self.adaptive_factor = 1.0
+
+    def retry(self, func: Callable, *args, **kwargs) -> Any:
+        """智能重试调用"""
+        self.attempt_count = 0
+
+        while self.attempt_count < self.config.max_attempts:
+            try:
+                self.attempt_count += 1
+                result = func(*args, **kwargs)
+
+                # 记录成功
+                self.success_history.append({
+                    "attempt": self.attempt_count,
+                    "timestamp": time.time()
+                })
+
+                return result
+
+            except self.config.retryable_exceptions as e:
+                # 记录失败
+                self.failure_history.append({
+                    "attempt": self.attempt_count,
+                    "timestamp": time.time(),
+                    "error": str(e)
+                })
+
+                if self.attempt_count >= self.config.max_attempts:
+                    # 更新自适应因子
+                    self._update_adaptive_factor()
+                    raise e
+
+                delay = self._calculate_adaptive_delay(e)
+                print(f"Attempt {self.attempt_count} failed, retrying in {delay:.2f}s: {e}")
+                time.sleep(delay)
+
+    def _calculate_adaptive_delay(self, error: Exception) -> float:
+        """计算自适应延迟"""
+        base_delay = self._calculate_delay()
+
+        # 根据错误类型调整延迟
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            # 网络相关错误，增加延迟
+            base_delay *= 1.5
+        elif isinstance(error, (MemoryError, OSError)):
+            # 资源相关错误，大幅增加延迟
+            base_delay *= 2.0
+
+        # 应用自适应因子
+        adaptive_delay = base_delay * self.adaptive_factor
+
+        # 限制最大延迟
+        return min(adaptive_delay, self.config.max_delay)
+
+    def _update_adaptive_factor(self):
+        """更新自适应因子"""
+        if not self.failure_history:
+            return
+
+        # 计算最近的失败率
+        recent_failures = len([f for f in self.failure_history
+                             if time.time() - f["timestamp"] < 300])  # 5分钟内
+        recent_successes = len([s for s in self.success_history
+                              if time.time() - s["timestamp"] < 300])
+
+        total_attempts = recent_failures + recent_successes
+        if total_attempts > 0:
+            failure_rate = recent_failures / total_attempts
+
+            # 根据失败率调整自适应因子
+            if failure_rate > 0.8:
+                self.adaptive_factor = min(self.adaptive_factor * 1.2, 3.0)
+            elif failure_rate < 0.2:
+                self.adaptive_factor = max(self.adaptive_factor * 0.9, 0.5)
+
+    def get_retry_stats(self) -> Dict:
+        """获取重试统计信息"""
+        return {
+            "adaptive_factor": self.adaptive_factor,
+            "total_failures": len(self.failure_history),
+            "total_successes": len(self.success_history),
+            "recent_failure_rate": self._calculate_recent_failure_rate()
+        }
+
+    def _calculate_recent_failure_rate(self) -> float:
+        """计算最近的失败率"""
+        cutoff_time = time.time() - 300  # 5分钟前
+
+        recent_failures = len([f for f in self.failure_history if f["timestamp"] > cutoff_time])
+        recent_successes = len([s for s in self.success_history if s["timestamp"] > cutoff_time])
+
+        total = recent_failures + recent_successes
+        return recent_failures / total if total > 0 else 0.0
+```
+
+## 限流与降级
+
+### 限流策略实现
+
+```python
+# 限流策略实现
+import time
+from typing import Dict, Optional, Callable
+from collections import defaultdict, deque
+from threading import Lock
+
+class RateLimiter:
+    """限流器基类"""
+
+    def __init__(self, rate_limit: int, time_window: int):
+        """
+        Args:
+            rate_limit: 限制数量
+            time_window: 时间窗口(秒)
+        """
+        self.rate_limit = rate_limit
+        self.time_window = time_window
+        self.lock = Lock()
+
+    def is_allowed(self, key: str = "default") -> bool:
+        """检查是否允许通过"""
+        raise NotImplementedError
+
+class SlidingWindowRateLimiter(RateLimiter):
+    """滑动窗口限流器"""
+
+    def __init__(self, rate_limit: int, time_window: int):
+        super().__init__(rate_limit, time_window)
+        self.requests: Dict[str, deque] = defaultdict(deque)
+
+    def is_allowed(self, key: str = "default") -> bool:
+        """检查是否允许通过"""
+        with self.lock:
+            current_time = time.time()
+            window_start = current_time - self.time_window
+
+            # 清理过期请求
+            while self.requests[key] and self.requests[key][0] < window_start:
+                self.requests[key].popleft()
+
+            # 检查是否超过限制
+            if len(self.requests[key]) < self.rate_limit:
+                self.requests[key].append(current_time)
+                return True
+
+            return False
+
+class TokenBucketRateLimiter(RateLimiter):
+    """令牌桶限流器"""
+
+    def __init__(self, rate_limit: int, time_window: int, bucket_size: Optional[int] = None):
+        super().__init__(rate_limit, time_window)
+        self.bucket_size = bucket_size or rate_limit
+        self.tokens: Dict[str, float] = defaultdict(lambda: self.bucket_size)
+        self.last_refill: Dict[str, float] = defaultdict(time.time)
+
+    def is_allowed(self, key: str = "default") -> bool:
+        """检查是否允许通过"""
+        with self.lock:
+            current_time = time.time()
+
+            # 计算时间差
+            time_diff = current_time - self.last_refill[key]
+
+            # 补充令牌
+            refill_tokens = (time_diff / self.time_window) * self.rate_limit
+            self.tokens[key] = min(self.tokens[key] + refill_tokens, self.bucket_size)
+            self.last_refill[key] = current_time
+
+            # 检查是否有足够的令牌
+            if self.tokens[key] >= 1:
+                self.tokens[key] -= 1
+                return True
+
+            return False
+
+class LeakyBucketRateLimiter(RateLimiter):
+    """漏桶限流器"""
+
+    def __init__(self, rate_limit: int, time_window: int, bucket_size: Optional[int] = None):
+        super().__init__(rate_limit, time_window)
+        self.bucket_size = bucket_size or rate_limit
+        self.water_level: Dict[str, float] = defaultdict(float)
+        self.last_leak: Dict[str, float] = defaultdict(time.time)
+
+    def is_allowed(self, key: str = "default") -> bool:
+        """检查是否允许通过"""
+        with self.lock:
+            current_time = time.time()
+
+            # 计算时间差
+            time_diff = current_time - self.last_leak[key]
+
+            # 漏水
+            leak_amount = (time_diff / self.time_window) * self.rate_limit
+            self.water_level[key] = max(0, self.water_level[key] - leak_amount)
+            self.last_leak[key] = current_time
+
+            # 检查是否可以加水
+            if self.water_level[key] < self.bucket_size:
+                self.water_level[key] += 1
+                return True
+
+            return False
+```
+
+### 服务降级策略
+
+```python
+# 服务降级策略
+class DegradationStrategy:
+    """降级策略基类"""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.is_degraded = False
+        self.degradation_time = None
+
+    def should_degrade(self, metrics: Dict) -> bool:
+        """判断是否应该降级"""
+        raise NotImplementedError
+
+    def degrade(self):
+        """执行降级"""
+        self.is_degraded = True
+        self.degradation_time = time.time()
+        self._execute_degradation()
+
+    def restore(self):
+        """恢复服务"""
+        self.is_degraded = False
+        self._execute_restoration()
+
+    def _execute_degradation(self):
+        """执行降级逻辑"""
+        pass
+
+    def _execute_restoration(self):
+        """执行恢复逻辑"""
+        pass
+
+class ErrorRateDegradation(DegradationStrategy):
+    """错误率降级策略"""
+
+    def __init__(self, name: str, error_threshold: float = 0.1, time_window: int = 60):
+        super().__init__(name)
+        self.error_threshold = error_threshold
+        self.time_window = time_window
+        self.error_history = defaultdict(list)
+
+    def should_degrade(self, metrics: Dict) -> bool:
+        """根据错误率判断是否降级"""
+        service = metrics.get('service', 'default')
+        is_error = metrics.get('is_error', False)
+        timestamp = metrics.get('timestamp', time.time())
+
+        # 记录错误历史
+        self.error_history[service].append((timestamp, is_error))
+
+        # 清理过期记录
+        cutoff_time = timestamp - self.time_window
+        self.error_history[service] = [
+            (t, e) for t, e in self.error_history[service] if t > cutoff_time
+        ]
+
+        # 计算错误率
+        if self.error_history[service]:
+            error_count = sum(1 for _, e in self.error_history[service] if e)
+            error_rate = error_count / len(self.error_history[service])
+            return error_rate > self.error_threshold
+
+        return False
+
+class LatencyDegradation(DegradationStrategy):
+    """延迟降级策略"""
+
+    def __init__(self, name: str, latency_threshold: float = 2.0, time_window: int = 60):
+        super().__init__(name)
+        self.latency_threshold = latency_threshold
+        self.time_window = time_window
+        self.latency_history = defaultdict(list)
+
+    def should_degrade(self, metrics: Dict) -> bool:
+        """根据延迟判断是否降级"""
+        service = metrics.get('service', 'default')
+        latency = metrics.get('latency', 0.0)
+        timestamp = metrics.get('timestamp', time.time())
+
+        # 记录延迟历史
+        self.latency_history[service].append((timestamp, latency))
+
+        # 清理过期记录
+        cutoff_time = timestamp - self.time_window
+        self.latency_history[service] = [
+            (t, l) for t, l in self.latency_history[service] if t > cutoff_time
+        ]
+
+        # 计算平均延迟
+        if self.latency_history[service]:
+            avg_latency = sum(l for _, l in self.latency_history[service]) / len(self.latency_history[service])
+            return avg_latency > self.latency_threshold
+
+        return False
+
+class ServiceDegradationManager:
+    """服务降级管理器"""
+
+    def __init__(self):
+        self.strategies: List[DegradationStrategy] = []
+        self.degraded_services = set()
+
+    def add_strategy(self, strategy: DegradationStrategy):
+        """添加降级策略"""
+        self.strategies.append(strategy)
+
+    def check_degradation(self, metrics: Dict):
+        """检查是否需要降级"""
+        service = metrics.get('service', 'default')
+
+        for strategy in self.strategies:
+            if strategy.should_degrade(metrics):
+                if not strategy.is_degraded:
+                    print(f"Degrading {service} using {strategy.name}")
+                    strategy.degrade()
+                    self.degraded_services.add(service)
+            else:
+                if strategy.is_degraded and service in self.degraded_services:
+                    print(f"Restoring {service} from {strategy.name}")
+                    strategy.restore()
+                    self.degraded_services.remove(service)
+
+    def is_service_degraded(self, service: str) -> bool:
+        """检查服务是否降级"""
+        return service in self.degraded_services
+```
+
+## 高可用架构设计
+
+### 隔仓模式
+
+```python
+# 隔仓模式实现
+class Bulkhead:
+    """隔仓"""
+
+    def __init__(self, name: str, max_concurrent_calls: int, max_queue_size: int = 0):
+        """
+        Args:
+            name: 隔仓名称
+            max_concurrent_calls: 最大并发调用数
+            max_queue_size: 最大队列大小，0表示不排队
+        """
+        self.name = name
+        self.max_concurrent_calls = max_concurrent_calls
+        self.max_queue_size = max_queue_size
+        self.current_calls = 0
+        self.queue = []
+        self.lock = Lock()
+
+    def execute(self, func: Callable, *args, **kwargs) -> Any:
+        """执行函数"""
+        with self.lock:
+            if self.current_calls < self.max_concurrent_calls:
+                self.current_calls += 1
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    self.current_calls -= 1
+                    self._process_queue()
+            elif self.max_queue_size > 0 and len(self.queue) < self.max_queue_size:
+                # 排队等待
+                future = Future()
+                self.queue.append((func, args, kwargs, future))
+                return future.result()
+            else:
+                raise BulkheadFullError(f"Bulkhead {self.name} is full")
+
+    def _process_queue(self):
+        """处理队列"""
+        if self.queue and self.current_calls < self.max_concurrent_calls:
+            func, args, kwargs, future = self.queue.pop(0)
+            self.current_calls += 1
+
+            def run():
+                try:
+                    result = func(*args, **kwargs)
+                    future.set_result(result)
+                except Exception as e:
+                    future.set_exception(e)
+                finally:
+                    with self.lock:
+                        self.current_calls -= 1
+                        self._process_queue()
+
+            threading.Thread(target=run).start()
+
+class BulkheadFullError(Exception):
+    """隔仓满异常"""
+    pass
+
+class Future:
+    """简单的Future实现"""
+
+    def __init__(self):
+        self.result_value = None
+        self.result_exception = None
+        self.completed = False
+        self.condition = threading.Condition()
+
+    def set_result(self, result):
+        """设置结果"""
+        with self.condition:
+            self.result_value = result
+            self.completed = True
+            self.condition.notify_all()
+
+    def set_exception(self, exception):
+        """设置异常"""
+        with self.condition:
+            self.result_exception = exception
+            self.completed = True
+            self.condition.notify_all()
+
+    def result(self, timeout: Optional[float] = None) -> Any:
+        """获取结果"""
+        with self.condition:
+            if not self.completed:
+                if not self.condition.wait(timeout):
+                    raise TimeoutError("Future timed out")
+
+            if self.result_exception:
+                raise self.result_exception
+
+            return self.result_value
+```
+
+### 故障转移和自动恢复
+
+```python
+# 故障转移和自动恢复
+class FailoverManager:
+    """故障转移管理器"""
+
+    def __init__(self):
+        self.primary_service = None
+        self.backup_services = []
+        self.current_active = None
+        self.health_checker = HealthChecker()
+
+    def configure(self, primary: str, backups: List[str]):
+        """配置服务"""
+        self.primary_service = primary
+        self.backup_services = backups
+        self.current_active = primary
+
+    def execute_with_failover(self, operation: Callable) -> Any:
+        """执行故障转移操作"""
+        attempts = [self.current_active] + self.backup_services
+
+        for service in attempts:
+            try:
+                if self.health_checker.is_healthy(service):
+                    result = operation(service)
+                    return result
+            except Exception as e:
+                print(f"Service {service} failed: {e}")
+                continue
+
+        raise AllServicesFailedError("All services failed")
+
+    def check_and_failover(self):
+        """检查并执行故障转移"""
+        if not self.health_checker.is_healthy(self.current_active):
+            print(f"Primary service {self.current_active} is unhealthy, initiating failover")
+
+            # 寻找健康的备份服务
+            for backup in self.backup_services:
+                if self.health_checker.is_healthy(backup):
+                    self.current_active = backup
+                    print(f"Failed over to {backup}")
+                    return True
+
+            print("No healthy backup services available")
+            return False
+
+        return True
+
+class AutoRecoveryManager:
+    """自动恢复管理器"""
+
+    def __init__(self, recovery_interval: int = 60):
+        self.recovery_interval = recovery_interval
+        self.services = {}
+        self.recovery_thread = threading.Thread(target=self._recovery_loop)
+        self.recovery_thread.daemon = True
+        self.recovery_thread.start()
+
+    def register_service(self, service_name: str, health_check: Callable):
+        """注册服务"""
+        self.services[service_name] = {
+            "health_check": health_check,
+            "last_recovery": 0,
+            "recovery_count": 0
+        }
+
+    def _recovery_loop(self):
+        """恢复循环"""
+        while True:
+            for service_name, service_info in self.services.items():
+                current_time = time.time()
+
+                # 检查是否需要恢复
+                if (current_time - service_info["last_recovery"] > self.recovery_interval and
+                    self._should_attempt_recovery(service_name)):
+
+                    print(f"Attempting recovery for {service_name}")
+                    if self._attempt_recovery(service_name):
+                        service_info["last_recovery"] = current_time
+                        service_info["recovery_count"] += 1
+                        print(f"Successfully recovered {service_name}")
+                    else:
+                        print(f"Failed to recover {service_name}")
+
+            time.sleep(self.recovery_interval)
+
+    def _should_attempt_recovery(self, service_name: str) -> bool:
+        """判断是否应该尝试恢复"""
+        # 简化实现，实际可以根据服务状态判断
+        return True
+
+    def _attempt_recovery(self, service_name: str) -> bool:
+        """尝试恢复服务"""
+        service_info = self.services[service_name]
+        try:
+            # 执行健康检查
+            return service_info["health_check"]()
+        except Exception as e:
+            print(f"Recovery failed for {service_name}: {e}")
+            return False
+
+class HealthChecker:
+    """健康检查器"""
+
+    def __init__(self):
+        self.health_status = {}
+
+    def register(self, service_name: str, health_check: Callable):
+        """注册健康检查"""
+        self.health_status[service_name] = {
+            "health_check": health_check,
+            "healthy": True,
+            "last_check": time.time()
+        }
+
+    def is_healthy(self, service_name: str) -> bool:
+        """检查服务是否健康"""
+        if service_name not in self.health_status:
+            return False
+
+        service_info = self.health_status[service_name]
+        try:
+            result = service_info["health_check"]()
+            service_info["healthy"] = result
+            service_info["last_check"] = time.time()
+            return result
+        except Exception:
+            service_info["healthy"] = False
+            return False
+```
+
+## 实战项目：高可用微服务系统
+
+### 系统架构设计
+
+```python
+# 高可用微服务系统
+class HighlyAvailableMicroservice:
+    """高可用微服务系统"""
+
+    def __init__(self, service_name: str):
+        self.service_name = service_name
+        self.circuit_breaker = CircuitBreaker()
+        self.rate_limiter = SlidingWindowRateLimiter(100, 60)
+        self.bulkhead = Bulkhead(f"{service_name}_bulkhead", 10, 20)
+        self.degradation_manager = ServiceDegradationManager()
+        self.failover_manager = FailoverManager()
+        self.metrics_collector = MetricsCollector()
+
+        # 配置降级策略
+        self.degradation_manager.add_strategy(
+            ErrorRateDegradation(f"{service_name}_error_rate", 0.1, 60)
+        )
+        self.degradation_manager.add_strategy(
+            LatencyDegradation(f"{service_name}_latency", 2.0, 60)
+        )
+
+    def process_request(self, request: Dict) -> Dict:
+        """处理请求"""
+        start_time = time.time()
+
+        try:
+            # 1. 限流检查
+            if not self.rate_limiter.is_allowed(self.service_name):
+                raise RateLimitExceededError("Rate limit exceeded")
+
+            # 2. 隔仓执行
+            def execute_operation():
+                # 3. 熔断器保护
+                return self.circuit_breaker.call(self._execute_business_logic, request)
+
+            result = self.bulkhead.execute(execute_operation)
+
+            # 4. 记录成功指标
+            self._record_metrics(request, result, start_time, success=True)
+
+            return result
+
+        except Exception as e:
+            # 5. 记录失败指标
+            self._record_metrics(request, None, start_time, success=False, error=str(e))
+            raise e
+
+    def _execute_business_logic(self, request: Dict) -> Dict:
+        """执行业务逻辑"""
+        # 这里是实际的业务逻辑
+        return {
+            "status": "success",
+            "data": f"Processed {request.get('type', 'unknown')} request",
+            "timestamp": time.time()
+        }
+
+    def _record_metrics(self, request: Dict, result: Optional[Dict],
+                       start_time: float, success: bool, error: str = None):
+        """记录指标"""
+        latency = time.time() - start_time
+
+        metrics = {
+            "service": self.service_name,
+            "timestamp": start_time,
+            "latency": latency,
+            "success": success,
+            "error": error,
+            "request_type": request.get('type', 'unknown')
+        }
+
+        self.metrics_collector.record(metrics)
+
+        # 检查是否需要降级
+        self.degradation_manager.check_degradation(metrics)
+
+    def get_health_status(self) -> Dict:
+        """获取健康状态"""
+        return {
+            "service": self.service_name,
+            "circuit_breaker": self.circuit_breaker.get_state(),
+            "is_degraded": self.degradation_manager.is_service_degraded(self.service_name),
+            "metrics": self.metrics_collector.get_service_metrics(self.service_name)
+        }
+
+class MetricsCollector:
+    """指标收集器"""
+
+    def __init__(self):
+        self.metrics = defaultdict(list)
+
+    def record(self, metrics: Dict):
+        """记录指标"""
+        service = metrics.get('service', 'default')
+        self.metrics[service].append(metrics)
+
+    def get_service_metrics(self, service_name: str) -> Dict:
+        """获取服务指标"""
+        if service_name not in self.metrics:
+            return {}
+
+        recent_metrics = self.metrics[service_name][-1000:]  # 最近1000个请求
+
+        if not recent_metrics:
+            return {}
+
+        success_count = sum(1 for m in recent_metrics if m['success'])
+        total_count = len(recent_metrics)
+        avg_latency = sum(m['latency'] for m in recent_metrics) / total_count
+
+        return {
+            "total_requests": total_count,
+            "success_rate": success_count / total_count,
+            "avg_latency": avg_latency,
+            "error_rate": 1 - (success_count / total_count)
+        }
+
+class RateLimitExceededError(Exception):
+    """限流超出异常"""
+    pass
+
+class AllServicesFailedError(Exception):
+    """所有服务失败异常"""
+    pass
+```
+
+### 系统部署和监控
+
+```python
+# 系统部署和监控
+def deploy_highly_available_system():
+    """部署高可用系统"""
+    # 1. 创建服务实例
+    services = {
+        "user_service": HighlyAvailableMicroservice("user_service"),
+        "order_service": HighlyAvailableMicroservice("order_service"),
+        "product_service": HighlyAvailableMicroservice("product_service")
+    }
+
+    # 2. 配置故障转移
+    for service_name, service in services.items():
+        service.failover_manager.configure(
+            primary=f"{service_name}_primary",
+            backups=[f"{service_name}_backup1", f"{service_name}_backup2"]
+        )
+
+    # 3. 模拟请求处理
+    def simulate_requests():
+        """模拟请求"""
+        request_types = ["read", "write", "query", "update"]
+
+        for i in range(100):
+            service_name = random.choice(list(services.keys()))
+            request = {
+                "type": random.choice(request_types),
+                "id": i,
+                "timestamp": time.time()
+            }
+
+            try:
+                result = services[service_name].process_request(request)
+                print(f"Request {i} processed by {service_name}")
+            except Exception as e:
+                print(f"Request {i} failed on {service_name}: {e}")
+
+            time.sleep(0.1)
+
+    # 4. 监控系统状态
+    def monitor_system():
+        """监控系统状态"""
+        while True:
+            print("\n=== System Status ===")
+            for service_name, service in services.items():
+                status = service.get_health_status()
+                print(f"{service_name}:")
+                print(f"  Circuit Breaker: {status['circuit_breaker']['state']}")
+                print(f"  Success Rate: {status['metrics']['success_rate']:.2%}")
+                print(f"  Avg Latency: {status['metrics']['avg_latency']:.3f}s")
+
+            time.sleep(30)
+
+    # 启动监控线程
+    monitor_thread = threading.Thread(target=monitor_system)
+    monitor_thread.daemon = True
+    monitor_thread.start()
+
+    # 模拟请求
+    simulate_requests()
+
+    return services
+```
+
+## 本周作业
+
+### 作业1：实现自定义限流算法
+
+```python
+# 自定义限流算法
+class AdaptiveRateLimiter(RateLimiter):
+    """自适应限流器"""
+
+    def __init__(self, initial_rate_limit: int, time_window: int):
+        super().__init__(initial_rate_limit, time_window)
+        self.current_rate_limit = initial_rate_limit
+        self.adaptation_factor = 1.0
+        self.success_history = deque(maxlen=1000)
+        self.error_history = deque(maxlen=1000)
+
+    def is_allowed(self, key: str = "default") -> bool:
+        """检查是否允许通过"""
+        with self.lock:
+            # 动态调整速率限制
+            self._adapt_rate_limit()
+
+            # 使用滑动窗口算法
+            current_time = time.time()
+            window_start = current_time - self.time_window
+
+            # 清理过期请求
+            if key not in self.requests:
+                self.requests[key] = deque()
+
+            while self.requests[key] and self.requests[key][0] < window_start:
+                self.requests[key].popleft()
+
+            # 检查是否超过限制
+            if len(self.requests[key]) < self.current_rate_limit:
+                self.requests[key].append(current_time)
+                return True
+
+            return False
+
+    def record_result(self, success: bool, latency: float):
+        """记录请求结果"""
+        if success:
+            self.success_history.append((time.time(), latency))
+        else:
+            self.error_history.append(time.time())
+
+    def _adapt_rate_limit(self):
+        """自适应调整速率限制"""
+        current_time = time.time()
+        window_start = current_time - self.time_window
+
+        # 计算成功率
+        recent_success = sum(1 for t, _ in self.success_history if t > window_start)
+        recent_errors = sum(1 for t in self.error_history if t > window_start)
+        total = recent_success + recent_errors
+
+        if total > 0:
+            success_rate = recent_success / total
+            avg_latency = sum(l for _, l in self.success_history if l > window_start) / max(1, recent_success)
+
+            # 根据成功率和延迟调整
+            if success_rate > 0.95 and avg_latency < 1.0:
+                # 性能良好，可以增加限制
+                self.adaptation_factor = min(self.adaptation_factor * 1.1, 2.0)
+            elif success_rate < 0.8 or avg_latency > 2.0:
+                # 性能不佳，降低限制
+                self.adaptation_factor = max(self.adaptation_factor * 0.9, 0.5)
+
+            # 应用自适应因子
+            self.current_rate_limit = int(self.rate_limit * self.adaptation_factor)
+```
+
+### 作业2：构建完整的容错系统
+
+```python
+# 完整的容错系统
+class CompleteFaultTolerantSystem:
+    """完整的容错系统"""
+
+    def __init__(self):
+        self.circuit_breakers = {}
+        self.rate_limiters = {}
+        self.bulkheads = {}
+        self.retry_handlers = {}
+        self.degradation_manager = ServiceDegradationManager()
+        self.health_checker = HealthChecker()
+
+    def configure_service(self, service_name: str, config: Dict):
+        """配置服务容错策略"""
+        # 熔断器配置
+        cb_config = config.get('circuit_breaker', {})
+        self.circuit_breakers[service_name] = CircuitBreaker(
+            failure_threshold=cb_config.get('failure_threshold', 5),
+            recovery_timeout=cb_config.get('recovery_timeout', 60)
+        )
+
+        # 限流器配置
+        rl_config = config.get('rate_limiter', {})
+        self.rate_limiters[service_name] = SlidingWindowRateLimiter(
+            rl_config.get('rate_limit', 100),
+            rl_config.get('time_window', 60)
+        )
+
+        # 隔仓配置
+        bh_config = config.get('bulkhead', {})
+        self.bulkheads[service_name] = Bulkhead(
+            f"{service_name}_bulkhead",
+            bh_config.get('max_concurrent', 10),
+            bh_config.get('max_queue', 20)
+        )
+
+        # 重试处理器配置
+        retry_config = config.get('retry', {})
+        self.retry_handlers[service_name] = SmartRetryHandler(
+            RetryConfig(
+                max_attempts=retry_config.get('max_attempts', 3),
+                strategy=RetryStrategy(retry_config.get('strategy', 'exponential'))
+            )
+        )
+
+    def execute_with_fault_tolerance(self, service_name: str, operation: Callable, *args, **kwargs):
+        """执行具有容错保护的操作"""
+        try:
+            # 1. 限流检查
+            if not self.rate_limiters[service_name].is_allowed(service_name):
+                raise RateLimitExceededError("Rate limit exceeded")
+
+            # 2. 隔仓执行
+            def execute_with_retry():
+                # 3. 重试机制
+                return self.retry_handlers[service_name].retry(
+                    # 4. 熔断器保护
+                    self.circuit_breakers[service_name].call,
+                    operation,
+                    *args,
+                    **kwargs
+                )
+
+            return self.bulkheads[service_name].execute(execute_with_retry)
+
+        except Exception as e:
+            # 记录失败指标
+            self.degradation_manager.check_degradation({
+                "service": service_name,
+                "timestamp": time.time(),
+                "is_error": True,
+                "error": str(e)
+            })
+            raise e
+
+# 使用示例
+def test_complete_fault_tolerance():
+    """测试完整的容错系统"""
+    system = CompleteFaultTolerantSystem()
+
+    # 配置服务
+    system.configure_service("user_service", {
+        "circuit_breaker": {
+            "failure_threshold": 3,
+            "recovery_timeout": 30
+        },
+        "rate_limiter": {
+            "rate_limit": 50,
+            "time_window": 60
+        },
+        "bulkhead": {
+            "max_concurrent": 5,
+            "max_queue": 10
+        },
+        "retry": {
+            "max_attempts": 2,
+            "strategy": "exponential"
+        }
+    })
+
+    # 测试服务调用
+    def unreliable_operation():
+        if random.random() < 0.5:
+            raise ConnectionError("Service unavailable")
+        return "Operation succeeded"
+
+    # 执行容错调用
+    try:
+        result = system.execute_with_fault_tolerance(
+            "user_service",
+            unreliable_operation
+        )
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Operation failed: {e}")
+```
+
+## 本周总结
+
+### 核心知识点
+
+1. **容错机制**
+   - 故障检测和分类
+   - 熔断器模式(Circuit Breaker)
+   - 重试策略(Retry Strategy)
+   - 限流保护(Rate Limiting)
+   - 服务降级(Service Degradation)
+
+2. **熔断器模式**
+   - 三种状态：关闭、打开、半开
+   - 失败阈值和恢复超时
+   - 防止级联故障
+   - 快速失败机制
+
+3. **重试策略**
+   - 固定延迟重试
+   - 指数退避重试
+   - 线性退避重试
+   - 斐波那契退避重试
+   - 智能自适应重试
+
+4. **限流算法**
+   - 滑动窗口限流
+   - 令牌桶限流
+   - 漏桶限流
+   - 自适应限流
+
+5. **高可用设计**
+   - 隔仓模式(Bulkhead)
+   - 故障转移(Failover)
+   - 自动恢复(Auto Recovery)
+   - 健康检查(Health Check)
+
+### 实践经验
+
+1. **容错策略选择**
+   - 根据服务特性选择合适的容错策略
+   - 避免过度保护影响性能
+   - 建立完善的监控和告警机制
+
+2. **配置调优**
+   - 合理设置熔断器的阈值和超时
+   - 选择合适的重试策略和次数
+   - 配置适当的限流参数
+
+3. **监控和治理**
+   - 实时监控服务健康状态
+   - 动态调整容错参数
+   - 建立故障应急响应流程
+
+### 下周预告
+
+下周我们将学习**安全设计与最佳实践**，包括：
+- 认证与授权机制
+- 数据安全与加密
+- 安全架构设计
+- 常见安全漏洞防护
+- 安全最佳实践
+
+---
+
+**思考题：**
+1. 你的项目中是否遇到过级联故障？如何通过容错机制避免？
+2. 熔断器和重试机制的关系是什么？什么情况下应该使用哪种机制？
+3. 如何设计一个既安全又高效的容错系统？
+
+**扩展阅读：**
+- 《Release It!》第6章
+- 《Building Microservices》第7章
+- Hystrix和Resilience4j文档
+- CNCF容错模式最佳实践

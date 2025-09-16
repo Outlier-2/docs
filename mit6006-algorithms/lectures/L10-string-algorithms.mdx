@@ -1,0 +1,1398 @@
+---
+title: "L10 - 字符串算法详解"
+description: "MIT 6.006 算法导论第十讲：字符串算法的完整实现与应用"
+---
+
+# L10 - 字符串算法详解
+
+## 概述
+
+字符串算法是计算机科学中的核心主题之一，在文本处理、生物信息学、搜索引擎等领域有着广泛的应用。本讲将深入探讨各种字符串匹配算法、高级数据结构以及其实际应用。
+
+## 学习目标
+
+- **掌握**字符串匹配的基本算法原理
+- **理解**各种算法的时空复杂度分析
+- **能够**根据应用场景选择合适的字符串算法
+- **学会**处理大规模字符串数据的技术
+
+## 字符串匹配基础
+
+### 算法分类与比较
+
+| 算法 | 时间复杂度 | 空间复杂度 | 适用场景 | 特点 |
+|------|------------|------------|----------|------|
+| 朴素匹配 | O(n×m) | O(1) | 小规模文本 | 简单易实现 |
+| KMP | O(n+m) | O(m) | 重复模式匹配 | 预处理模式串 |
+| Boyer-Moore | O(n/m)最佳 | O(m+|Σ|) | 大规模文本 | 从后向前匹配 |
+| Rabin-Karp | O(n+m)平均 | O(1) | 多模式匹配 | 哈希函数 |
+| AC自动机 | O(n+m+Z) | O(m×|Σ|) | 多模式匹配 | 一次性构建 |
+
+## 核心算法实现
+
+### 1. KMP算法详解
+
+KMP（Knuth-Morris-Pratt）算法是字符串匹配的经典算法，其核心思想是利用已经匹配的信息来避免不必要的比较。
+
+#### 算法原理
+
+```python
+def compute_lps_array(pattern: str) -> list:
+    """
+    计算最长公共前后缀数组（LPS）
+
+    设计思路：
+    1. LPS[i]表示pattern[0:i]的最长公共前后缀长度
+    2. 利用动态规划的思想，避免重复计算
+    3. 时间复杂度O(m)，空间复杂度O(m)
+
+    Args:
+        pattern: 模式字符串
+
+    Returns:
+        lps数组，长度与pattern相同
+
+    Examples:
+        >>> compute_lps_array("ABABC")
+        [0, 0, 1, 2, 0]
+        >>> compute_lps_array("AAAA")
+        [0, 1, 2, 3]
+    """
+    m = len(pattern)
+    lps = [0] * m
+    length = 0  # 当前最长公共前后缀长度
+    i = 1
+
+    while i < m:
+        if pattern[i] == pattern[length]:
+            length += 1
+            lps[i] = length
+            i += 1
+        else:
+            if length != 0:
+                # 回退到前一个位置
+                length = lps[length - 1]
+            else:
+                lps[i] = 0
+                i += 1
+
+    return lps
+
+def kmp_search(text: str, pattern: str) -> list:
+    """
+    KMP字符串匹配算法
+
+    算法步骤：
+    1. 预处理：计算LPS数组
+    2. 匹配：利用LPS数组跳过不必要的比较
+    3. 时间复杂度O(n+m)，空间复杂度O(m)
+
+    Args:
+        text: 文本字符串
+        pattern: 模式字符串
+
+    Returns:
+        匹配位置的列表
+
+    Examples:
+        >>> kmp_search("ABABABC", "ABABC")
+        [2]
+        >>> kmp_search("AAAAAA", "AA")
+        [0, 1, 2, 3, 4]
+    """
+    n = len(text)
+    m = len(pattern)
+    matches = []
+
+    if m == 0:
+        return []
+
+    # 预处理：计算LPS数组
+    lps = compute_lps_array(pattern)
+    i = 0  # text的索引
+    j = 0  # pattern的索引
+
+    while i < n:
+        if pattern[j] == text[i]:
+            i += 1
+            j += 1
+
+            if j == m:
+                # 找到完整匹配
+                matches.append(i - j)
+                # 利用LPS数组跳过已匹配部分
+                j = lps[j - 1]
+        else:
+            if j != 0:
+                # 失配时跳过已匹配部分
+                j = lps[j - 1]
+            else:
+                i += 1
+
+    return matches
+```
+
+#### KMP算法可视化
+
+```
+文本： A B A B A B C
+模式： A B A B C
+LPS：  0 0 1 2 0
+
+匹配过程：
+1. i=0, j=0: A==A → i=1, j=1
+2. i=1, j=1: B==B → i=2, j=2
+3. i=2, j=2: A==A → i=3, j=3
+4. i=3, j=3: B==B → i=4, j=4
+5. i=4, j=4: A!=C → j=lps[3]=2
+6. i=4, j=2: A==A → i=5, j=3
+7. i=5, j=3: B==B → i=6, j=4
+8. i=6, j=4: C==C → 匹配成功！
+```
+
+### 2. Boyer-Moore算法
+
+Boyer-Moore算法在实际应用中表现优异，特别是在大规模文本搜索中。
+
+#### 坏字符规则与好后缀规则
+
+```python
+def bad_character_heuristic(pattern: str) -> dict:
+    """
+    坏字符启发式函数
+
+    策略：
+    1. 当发生不匹配时，将模式串向右移动，使文本中的坏字符对齐到模式串中相同字符
+    2. 如果模式串中没有该字符，则整个跳过该字符
+
+    Args:
+        pattern: 模式字符串
+
+    Returns:
+        坏字符移动距离字典
+    """
+    bad_char = {}
+    m = len(pattern)
+
+    # 记录每个字符最右出现的位置
+    for i in range(m - 1):
+        bad_char[pattern[i]] = m - i - 1
+
+    return bad_char
+
+def good_suffix_heuristic(pattern: str) -> list:
+    """
+    好后缀启发式函数
+
+    策略：
+    1. 当发生不匹配时，找到已匹配的后缀在模式串前面的位置
+    2. 如果不存在，则寻找模式串的前缀与已匹配后缀的后缀匹配的部分
+
+    Args:
+        pattern: 模式字符串
+
+    Returns:
+        好后缀移动距离数组
+    """
+    m = len(pattern)
+    good_suffix = [m] * (m + 1)
+
+    # 情况1：模式串中存在与已匹配后缀相同的子串
+    reversed_pattern = pattern[::-1]
+    reversed_lps = compute_lps_array(reversed_pattern)
+
+    for i in range(m):
+        good_suffix[i] = m - reversed_lps[i]
+
+    return good_suffix
+
+def boyer_moore_search(text: str, pattern: str) -> list:
+    """
+    Boyer-Moore字符串匹配算法
+
+    优化策略：
+    1. 从右向左比较模式串
+    2. 结合坏字符规则和好后缀规则
+    3. 选择较大的移动距离
+
+    Args:
+        text: 文本字符串
+        pattern: 模式字符串
+
+    Returns:
+        匹配位置的列表
+    """
+    n = len(text)
+    m = len(pattern)
+    matches = []
+
+    if m == 0:
+        return []
+
+    # 预处理
+    bad_char = bad_character_heuristic(pattern)
+    good_suffix = good_suffix_heuristic(pattern)
+
+    i = 0  # 文本中的当前位置
+
+    while i <= n - m:
+        j = m - 1  # 模式串的当前比较位置
+
+        # 从右向左比较
+        while j >= 0 and pattern[j] == text[i + j]:
+            j -= 1
+
+        if j < 0:
+            # 找到完整匹配
+            matches.append(i)
+            # 移动到下一个可能位置
+            i += good_suffix[0]
+        else:
+            # 计算移动距离
+            bad_char_shift = bad_char.get(text[i + j], m)
+            good_suffix_shift = good_suffix[j + 1]
+            i += max(bad_char_shift, good_suffix_shift)
+
+    return matches
+```
+
+### 3. Rabin-Karp算法
+
+Rabin-Karp算法使用哈希函数来实现快速字符串匹配。
+
+```python
+def rabin_karp_search(text: str, pattern: str, prime: int = 101) -> list:
+    """
+    Rabin-Karp字符串匹配算法
+
+    核心思想：
+    1. 使用滚动哈希计算模式串和文本窗口的哈希值
+    2. 当哈希值匹配时，进行字符级验证
+    3. 时间复杂度平均O(n+m)，最坏O(n×m)
+
+    Args:
+        text: 文本字符串
+        pattern: 模式字符串
+        prime: 哈希函数的质数
+
+    Returns:
+        匹配位置的列表
+    """
+    n = len(text)
+    m = len(pattern)
+    matches = []
+
+    if m == 0 or n < m:
+        return []
+
+    # 哈希参数
+    d = 256  # 字符集大小
+    h = pow(d, m - 1, prime)
+    p = 0  # 模式串的哈希值
+    t = 0  # 文本窗口的哈希值
+
+    # 计算初始哈希值
+    for i in range(m):
+        p = (d * p + ord(pattern[i])) % prime
+        t = (d * t + ord(text[i])) % prime
+
+    for i in range(n - m + 1):
+        # 哈希值匹配
+        if p == t:
+            # 字符级验证
+            if text[i:i + m] == pattern:
+                matches.append(i)
+
+        # 计算下一个窗口的哈希值
+        if i < n - m:
+            t = (d * (t - ord(text[i]) * h) + ord(text[i + m])) % prime
+            if t < 0:
+                t += prime
+
+    return matches
+```
+
+## 高级数据结构
+
+### 1. 后缀数组与后缀树
+
+后缀数组是字符串处理的强大工具，可用于模式匹配、最长重复子串等问题。
+
+```python
+def build_suffix_array(s: str) -> list:
+    """
+    构建后缀数组
+
+    策略：
+    1. 生成所有后缀
+    2. 对后缀进行排序
+    3. 返回排序后的后缀起始位置
+
+    优化：使用基数排序可将时间复杂度降至O(n)
+
+    Args:
+        s: 输入字符串
+
+    Returns:
+        后缀数组
+    """
+    n = len(s)
+    suffixes = [(s[i:], i) for i in range(n)]
+    suffixes.sort()
+    return [suffix[1] for suffix in suffixes]
+
+def build_lcp_array(s: str, suffix_array: list) -> list:
+    """
+    构建最长公共前缀数组
+
+    LCP[i]表示suffix_array[i]和suffix_array[i-1]对应后缀的
+    最长公共前缀长度
+
+    Args:
+        s: 输入字符串
+        suffix_array: 后缀数组
+
+    Returns:
+        LCP数组
+    """
+    n = len(s)
+    rank = [0] * n
+    lcp = [0] * n
+
+    # 构建rank数组
+    for i, suffix_idx in enumerate(suffix_array):
+        rank[suffix_idx] = i
+
+    h = 0
+    for i in range(n):
+        if rank[i] > 0:
+            j = suffix_array[rank[i] - 1]
+
+            # 计算公共前缀
+            while i + h < n and j + h < n and s[i + h] == s[j + h]:
+                h += 1
+
+            lcp[rank[i]] = h
+
+            if h > 0:
+                h -= 1
+
+    return lcp
+
+class SuffixArrayMatcher:
+    """
+    基于后缀数组的模式匹配器
+
+    优势：
+    1. 预处理时间O(n log n)
+    2. 查询时间O(m log n)
+    3. 空间复杂度O(n)
+    """
+
+    def __init__(self, text: str):
+        self.text = text
+        self.suffix_array = build_suffix_array(text)
+        self.lcp_array = build_lcp_array(text, self.suffix_array)
+
+    def search(self, pattern: str) -> list:
+        """
+        使用二分查找在后缀数组中搜索模式
+
+        Args:
+            pattern: 模式字符串
+
+        Returns:
+            匹配位置的列表
+        """
+        n = len(self.text)
+        m = len(pattern)
+        matches = []
+
+        left, right = 0, n
+
+        # 二分查找
+        while left < right:
+            mid = (left + right) // 2
+            suffix_start = self.suffix_array[mid]
+            suffix = self.text[suffix_start:suffix_start + m]
+
+            if pattern < suffix:
+                right = mid
+            elif pattern > suffix:
+                left = mid + 1
+            else:
+                # 找到匹配，扩展搜索
+                matches.append(suffix_start)
+
+                # 向左搜索
+                i = mid - 1
+                while i >= 0:
+                    suffix_start = self.suffix_array[i]
+                    if self.text[suffix_start:suffix_start + m] == pattern:
+                        matches.append(suffix_start)
+                        i -= 1
+                    else:
+                        break
+
+                # 向右搜索
+                i = mid + 1
+                while i < n:
+                    suffix_start = self.suffix_array[i]
+                    if self.text[suffix_start:suffix_start + m] == pattern:
+                        matches.append(suffix_start)
+                        i += 1
+                    else:
+                        break
+
+                break
+
+        return sorted(matches)
+```
+
+### 2. AC自动机
+
+AC自动机是多模式匹配的高效算法。
+
+```python
+class ACNode:
+    """AC自动机节点"""
+    def __init__(self):
+        self.children = {}
+        self.fail = None
+        self.output = set()
+        self.pattern_id = -1
+
+class AhoCorasick:
+    """
+    Aho-Corasick多模式匹配算法
+
+    特点：
+    1. 一次性构建，支持多模式匹配
+    2. 时间复杂度O(n + m + z)，其中z是匹配总数
+    3. 适用于病毒扫描、关键词过滤等场景
+    """
+
+    def __init__(self):
+        self.root = ACNode()
+        self.patterns = []
+
+    def add_pattern(self, pattern: str, pattern_id: int = None):
+        """
+        添加模式串
+
+        Args:
+            pattern: 模式字符串
+            pattern_id: 模式ID，如果为None则自动分配
+        """
+        node = self.root
+        for char in pattern:
+            if char not in node.children:
+                node.children[char] = ACNode()
+            node = node.children[char]
+
+        if pattern_id is None:
+            node.pattern_id = len(self.patterns)
+        else:
+            node.pattern_id = pattern_id
+        node.output.add(node.pattern_id)
+        self.patterns.append(pattern)
+
+    def build_fail_links(self):
+        """
+        构建失败指针（KMP算法的扩展）
+
+        使用BFS构建失败指针，确保匹配失败时能够快速跳转
+        """
+        from collections import deque
+        queue = deque([self.root])
+        self.root.fail = self.root
+
+        while queue:
+            current = queue.popleft()
+
+            for char, child in current.children.items():
+                if current == self.root:
+                    child.fail = self.root
+                else:
+                    # 查找失败节点
+                    fail_node = current.fail
+                    while fail_node != self.root and char not in fail_node.children:
+                        fail_node = fail_node.fail
+
+                    if char in fail_node.children:
+                        child.fail = fail_node.children[char]
+                    else:
+                        child.fail = self.root
+
+                # 继承output
+                child.output.update(child.fail.output)
+                queue.append(child)
+
+    def search(self, text: str) -> dict:
+        """
+        在文本中搜索所有模式
+
+        Args:
+            text: 输入文本
+
+        Returns:
+            匹配结果字典 {pattern_id: [positions]}
+        """
+        result = {}
+        current = self.root
+
+        for i, char in enumerate(text):
+            # 处理失败指针
+            while current != self.root and char not in current.children:
+                current = current.fail
+
+            if char in current.children:
+                current = current.children[char]
+            else:
+                current = self.root
+
+            # 记录所有匹配的模式
+            for pattern_id in current.output:
+                if pattern_id not in result:
+                    result[pattern_id] = []
+                result[pattern_id].append(i)
+
+        return result
+
+    def build_automaton(self, patterns: list):
+        """
+        构建完整的AC自动机
+
+        Args:
+            patterns: 模式串列表
+        """
+        for i, pattern in enumerate(patterns):
+            self.add_pattern(pattern, i)
+        self.build_fail_links()
+```
+
+## 实际应用案例
+
+### 1. 生物信息学：DNA序列分析
+
+```python
+class DNASequenceAnalyzer:
+    """
+    DNA序列分析器
+
+    应用场景：
+    - 基因序列比对
+    - 重复序列识别
+    - 突变检测
+    """
+
+    def __init__(self):
+        self.sequence = ""
+        self.trie = Trie()
+        self.suffix_array = None
+
+    def load_sequence(self, sequence: str):
+        """加载DNA序列"""
+        self.sequence = sequence.upper()
+        # 构建索引
+        self.suffix_array = build_suffix_array(self.sequence)
+
+    def find_repeats(self, min_length: int = 3) -> list:
+        """
+        查找重复序列
+
+        Args:
+            min_length: 最小重复长度
+
+        Returns:
+            重复序列及其位置列表
+        """
+        repeats = {}
+        n = len(self.sequence)
+
+        # 滑动窗口查找重复
+        for length in range(min_length, n // 2 + 1):
+            pattern_counts = {}
+
+            for i in range(n - length + 1):
+                pattern = self.sequence[i:i + length]
+                if pattern not in pattern_counts:
+                    pattern_counts[pattern] = []
+                pattern_counts[pattern].append(i)
+
+            # 筛选重复序列
+            for pattern, positions in pattern_counts.items():
+                if len(positions) >= 2:
+                    repeats[pattern] = positions
+
+        return sorted(repeats.items(),
+                     key=lambda x: (len(x[0]), len(x[1])),
+                     reverse=True)
+
+    def find_similar_regions(self, query: str, max_mismatches: int = 2) -> list:
+        """
+        查找相似区域
+
+        Args:
+            query: 查询序列
+            max_mismatches: 最大不匹配数
+
+        Returns:
+            相似区域及其不匹配数
+        """
+        similar_regions = []
+        n = len(self.sequence)
+        m = len(query)
+
+        for i in range(n - m + 1):
+            region = self.sequence[i:i + m]
+            mismatches = sum(1 for a, b in zip(region, query) if a != b)
+
+            if mismatches <= max_mismatches:
+                similar_regions.append((i, region, mismatches))
+
+        return sorted(similar_regions, key=lambda x: x[2])
+
+    def find_palindromes(self, min_length: int = 3) -> list:
+        """
+        查找回文序列
+
+        Args:
+            min_length: 最小回文长度
+
+        Returns:
+            回文序列及其位置
+        """
+        palindromes = []
+        n = len(self.sequence)
+
+        for center in range(n):
+            # 奇数长度回文
+            for offset in range(min_length // 2,
+                               min(center + 1, n - center)):
+                left = center - offset
+                right = center + offset
+
+                if self.sequence[left] == self.sequence[right]:
+                    palindrome = self.sequence[left:right + 1]
+                    palindromes.append((left, palindrome))
+                else:
+                    break
+
+            # 偶数长度回文
+            for offset in range(min_length // 2,
+                               min(center + 1, n - center - 1)):
+                left = center - offset
+                right = center + 1 + offset
+
+                if self.sequence[left] == self.sequence[right]:
+                    palindrome = self.sequence[left:right + 1]
+                    palindromes.append((left, palindrome))
+                else:
+                    break
+
+        return sorted(palindromes,
+                     key=lambda x: len(x[1]),
+                     reverse=True)
+```
+
+### 2. 搜索引擎：文本索引系统
+
+```python
+class TextIndexSystem:
+    """
+    文本索引系统
+
+    功能：
+    - 全文检索
+    - 模糊搜索
+    - 高级查询
+    """
+
+    def __init__(self):
+        self.documents = {}
+        self.inverted_index = {}
+        self.trie = Trie()
+        self.automaton = AhoCorasick()
+
+    def add_document(self, doc_id: int, content: str):
+        """
+        添加文档到索引
+
+        Args:
+            doc_id: 文档ID
+            content: 文档内容
+        """
+        self.documents[doc_id] = content
+        words = self._tokenize(content)
+
+        # 构建倒排索引
+        for word in words:
+            if word not in self.inverted_index:
+                self.inverted_index[word] = set()
+            self.inverted_index[word].add(doc_id)
+
+        # 构建前缀树
+        for word in set(words):
+            self.trie.insert(word)
+
+    def search_exact(self, query: str) -> list:
+        """
+        精确搜索
+
+        Args:
+            query: 查询字符串
+
+        Returns:
+            匹配的文档ID列表
+        """
+        words = self._tokenize(query)
+        if not words:
+            return []
+
+        # 找到包含所有查询词的文档
+        result_docs = None
+        for word in words:
+            if word in self.inverted_index:
+                if result_docs is None:
+                    result_docs = self.inverted_index[word].copy()
+                else:
+                    result_docs.intersection_update(self.inverted_index[word])
+            else:
+                return []
+
+        return list(result_docs) if result_docs else []
+
+    def search_fuzzy(self, query: str, max_distance: int = 2) -> list:
+        """
+        模糊搜索
+
+        Args:
+            query: 查询字符串
+            max_distance: 最大编辑距离
+
+        Returns:
+            匹配的文档及其相似度
+        """
+        words = self._tokenize(query)
+        if not words:
+            return []
+
+        results = {}
+
+        for doc_id, content in self.documents.items():
+            doc_words = self._tokenize(content)
+            total_similarity = 0
+
+            for query_word in words:
+                best_similarity = 0
+
+                for doc_word in doc_words:
+                    distance = levenshtein_distance(query_word, doc_word)
+                    max_len = max(len(query_word), len(doc_word))
+                    similarity = 1 - distance / max_len if max_len > 0 else 0
+
+                    if similarity > best_similarity:
+                        best_similarity = similarity
+
+                total_similarity += best_similarity
+
+            avg_similarity = total_similarity / len(words)
+            if avg_similarity >= 0.5:  # 相似度阈值
+                results[doc_id] = avg_similarity
+
+        return sorted(results.items(), key=lambda x: x[1], reverse=True)
+
+    def autocomplete(self, prefix: str, max_results: int = 5) -> list:
+        """
+        自动补全
+
+        Args:
+            prefix: 前缀字符串
+            max_results: 最大结果数
+
+        Returns:
+            建议单词列表
+        """
+        suggestions = self.trie.get_all_words_with_prefix(prefix)
+        return suggestions[:max_results]
+
+    def _tokenize(self, text: str) -> list:
+        """文本分词"""
+        import re
+        # 简单的分词实现
+        words = re.findall(r'\b\w+\b', text.lower())
+        return words
+```
+
+### 3. 网络安全：恶意软件检测
+
+```python
+class MalwareDetector:
+    """
+    恶意软件检测器
+
+    应用：
+    - 病毒特征码匹配
+    - 恶意模式识别
+    - 行为分析
+    """
+
+    def __init__(self):
+        self.virus_signatures = AhoCorasick()
+        self.malicious_patterns = []
+        self.suspicious_keywords = []
+        self.built = False
+
+    def add_virus_signature(self, signature: str, virus_name: str):
+        """
+        添加病毒特征码
+
+        Args:
+            signature: 病毒特征码
+            virus_name: 病毒名称
+        """
+        self.virus_signatures.add_pattern(signature, virus_name)
+
+    def add_malicious_pattern(self, pattern: str, description: str):
+        """
+        添加恶意模式
+
+        Args:
+            pattern: 恶意模式
+            description: 模式描述
+        """
+        self.malicious_patterns.append((pattern, description))
+
+    def add_suspicious_keyword(self, keyword: str, risk_level: int):
+        """
+        添加可疑关键词
+
+        Args:
+            keyword: 关键词
+            risk_level: 风险级别(1-10)
+        """
+        self.suspicious_keywords.append((keyword, risk_level))
+
+    def build_detector(self):
+        """构建检测器"""
+        self.virus_signatures.build_fail_links()
+        self.built = True
+
+    def scan_file(self, file_content: str) -> dict:
+        """
+        扫描文件
+
+        Args:
+            file_content: 文件内容
+
+        Returns:
+            扫描结果
+        """
+        if not self.built:
+            raise ValueError("检测器未构建，请先调用build_detector()")
+
+        scan_result = {
+            'viruses_detected': [],
+            'malicious_patterns': [],
+            'suspicious_keywords': [],
+            'risk_score': 0
+        }
+
+        # 病毒扫描
+        virus_matches = self.virus_signatures.search(file_content)
+        for virus_id, positions in virus_matches.items():
+            virus_name = self.virus_signatures.patterns[virus_id]
+            scan_result['viruses_detected'].append({
+                'virus_name': virus_name,
+                'positions': positions,
+                'risk_level': 10  # 病毒风险最高
+            })
+
+        # 恶意模式检测
+        for pattern, description in self.malicious_patterns:
+            matches = boyer_moore_search(file_content, pattern)
+            if matches:
+                scan_result['malicious_patterns'].append({
+                    'pattern': pattern,
+                    'description': description,
+                    'positions': matches,
+                    'risk_level': 8
+                })
+
+        # 可疑关键词检测
+        for keyword, risk_level in self.suspicious_keywords:
+            matches = kmp_search(file_content, keyword)
+            if matches:
+                scan_result['suspicious_keywords'].append({
+                    'keyword': keyword,
+                    'positions': matches,
+                    'risk_level': risk_level
+                })
+
+        # 计算总体风险分数
+        risk_factors = []
+
+        for virus in scan_result['viruses_detected']:
+            risk_factors.append(virus['risk_level'])
+
+        for pattern in scan_result['malicious_patterns']:
+            risk_factors.append(pattern['risk_level'])
+
+        for keyword in scan_result['suspicious_keywords']:
+            risk_factors.append(keyword['risk_level'])
+
+        scan_result['risk_score'] = max(risk_factors) if risk_factors else 0
+
+        return scan_result
+
+    def is_file_safe(self, file_content: str, risk_threshold: int = 5) -> bool:
+        """
+        判断文件是否安全
+
+        Args:
+            file_content: 文件内容
+            risk_threshold: 风险阈值
+
+        Returns:
+            是否安全
+        """
+        scan_result = self.scan_file(file_content)
+        return scan_result['risk_score'] < risk_threshold
+```
+
+## 性能优化技巧
+
+### 1. 并行字符串匹配
+
+```python
+import concurrent.futures
+import threading
+
+class ParallelStringMatcher:
+    """
+    并行字符串匹配器
+
+    优化策略：
+    - 将文本分块并行处理
+    - 使用多线程提高吞吐量
+    - 负载均衡
+    """
+
+    def __init__(self, num_threads: int = 4):
+        self.num_threads = num_threads
+        self.thread_local = threading.local()
+
+    def parallel_kmp_search(self, text: str, pattern: str) -> list:
+        """
+        并行KMP搜索
+
+        Args:
+            text: 文本字符串
+            pattern: 模式字符串
+
+        Returns:
+            匹配位置的列表
+        """
+        n = len(text)
+        m = len(pattern)
+
+        if n < 1000:  # 小文本直接处理
+            return kmp_search(text, pattern)
+
+        # 计算分块大小
+        chunk_size = max(m * 2, n // self.num_threads)
+        chunks = []
+
+        # 分块时考虑模式长度
+        for i in range(0, n, chunk_size):
+            chunk_end = min(i + chunk_size + m - 1, n)
+            chunks.append((i, chunk_end))
+
+        all_matches = []
+
+        def search_chunk(start, end):
+            chunk_text = text[start:end]
+            matches = kmp_search(chunk_text, pattern)
+            # 调整位置到全局坐标
+            return [pos + start for pos in matches]
+
+        # 并行处理
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.num_threads) as executor:
+
+            futures = [executor.submit(search_chunk, start, end)
+                      for start, end in chunks]
+
+            for future in concurrent.futures.as_completed(futures):
+                chunk_matches = future.result()
+                all_matches.extend(chunk_matches)
+
+        return sorted(all_matches)
+
+    def parallel_pattern_search(self, text: str, patterns: list) -> dict:
+        """
+        并行多模式搜索
+
+        Args:
+            text: 文本字符串
+            patterns: 模式字符串列表
+
+        Returns:
+            匹配结果字典
+        """
+        # 构建AC自动机
+        automaton = AhoCorasick()
+        for i, pattern in enumerate(patterns):
+            automaton.add_pattern(pattern, i)
+        automaton.build_fail_links()
+
+        # 分块并行搜索
+        n = len(text)
+        chunk_size = max(1000, n // self.num_threads)
+
+        def search_chunk(start, end):
+            chunk_text = text[start:end]
+            matches = automaton.search(chunk_text)
+
+            # 调整位置
+            adjusted_matches = {}
+            for pattern_id, positions in matches.items():
+                adjusted_matches[pattern_id] = [pos + start for pos in positions]
+
+            return adjusted_matches
+
+        all_matches = {}
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.num_threads) as executor:
+
+            chunks = [(i, min(i + chunk_size, n))
+                     for i in range(0, n, chunk_size)]
+
+            futures = [executor.submit(search_chunk, start, end)
+                      for start, end in chunks]
+
+            for future in concurrent.futures.as_completed(futures):
+                chunk_matches = future.result()
+
+                for pattern_id, positions in chunk_matches.items():
+                    if pattern_id not in all_matches:
+                        all_matches[pattern_id] = []
+                    all_matches[pattern_id].extend(positions)
+
+        return all_matches
+```
+
+### 2. 内存优化策略
+
+```python
+class MemoryEfficientStringProcessor:
+    """
+    内存高效的字符串处理器
+
+    优化技术：
+    - 字符串驻留
+    - 增量处理
+    - 内存池管理
+    """
+
+    def __init__(self):
+        self.string_pool = {}
+        self.memory_pool = MemoryPool(1024, 1000)  # 1KB块，1000个块
+
+    def intern_string(self, s: str) -> str:
+        """
+        字符串驻留
+
+        Args:
+            s: 输入字符串
+
+        Returns:
+            驻留后的字符串
+        """
+        if s not in self.string_pool:
+            self.string_pool[s] = s
+        return self.string_pool[s]
+
+    def process_large_file(self, filename: str, chunk_size: int = 8192):
+        """
+        处理大文件
+
+        Args:
+            filename: 文件名
+            chunk_size: 块大小
+
+        Yields:
+            处理后的文本块
+        """
+        with open(filename, 'r', encoding='utf-8') as file:
+            while True:
+                chunk = file.read(chunk_size)
+                if not chunk:
+                    break
+                yield self.intern_string(chunk)
+
+    def batch_string_operations(self, strings: list, operation_func):
+        """
+        批量字符串操作
+
+        Args:
+            strings: 字符串列表
+            operation_func: 操作函数
+
+        Returns:
+            操作结果列表
+        """
+        # 分批处理以减少内存使用
+        batch_size = 1000
+        results = []
+
+        for i in range(0, len(strings), batch_size):
+            batch = strings[i:i + batch_size]
+            batch_results = [operation_func(s) for s in batch]
+            results.extend(batch_results)
+
+            # 强制垃圾回收
+            del batch
+            del batch_results
+
+        return results
+
+    def memory_efficient_concatenation(self, strings: list) -> str:
+        """
+        内存高效的字符串连接
+
+        Args:
+            strings: 字符串列表
+
+        Returns:
+            连接后的字符串
+        """
+        # 预计算总长度
+        total_length = sum(len(s) for s in strings)
+
+        # 使用bytearray减少内存分配
+        result = bytearray(total_length)
+        pos = 0
+
+        for s in strings:
+            encoded = s.encode('utf-8')
+            result[pos:pos + len(encoded)] = encoded
+            pos += len(encoded)
+
+        return result.decode('utf-8')
+```
+
+## 实验与测试
+
+### 性能基准测试
+
+```python
+import time
+import random
+import string
+import matplotlib.pyplot as plt
+
+def benchmark_string_algorithms():
+    """
+    字符串算法性能基准测试
+
+    测试场景：
+    - 不同大小的文本
+    - 不同长度的模式
+    - 不同算法的性能对比
+    """
+
+    # 生成测试数据
+    def generate_test_cases():
+        test_cases = []
+
+        # 小规模测试
+        small_text = ''.join(random.choices(string.ascii_lowercase, k=1000))
+        small_pattern = ''.join(random.choices(string.ascii_lowercase, k=10))
+        test_cases.append(('small', small_text, small_pattern))
+
+        # 中规模测试
+        medium_text = ''.join(random.choices(string.ascii_lowercase, k=100000))
+        medium_pattern = ''.join(random.choices(string.ascii_lowercase, k=100))
+        test_cases.append(('medium', medium_text, medium_pattern))
+
+        # 大规模测试
+        large_text = ''.join(random.choices(string.ascii_lowercase, k=1000000))
+        large_pattern = ''.join(random.choices(string.ascii_lowercase, k=1000))
+        test_cases.append(('large', large_text, large_pattern))
+
+        return test_cases
+
+    algorithms = {
+        'Naive': naive_string_matching,
+        'KMP': kmp_search,
+        'Boyer-Moore': boyer_moore_search,
+        'Rabin-Karp': rabin_karp_search
+    }
+
+    test_cases = generate_test_cases()
+    results = {algorithm: [] for algorithm in algorithms}
+
+    for case_name, text, pattern in test_cases:
+        print(f"\n=== {case_name.upper()} 测试 ===")
+        print(f"文本长度: {len(text)}, 模式长度: {len(pattern)}")
+
+        for algo_name, algo_func in algorithms.items():
+            try:
+                start_time = time.time()
+                matches = algo_func(text, pattern)
+                end_time = time.time()
+
+                execution_time = end_time - start_time
+                results[algo_name].append(execution_time)
+
+                print(f"{algo_name}: {execution_time:.6f}s, 匹配数: {len(matches)}")
+
+            except Exception as e:
+                print(f"{algo_name}: 错误 - {e}")
+                results[algo_name].append(float('inf'))
+
+    # 绘制性能对比图
+    plot_performance_comparison(results, test_cases)
+
+def plot_performance_comparison(results, test_cases):
+    """
+    绘制性能对比图
+
+    Args:
+        results: 测试结果
+        test_cases: 测试用例
+    """
+    case_names = [case[0] for case in test_cases]
+
+    plt.figure(figsize=(12, 8))
+
+    for algorithm, times in results.items():
+        if any(t != float('inf') for t in times):
+            plt.plot(case_names, times, marker='o', label=algorithm)
+
+    plt.xlabel('测试规模')
+    plt.ylabel('执行时间 (秒)')
+    plt.title('字符串算法性能对比')
+    plt.yscale('log')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def memory_usage_test():
+    """
+    内存使用测试
+
+    测试不同算法的内存消耗
+    """
+    import tracemalloc
+
+    text = ''.join(random.choices(string.ascii_lowercase, k=1000000))
+    pattern = ''.join(random.choices(string.ascii_lowercase, k=1000))
+
+    algorithms = {
+        'KMP': kmp_search,
+        'Boyer-Moore': boyer_moore_search,
+        'Rabin-Karp': rabin_karp_search
+    }
+
+    memory_results = {}
+
+    for algo_name, algo_func in algorithms.items():
+        tracemalloc.start()
+
+        # 执行算法
+        matches = algo_func(text, pattern)
+
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        memory_results[algo_name] = {
+            'current': current / (1024 * 1024),  # MB
+            'peak': peak / (1024 * 1024),       # MB
+            'matches': len(matches)
+        }
+
+    print("\n=== 内存使用测试 ===")
+    for algo_name, metrics in memory_results.items():
+        print(f"{algo_name}:")
+        print(f"  当前内存: {metrics['current']:.2f} MB")
+        print(f"  峰值内存: {metrics['peak']:.2f} MB")
+        print(f"  匹配数: {metrics['matches']}")
+```
+
+## 练习与项目
+
+### 练习题
+
+1. **实现一个支持通配符的字符串匹配算法**
+   - `*` 匹配任意长度字符串
+   - `?` 匹配单个字符
+   - 时间复杂度优化
+
+2. **设计一个压缩版本的字符串匹配算法**
+   - 基于LZ77或LZ78压缩
+   - 在压缩域中直接搜索
+   - 避免解压缩开销
+
+3. **实现一个支持多模式匹配的并行算法**
+   - 使用GPU加速
+   - 负载均衡策略
+   - 性能优化
+
+4. **创建一个字符串相似度计算系统**
+   - 支持多种相似度算法
+   - 大规模数据处理
+   - 实时计算
+
+### 项目建议
+
+1. **生物信息学工具包**
+   - DNA序列比对
+   - 蛋白质结构分析
+   - 基因组组装
+
+2. **搜索引擎核心组件**
+   - 文本索引系统
+   - 查询优化器
+   - 相关性计算
+
+3. **网络安全监控系统**
+   - 实时威胁检测
+   - 模式匹配引擎
+   - 行为分析
+
+4. **自然语言处理工具**
+   - 文本预处理
+   - 词性标注
+   - 命名实体识别
+
+## 总结
+
+字符串算法是计算机科学中的基础且重要的主题。通过本讲的学习，你应该能够：
+
+1. **理解**各种字符串匹配算法的原理和适用场景
+2. **实现**高效的数据结构来处理字符串问题
+3. **优化**算法性能以应对大规模数据
+4. **应用**字符串算法解决实际问题
+
+掌握这些算法将为你在软件开发、数据分析和算法研究方面奠定坚实的基础。
+
+## 扩展阅读
+
+1. **书籍推荐**
+   - 《算法导论》- 第32章字符串匹配
+   - 《柔性字符串匹配》- 作者：Gonzalo Navarro
+   - 《生物信息学算法》- 作者：Neil C. Jones
+
+2. **在线资源**
+   - MIT OpenCourseWare: 6.006 Introduction to Algorithms
+   - Stanford CS166: Data Structures
+   - Coursera: Algorithms on Strings
+
+3. **研究论文**
+   - "A Fast String Searching Algorithm" - Boyer & Moore (1977)
+   - "Efficient String Matching: An Aid to Bibliographic Search" - KMP (1977)
+   - "Linear Pattern Matching Algorithms" - Weiner (1973)

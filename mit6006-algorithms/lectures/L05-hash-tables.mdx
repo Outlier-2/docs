@@ -1,0 +1,1661 @@
+---
+title: "L05 - 哈希表"
+description: "深入理解哈希表原理、冲突解决策略和高级应用"
+---
+
+import { useState, useEffect } from 'react';
+import { CodeBlock } from '@/src/components/algorithm';
+import { AlgorithmVisualizer } from '@/src/components/algorithm';
+import { ArrayVisualizer } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L05 - 哈希表
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🔍 **理解哈希原理**：掌握哈希函数的设计和评估方法
+- ⚡ **解决冲突**：精通开放寻址法和链地址法
+- 🎯 **优化性能**：设计高效的哈希表实现
+- 🌐 **应用高级概念**：实现布隆过滤器和一致性哈希
+
+## 🎯 哈希表基础
+
+### 哈希表的核心概念
+
+哈希表是一种基于键值对的数据结构，通过哈希函数将键映射到数组索引，实现O(1)平均时间复杂度的查找、插入和删除操作。
+
+**核心组成**：
+- **哈希函数**：将键转换为数组索引
+- **存储数组**：实际存储数据的底层数组
+- **冲突解决**：处理多个键映射到同一索引的情况
+
+### 理想的哈希函数特性
+
+```python
+def hash_function_properties():
+    """
+    理想哈希函数的关键特性
+    """
+    properties = {
+        "确定性": "相同的输入总是产生相同的输出",
+        "高效性": "计算哈希值应该很快",
+        "均匀性": "键值应该均匀分布在所有可能的桶中",
+        "低冲突率": "不同的键很少产生相同的哈希值",
+        "雪崩效应": "输入的微小变化会导致输出的显著变化"
+    }
+
+    print("理想哈希函数特性：")
+    for prop, desc in properties.items():
+        print(f"• {prop}: {desc}")
+
+# 哈希函数示例
+def simple_hash(key, table_size):
+    """简单的哈希函数"""
+    if isinstance(key, str):
+        # 字符串哈希
+        hash_value = 0
+        for char in key:
+            hash_value = (hash_value * 31 + ord(char)) % table_size
+        return hash_value
+    elif isinstance(key, int):
+        # 整数哈希
+        return key % table_size
+    else:
+        # 其他类型转换为字符串
+        return simple_hash(str(key), table_size)
+```
+
+## 🔧 哈希函数设计
+
+### 1. 除法哈希
+
+```python
+def division_hash(key, table_size):
+    """
+    除法哈希 - 最简单的哈希方法
+    时间复杂度: O(1)
+    """
+    return key % table_size
+
+# 选择好的表大小（素数）
+GOOD_PRIMES = [7, 13, 31, 61, 127, 251, 509, 1021, 2039, 4093, 8191, 16381]
+
+def get_next_prime(n):
+    """获取大于等于n的最小素数"""
+    for prime in GOOD_PRIMES:
+        if prime >= n:
+            return prime
+    # 如果预定义的素数不够，动态计算
+    return _find_next_prime(n)
+
+def _find_next_prime(n):
+    """动态寻找下一个素数"""
+    def is_prime(num):
+        if num < 2:
+            return False
+        for i in range(2, int(num ** 0.5) + 1):
+            if num % i == 0:
+                return False
+        return True
+
+    candidate = n
+    while not is_prime(candidate):
+        candidate += 1
+    return candidate
+```
+
+### 2. 乘法哈希
+
+```python
+def multiplication_hash(key, table_size):
+    """
+    乘法哈希 - Knuth的乘法哈希方法
+    时间复杂度: O(1)
+    """
+    # 黄金比例乘数
+    A = (5 ** 0.5 - 1) / 2  # ≈ 0.618033988749895
+    frac = key * A - int(key * A)
+    return int(table_size * frac)
+
+def universal_hashing(a, b, p, m, key):
+    """
+    全域哈希 - 随机选择的哈希函数族
+    降低恶意攻击导致的最坏情况
+    """
+    return ((a * key + b) % p) % m
+
+# 随机选择哈希函数
+import random
+
+class UniversalHashFamily:
+    """全域哈希函数族"""
+    def __init__(self, table_size):
+        self.table_size = table_size
+        self.p = self._get_large_prime()
+        self.a = random.randint(1, self.p - 1)
+        self.b = random.randint(0, self.p - 1)
+
+    def _get_large_prime(self):
+        """获取一个大的素数"""
+        return 2147483647  # 2^31 - 1，是一个大的梅森素数
+
+    def hash(self, key):
+        return universal_hashing(self.a, self.b, self.p, self.table_size, key)
+```
+
+### 3. 字符串哈希函数
+
+```python
+def polynomial_rolling_hash(key, table_size, base=31, mod=2**32):
+    """
+    多项式滚动哈希 - 适合字符串
+    时间复杂度: O(len(key))
+    """
+    hash_value = 0
+    power = 1
+
+    for char in key:
+        hash_value = (hash_value + (ord(char) * power)) % mod
+        power = (power * base) % mod
+
+    return hash_value % table_size
+
+def djb2_hash(key, table_size):
+    """
+    DJB2哈希 - 广泛使用的字符串哈希算法
+    """
+    hash_value = 5381
+    for char in key:
+        hash_value = ((hash_value << 5) + hash_value) + ord(char)
+    return hash_value % table_size
+
+def sdbm_hash(key, table_size):
+    """
+    SDBM哈希 - 另一个高效的字符串哈希算法
+    """
+    hash_value = 0
+    for char in key:
+        hash_value = ord(char) + (hash_value << 6) + (hash_value << 16) - hash_value
+    return hash_value % table_size
+```
+
+## ⚡ 冲突解决策略
+
+### 1. 链地址法 (Separate Chaining)
+
+```python
+class ListNode:
+    """链表节点"""
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+        self.next = None
+
+class ChainedHashTable:
+    """
+    使用链地址法的哈希表
+    时间复杂度:
+    - 平均: O(1 + α)，其中α是负载因子
+    - 最坏: O(n)
+    """
+    def __init__(self, capacity=11):
+        self.capacity = capacity
+        self.size = 0
+        self.table = [None] * capacity
+
+    def _hash(self, key):
+        """哈希函数"""
+        return simple_hash(key, self.capacity)
+
+    def insert(self, key, value):
+        """插入键值对"""
+        index = self._hash(key)
+
+        # 检查是否已存在该键
+        current = self.table[index]
+        while current:
+            if current.key == key:
+                current.value = value  # 更新值
+                return
+            current = current.next
+
+        # 创建新节点
+        new_node = ListNode(key, value)
+        new_node.next = self.table[index]
+        self.table[index] = new_node
+        self.size += 1
+
+        # 检查是否需要扩容
+        if self.load_factor() > 0.75:
+            self._resize(2 * self.capacity)
+
+    def get(self, key):
+        """获取值"""
+        index = self._hash(key)
+        current = self.table[index]
+
+        while current:
+            if current.key == key:
+                return current.value
+            current = current.next
+
+        raise KeyError(f"Key '{key}' not found")
+
+    def remove(self, key):
+        """删除键值对"""
+        index = self._hash(key)
+        current = self.table[index]
+        prev = None
+
+        while current:
+            if current.key == key:
+                if prev:
+                    prev.next = current.next
+                else:
+                    self.table[index] = current.next
+                self.size -= 1
+                return
+            prev = current
+            current = current.next
+
+        raise KeyError(f"Key '{key}' not found")
+
+    def load_factor(self):
+        """计算负载因子"""
+        return self.size / self.capacity
+
+    def _resize(self, new_capacity):
+        """调整哈希表大小"""
+        old_table = self.table
+        self.capacity = new_capacity
+        self.table = [None] * new_capacity
+        self.size = 0
+
+        # 重新插入所有元素
+        for bucket in old_table:
+            current = bucket
+            while current:
+                self.insert(current.key, current.value)
+                current = current.next
+
+    def __str__(self):
+        result = []
+        for i, bucket in enumerate(self.table):
+            if bucket:
+                items = []
+                current = bucket
+                while current:
+                    items.append(f"{current.key}: {current.value}")
+                    current = current.next
+                result.append(f"[{i}]: {' -> '.join(items)}")
+        return '\n'.join(result)
+```
+
+### 2. 开放寻址法 (Open Addressing)
+
+#### 线性探测
+
+```python
+class LinearProbingHashTable:
+    """
+    线性探测哈希表
+    时间复杂度:
+    - 平均: O(1/(1-α)) 当α<1时
+    - 最坏: O(n)
+    """
+    def __init__(self, capacity=11):
+        self.capacity = capacity
+        self.size = 0
+        self.keys = [None] * capacity
+        self.values = [None] * capacity
+        self.DELETED = object()  # 删除标记
+
+    def _hash(self, key):
+        return simple_hash(key, self.capacity)
+
+    def _probe(self, key, i):
+        """线性探测函数"""
+        return (self._hash(key) + i) % self.capacity
+
+    def insert(self, key, value):
+        """插入键值对"""
+        if self.load_factor() > 0.7:
+            self._resize(2 * self.capacity)
+
+        for i in range(self.capacity):
+            index = self._probe(key, i)
+
+            if self.keys[index] is None or self.keys[index] is self.DELETED:
+                self.keys[index] = key
+                self.values[index] = value
+                self.size += 1
+                return
+            elif self.keys[index] == key:
+                self.values[index] = value  # 更新
+                return
+
+        raise Exception("Hash table is full")
+
+    def get(self, key):
+        """获取值"""
+        for i in range(self.capacity):
+            index = self._probe(key, i)
+
+            if self.keys[index] is None:
+                break
+            elif self.keys[index] == key:
+                return self.values[index]
+
+        raise KeyError(f"Key '{key}' not found")
+
+    def remove(self, key):
+        """删除键值对"""
+        for i in range(self.capacity):
+            index = self._probe(key, i)
+
+            if self.keys[index] is None:
+                break
+            elif self.keys[index] == key:
+                self.keys[index] = self.DELETED
+                self.values[index] = None
+                self.size -= 1
+                return
+
+        raise KeyError(f"Key '{key}' not found")
+
+    def load_factor(self):
+        return self.size / self.capacity
+
+    def _resize(self, new_capacity):
+        """调整大小"""
+        old_keys = self.keys
+        old_values = self.values
+
+        self.capacity = new_capacity
+        self.keys = [None] * new_capacity
+        self.values = [None] * new_capacity
+        self.size = 0
+
+        for i in range(len(old_keys)):
+            if old_keys[i] is not None and old_keys[i] is not self.DELETED:
+                self.insert(old_keys[i], old_values[i])
+```
+
+#### 二次探测
+
+```python
+class QuadraticProbingHashTable:
+    """
+    二次探测哈希表
+    探测序列: h(k), h(k)+1, h(k)+4, h(k)+9, ...
+    """
+    def __init__(self, capacity=11):
+        self.capacity = capacity
+        self.size = 0
+        self.keys = [None] * capacity
+        self.values = [None] * capacity
+        self.DELETED = object()
+
+    def _hash(self, key):
+        return simple_hash(key, self.capacity)
+
+    def _probe(self, key, i):
+        """二次探测函数"""
+        return (self._hash(key) + i * i) % self.capacity
+
+    def insert(self, key, value):
+        if self.load_factor() > 0.5:  # 二次探测需要更低的负载因子
+            self._resize(2 * self.capacity)
+
+        for i in range(self.capacity):
+            index = self._probe(key, i)
+
+            if self.keys[index] is None or self.keys[index] is self.DELETED:
+                self.keys[index] = key
+                self.values[index] = value
+                self.size += 1
+                return
+            elif self.keys[index] == key:
+                self.values[index] = value
+                return
+
+        raise Exception("Hash table is full")
+
+    # 其他方法与线性探测类似...
+
+class DoubleHashTable:
+    """
+    双重哈希表
+    使用两个不同的哈希函数
+    """
+    def __init__(self, capacity=11):
+        self.capacity = capacity
+        self.size = 0
+        self.keys = [None] * capacity
+        self.values = [None] * capacity
+        self.DELETED = object()
+
+    def _hash1(self, key):
+        """第一个哈希函数"""
+        return simple_hash(key, self.capacity)
+
+    def _hash2(self, key):
+        """第二个哈希函数（必须返回与capacity互质的数）"""
+        hash_val = simple_hash(key, self.capacity - 1)
+        return 1 + hash_val  # 确保返回值 >= 1
+
+    def _probe(self, key, i):
+        """双重哈希探测"""
+        return (self._hash1(key) + i * self._hash2(key)) % self.capacity
+
+    # 插入、查找、删除方法与其他开放寻址法类似...
+```
+
+<ExerciseBlock
+  title="冲突解决比较"
+  question:"链地址法和开放寻址法的主要优缺点是什么？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "链地址法内存效率更高，开放寻址法速度更快",
+      correct: false,
+      explanation: "开放寻址法通常内存效率更高"
+    },
+    {
+      id: "b",
+      text: "链地址法在负载因子高时性能较好，开放寻址法缓存性能更好",
+      correct: true,
+      explanation: "正确！链地址法在高负载时仍能保持性能，开放寻址法有更好的缓存局部性"
+    },
+    {
+      id: "c",
+      text: "开放寻址法实现更简单，链地址法更复杂",
+      correct: false,
+      explanation: "两者实现复杂度相当"
+    },
+    {
+      id: "d",
+      text: "两者在所有方面性能完全相同",
+      correct: false,
+      explanation: "在不同场景下各有优劣"
+    }
+  ]}
+  hint="考虑内存使用、缓存效应、负载因子的影响"
+/>
+
+## 🎯 高级哈希技术
+
+### 1. 动态扩容策略
+
+```python
+class DynamicHashTable:
+    """
+    动态扩容的哈希表
+    支持增量式扩容，避免一次性重建的代价
+    """
+    def __init__(self, initial_capacity=11):
+        self.old_table = None
+        self.new_table = [None] * initial_capacity
+        self.old_capacity = 0
+        self.new_capacity = initial_capacity
+        self.size = 0
+        self.migration_index = 0
+        self.threshold = 0.75
+
+    def _hash(self, key, capacity):
+        return simple_hash(key, capacity)
+
+    def insert(self, key, value):
+        """插入操作"""
+        # 首先处理迁移
+        self._migrate_if_needed()
+
+        # 在新表中插入
+        index = self._hash(key, self.new_capacity)
+        bucket = self.new_table[index]
+
+        # 检查是否已存在
+        current = bucket
+        while current:
+            if current.key == key:
+                current.value = value
+                return
+            current = current.next
+
+        # 创建新节点
+        new_node = ListNode(key, value)
+        new_node.next = bucket
+        self.new_table[index] = new_node
+        self.size += 1
+
+        # 检查是否需要扩容
+        if self.load_factor() > self.threshold:
+            self._start_migration()
+
+    def get(self, key):
+        """获取操作"""
+        self._migrate_if_needed()
+
+        # 在新表中查找
+        index = self._hash(key, self.new_capacity)
+        current = self.new_table[index]
+
+        while current:
+            if current.key == key:
+                return current.value
+            current = current.next
+
+        # 如果正在迁移，也在旧表中查找
+        if self.old_table:
+            old_index = self._hash(key, self.old_capacity)
+            current = self.old_table[old_index]
+
+            while current:
+                if current.key == key:
+                    return current.value
+                current = current.next
+
+        raise KeyError(f"Key '{key}' not found")
+
+    def _start_migration(self):
+        """开始增量迁移"""
+        self.old_table = self.new_table
+        self.old_capacity = self.new_capacity
+        self.new_capacity = 2 * self.old_capacity
+        self.new_table = [None] * self.new_capacity
+        self.migration_index = 0
+
+    def _migrate_if_needed(self):
+        """迁移一些元素"""
+        if self.old_table is None:
+            return
+
+        # 每次操作迁移一定数量的元素
+        migrations_per_operation = 5
+        migrated = 0
+
+        while migrated < migrations_per_operation and self.migration_index < self.old_capacity:
+            if self.old_table[self.migration_index]:
+                current = self.old_table[self.migration_index]
+                while current:
+                    # 将元素迁移到新表
+                    new_index = self._hash(current.key, self.new_capacity)
+                    new_node = ListNode(current.key, current.value)
+                    new_node.next = self.new_table[new_index]
+                    self.new_table[new_index] = new_node
+                    current = current.next
+
+            self.migration_index += 1
+            migrated += 1
+
+        # 检查迁移是否完成
+        if self.migration_index >= self.old_capacity:
+            self.old_table = None
+            self.old_capacity = 0
+
+    def load_factor(self):
+        return self.size / self.new_capacity
+```
+
+### 2. 布隆过滤器 (Bloom Filter)
+
+```python
+import mmh3  # MurmurHash3，需要安装
+
+class BloomFilter:
+    """
+    布隆过滤器 - 概率性数据结构
+    用于判断元素是否在集合中，可能有误报，但不会有漏报
+    """
+    def __init__(self, capacity, error_rate=0.01):
+        self.capacity = capacity
+        self.error_rate = error_rate
+
+        # 计算最优的bit数和哈希函数数
+        self.bit_size = self._calculate_bit_size(capacity, error_rate)
+        self.hash_count = self._calculate_hash_count(self.bit_size, capacity)
+
+        # 初始化位数组
+        self.bit_array = [0] * self.bit_size
+
+    def _calculate_bit_size(self, n, p):
+        """计算需要的bit数"""
+        m = -(n * math.log(p)) / (math.log(2) ** 2)
+        return int(m)
+
+    def _calculate_hash_count(self, m, n):
+        """计算需要的哈希函数数"""
+        k = (m / n) * math.log(2)
+        return int(k)
+
+    def add(self, item):
+        """添加元素"""
+        for i in range(self.hash_count):
+            # 使用不同的种子值创建多个哈希函数
+            hash_val = mmh3.hash(str(item), i) % self.bit_size
+            self.bit_array[hash_val] = 1
+
+    def __contains__(self, item):
+        """检查元素是否可能存在"""
+        for i in range(self.hash_count):
+            hash_val = mmh3.hash(str(item), i) % self.bit_size
+            if self.bit_array[hash_val] == 0:
+                return False
+        return True
+
+    def false_positive_rate(self):
+        """计算当前的误报率"""
+        n = sum(self.bit_array)  # 实际设置的bit数
+        return (1 - math.exp(-self.hash_count * n / self.bit_size)) ** self.hash_count
+
+# 使用示例
+bf = BloomFilter(1000000, 0.001)  # 100万元素，0.1%误报率
+bf.add("hello")
+bf.add("world")
+
+print("hello" in bf)  # True
+print("python" in bf)  # False（可能误报为True）
+```
+
+### 3. 一致性哈希 (Consistent Hashing)
+
+```python
+import hashlib
+
+class ConsistentHashRing:
+    """
+    一致性哈希环
+    用于分布式系统中减少节点变化时的数据迁移
+    """
+    def __init__(self, virtual_nodes=100):
+        self.ring = {}
+        self.sorted_keys = []
+        self.virtual_nodes = virtual_nodes
+
+    def _hash(self, key):
+        """使用SHA256哈希"""
+        return int(hashlib.sha256(key.encode()).hexdigest(), 16)
+
+    def add_node(self, node):
+        """添加节点"""
+        for i in range(self.virtual_nodes):
+            virtual_key = f"{node}:{i}"
+            hash_val = self._hash(virtual_key)
+            self.ring[hash_val] = node
+            self.sorted_keys.append(hash_val)
+
+        self.sorted_keys.sort()
+
+    def remove_node(self, node):
+        """移除节点"""
+        for i in range(self.virtual_nodes):
+            virtual_key = f"{node}:{i}"
+            hash_val = self._hash(virtual_key)
+            if hash_val in self.ring:
+                del self.ring[hash_val]
+                self.sorted_keys.remove(hash_val)
+
+    def get_node(self, key):
+        """获取负责该key的节点"""
+        if not self.ring:
+            return None
+
+        hash_val = self._hash(str(key))
+
+        # 使用二分查找找到第一个大于等于hash_val的节点
+        left, right = 0, len(self.sorted_keys)
+        while left < right:
+            mid = (left + right) // 2
+            if self.sorted_keys[mid] < hash_val:
+                left = mid + 1
+            else:
+                right = mid
+
+        if left == len(self.sorted_keys):
+            left = 0
+
+        return self.ring[self.sorted_keys[left]]
+
+    def get_nodes(self, key, replication=3):
+        """获取key的多个副本节点"""
+        if not self.ring:
+            return []
+
+        hash_val = self._hash(str(key))
+        nodes = []
+        start_index = 0
+
+        # 找到起始位置
+        left, right = 0, len(self.sorted_keys)
+        while left < right:
+            mid = (left + right) // 2
+            if self.sorted_keys[mid] < hash_val:
+                left = mid + 1
+            else:
+                right = mid
+
+        if left == len(self.sorted_keys):
+            left = 0
+
+        # 收集replication个不同的节点
+        while len(nodes) < replication and len(nodes) < len(set(self.ring.values())):
+            node = self.ring[self.sorted_keys[left]]
+            if node not in nodes:
+                nodes.append(node)
+            left = (left + 1) % len(self.sorted_keys)
+
+        return nodes
+
+class DistributedCache:
+    """
+    分布式缓存系统示例
+    使用一致性哈希分配数据
+    """
+    def __init__(self, nodes):
+        self.hash_ring = ConsistentHashRing()
+        self.local_caches = {node: {} for node in nodes}
+
+        for node in nodes:
+            self.hash_ring.add_node(node)
+
+    def set(self, key, value):
+        """设置键值对"""
+        nodes = self.hash_ring.get_nodes(key, replication=3)
+        for node in nodes:
+            self.local_caches[node][key] = value
+
+    def get(self, key):
+        """获取值"""
+        nodes = self.hash_ring.get_nodes(key, replication=3)
+        for node in nodes:
+            if key in self.local_caches[node]:
+                return self.local_caches[node][key]
+        return None
+
+    def add_node(self, node):
+        """添加缓存节点"""
+        self.hash_ring.add_node(node)
+        self.local_caches[node] = {}
+
+        # 数据迁移（简化版）
+        for existing_node in self.local_caches:
+            if existing_node != node:
+                for key, value in self.local_caches[existing_node].items():
+                    responsible_nodes = self.hash_ring.get_nodes(key, replication=3)
+                    if node in responsible_nodes:
+                        self.local_caches[node][key] = value
+
+    def remove_node(self, node):
+        """移除缓存节点"""
+        self.hash_ring.remove_node(node)
+        del self.local_caches[node]
+```
+
+<ExerciseBlock
+  title="高级哈希应用"
+  question:"在什么情况下应该使用布隆过滤器而不是哈希表？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "当需要存储和检索完整的键值对时",
+      correct: false,
+      explanation: "布隆过滤器不存储实际值，只支持存在性检查"
+    },
+    {
+      id: "b",
+      text: "当内存非常有限且允许一定误报时",
+      correct: true,
+      explanation: "正确！布隆过滤器内存效率极高，适合存在性检查"
+    },
+    {
+      id: "c",
+      text: "当需要精确的查找结果时",
+      correct: false,
+      explanation: "布隆过滤器有误报可能，不适合精确查找"
+    },
+    {
+      id: "d",
+      text: "当数据量很小时",
+      correct: false,
+      explanation: "小数据量可以直接使用哈希表"
+    }
+  ]}
+  hint="考虑布隆过滤器的特性和适用场景"
+/>
+
+## 🎯 实际应用场景
+
+### 1. Python字典内部实现
+
+```python
+class PyDictLike:
+    """
+    模拟Python字典的实现
+    Python 3.6+ 使用开放寻址法的变种
+    """
+    def __init__(self):
+        self.indices = None   # 索引数组
+        self.entries = []     # 条目数组
+        self.filled = 0       # 已使用的条目数
+        self.used = 0         # 总条目数（包括已删除的）
+
+    def _lookup(self, key):
+        """查找key的位置"""
+        if not self.indices:
+            return -1
+
+        # 计算哈希值
+        hash_val = hash(key)
+        mask = len(self.indices) - 1
+        index = hash_val & mask
+        perturb = hash_val
+
+        while True:
+            entry_index = self.indices[index]
+            if entry_index == -1:
+                return -1  # 未找到
+
+            entry = self.entries[entry_index]
+            if entry.key == key and not entry.deleted:
+                return entry_index
+
+            # 冲突处理
+            perturb = perturb >> 5
+            index = (index * 5 + perturb + 1) & mask
+
+    def __setitem__(self, key, value):
+        """设置键值对"""
+        if self.used * 3 > len(self.entries) * 2:
+            self._resize()
+
+        entry_index = self._lookup(key)
+
+        if entry_index != -1:
+            # 键已存在，更新值
+            self.entries[entry_index].value = value
+            return
+
+        # 添加新条目
+        entry_index = self.used
+        self.entries.append(_DictEntry(key, value))
+        self.used += 1
+
+        # 更新索引
+        if self.indices is None:
+            self.indices = [-1] * 8
+            mask = len(self.indices) - 1
+        else:
+            mask = len(self.indices) - 1
+
+        hash_val = hash(key)
+        index = hash_val & mask
+        perturb = hash_val
+
+        while True:
+            if self.indices[index] == -1:
+                self.indices[index] = entry_index
+                self.filled += 1
+                break
+
+            # 冲突处理
+            perturb = perturb >> 5
+            index = (index * 5 + perturb + 1) & mask
+
+    def __getitem__(self, key):
+        """获取值"""
+        entry_index = self._lookup(key)
+        if entry_index == -1:
+            raise KeyError(key)
+        return self.entries[entry_index].value
+
+    def _resize(self):
+        """调整大小"""
+        old_indices = self.indices
+        old_entries = self.entries
+
+        # 计算新大小
+        new_size = max(8, len(old_entries) * 2)
+        self.indices = [-1] * new_size
+        self.entries = []
+        self.filled = 0
+
+        # 重新插入所有条目
+        for entry in old_entries:
+            if not entry.deleted:
+                self.entries.append(_DictEntry(entry.key, entry.value))
+
+        # 重建索引
+        mask = len(self.indices) - 1
+        for entry_index, entry in enumerate(self.entries):
+            hash_val = hash(entry.key)
+            index = hash_val & mask
+            perturb = hash_val
+
+            while True:
+                if self.indices[index] == -1:
+                    self.indices[index] = entry_index
+                    self.filled += 1
+                    break
+
+                perturb = perturb >> 5
+                index = (index * 5 + perturb + 1) & mask
+
+class _DictEntry:
+    """字典条目"""
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+        self.deleted = False
+```
+
+### 2. LRU缓存实现
+
+```python
+from collections import OrderedDict
+
+class LRUCache:
+    """
+    LRU (Least Recently Used) 缓存
+    使用哈希表 + 双向链表实现
+    """
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.cache = {}
+        self.order = OrderedDict()  # 维护访问顺序
+
+    def get(self, key):
+        """获取值"""
+        if key not in self.cache:
+            return -1
+
+        # 移动到最前面（表示最近使用）
+        self.order.move_to_end(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        """设置值"""
+        if key in self.cache:
+            # 更新值并移动到最前面
+            self.cache[key] = value
+            self.order.move_to_end(key)
+            return
+
+        if len(self.cache) >= self.capacity:
+            # 删除最久未使用的项
+            oldest_key = next(iter(self.order))
+            del self.cache[oldest_key]
+            del self.order[oldest_key]
+
+        # 添加新项
+        self.cache[key] = value
+        self.order[key] = None  # 值不重要，重要的是顺序
+
+class LFUCache:
+    """
+    LFU (Least Frequently Used) 缓存
+    使用哈希表 + 频率字典实现
+    """
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.cache = {}  # key -> (value, frequency)
+        self.freq_map = {}  # frequency -> OrderedDict
+        self.min_freq = 0
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+
+        value, freq = self.cache[key]
+        self._update_frequency(key, value, freq + 1)
+        return value
+
+    def put(self, key, value):
+        if self.capacity <= 0:
+            return
+
+        if key in self.cache:
+            _, freq = self.cache[key]
+            self._update_frequency(key, value, freq + 1)
+            return
+
+        if len(self.cache) >= self.capacity:
+            # 删除频率最低的项
+            min_freq_keys = self.freq_map[self.min_freq]
+            oldest_key = next(iter(min_freq_keys))
+            del min_freq_keys[oldest_key]
+            del self.cache[oldest_key]
+
+        self.cache[key] = (value, 1)
+        self.min_freq = 1
+        if 1 not in self.freq_map:
+            self.freq_map[1] = OrderedDict()
+        self.freq_map[1][key] = None
+
+    def _update_frequency(self, key, value, new_freq):
+        # 从旧频率中移除
+        old_freq = new_freq - 1
+        old_freq_map = self.freq_map[old_freq]
+        del old_freq_map[key]
+
+        if not old_freq_map and old_freq == self.min_freq:
+            self.min_freq = new_freq
+
+        # 添加到新频率
+        if new_freq not in self.freq_map:
+            self.freq_map[new_freq] = OrderedDict()
+        self.freq_map[new_freq][key] = None
+
+        # 更新缓存
+        self.cache[key] = (value, new_freq)
+```
+
+### 3. 分布式锁服务
+
+```python
+import time
+import uuid
+import threading
+
+class DistributedLock:
+    """
+    分布式锁实现
+    使用Redis或类似的键值存储
+    """
+    def __init__(self, redis_client, lock_name, timeout=30):
+        self.redis = redis_client
+        self.lock_name = lock_name
+        self.timeout = timeout
+        self.identifier = str(uuid.uuid4())
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        """获取锁"""
+        end_time = time.time() + self.timeout
+
+        while time.time() < end_time:
+            # 使用SET命令的原子性
+            result = self.redis.set(
+                self.lock_name,
+                self.identifier,
+                nx=True,
+                ex=self.timeout
+            )
+
+            if result:
+                return True
+
+            time.sleep(0.001)  # 避免CPU过度使用
+
+        return False
+
+    def release(self):
+        """释放锁"""
+        # 使用Lua脚本确保原子性
+        lua_script = """
+        if redis.call("GET", KEYS[1]) == ARGV[1] then
+            return redis.call("DEL", KEYS[1])
+        else
+            return 0
+        end
+        """
+
+        result = self.redis.eval(
+            lua_script,
+            1,
+            self.lock_name,
+            self.identifier
+        )
+
+        return result == 1
+
+    def __enter__(self):
+        """上下文管理器支持"""
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器支持"""
+        self.release()
+
+class RateLimiter:
+    """
+    令牌桶限流器
+    使用哈希表存储用户状态
+    """
+    def __init__(self, redis_client, capacity, refill_rate):
+        self.redis = redis_client
+        self.capacity = capacity
+        self.refill_rate = refill_rate  # 每秒补充的令牌数
+
+    def is_allowed(self, user_id):
+        """检查用户是否允许访问"""
+        key = f"rate_limit:{user_id}"
+        current_time = time.time()
+
+        # 使用Lua脚本保证原子性
+        lua_script = """
+        local key = KEYS[1]
+        local current_time = tonumber(ARGV[1])
+        local capacity = tonumber(ARGV[2])
+        local refill_rate = tonumber(ARGV[3])
+
+        local bucket = redis.call("HMGET", key, "tokens", "last_refill")
+        local tokens = tonumber(bucket[1]) or capacity
+        local last_refill = tonumber(bucket[2]) or current_time
+
+        -- 计算补充的令牌数
+        local time_passed = current_time - last_refill
+        local tokens_to_add = time_passed * refill_rate
+        tokens = math.min(tokens + tokens_to_add, capacity)
+
+        if tokens >= 1 then
+            -- 消费一个令牌
+            tokens = tokens - 1
+            redis.call("HMSET", key, "tokens", tokens, "last_refill", current_time)
+            redis.call("EXPIRE", key, 60)  # 60秒过期
+            return 1
+        else
+            redis.call("HMSET", key, "tokens", tokens, "last_refill", current_time)
+            redis.call("EXPIRE", key, 60)
+            return 0
+        end
+        """
+
+        result = self.redis.eval(
+            lua_script,
+            1,
+            key,
+            current_time,
+            self.capacity,
+            self.refill_rate
+        )
+
+        return result == 1
+```
+
+## 📊 性能分析与优化
+
+### 哈希表性能指标
+
+```python
+def analyze_hash_table_performance():
+    """
+    哈希表性能分析
+    """
+    import random
+    import time
+
+    def test_performance(hash_table_class, operations, data_size):
+        # 生成测试数据
+        keys = [f"key_{i}" for i in range(data_size)]
+        values = [f"value_{i}" for i in range(data_size)]
+
+        # 插入测试
+        start_time = time.time()
+        hash_table = hash_table_class()
+        for key, value in zip(keys, values):
+            hash_table.insert(key, value)
+        insert_time = time.time() - start_time
+
+        # 查找测试
+        search_times = []
+        for _ in range(1000):
+            key = random.choice(keys)
+            start_time = time.time()
+            hash_table.get(key)
+            search_times.append(time.time() - start_time)
+
+        avg_search_time = sum(search_times) / len(search_times)
+
+        return {
+            "insert_time": insert_time,
+            "avg_search_time": avg_search_time,
+            "operations": operations
+        }
+
+    # 测试不同的实现
+    implementations = {
+        "ChainedHashTable": ChainedHashTable,
+        "LinearProbingHashTable": LinearProbingHashTable,
+        "DynamicHashTable": DynamicHashTable
+    }
+
+    results = {}
+    for name, impl_class in implementations.items():
+        results[name] = test_performance(impl_class, ["insert", "search"], 10000)
+
+    return results
+
+# 性能数据示例
+performance_data = [
+    {"n": 1000, "time": 0.001, "implementation": "ChainedHashTable"},
+    {"n": 10000, "time": 0.003, "implementation": "ChainedHashTable"},
+    {"n": 100000, "time": 0.008, "implementation": "ChainedHashTable"},
+    {"n": 1000000, "time": 0.025, "implementation": "ChainedHashTable"}
+]
+```
+
+<ComplexityAnalyzer
+  title="哈希表插入性能分析"
+  algorithm="链地址法哈希表"
+  theoreticalComplexity="O(1) 平均"
+  data={performance_data}
+  color="rgb(168, 85, 247)"
+/>
+
+<ExerciseBlock
+  title="性能优化"
+  question:"如何优化哈希表以减少哈希冲突？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "使用更好的哈希函数和适当的表大小",
+      correct: true,
+      explanation: "正确！好的哈希函数和合适的表大小能有效减少冲突"
+    },
+    {
+      id: "b",
+      text: "总是使用线性探测法",
+      correct: false,
+      explanation: "不同场景适合不同的冲突解决方法"
+    },
+    {
+      id: "c",
+      text: "使用很小的表大小以节省内存",
+      correct: false,
+      explanation: "表太小会增加冲突概率"
+    },
+    {
+      id: "d",
+      text: "避免使用哈希表，使用其他数据结构",
+      correct: false,
+      explanation: "哈希表在正确使用时性能很好"
+    }
+  ]}
+  hint="考虑哈希函数质量和负载因子的影响"
+/>
+
+## 🎯 高级主题
+
+### 1. 可扩展哈希
+
+```python
+class ExtendibleHashing:
+    """
+    可扩展哈希 - 动态调整哈希表结构
+    适合处理大规模数据
+    """
+    def __init__(self, bucket_size=4):
+        self.global_depth = 1
+        self.bucket_size = bucket_size
+        self.directory = [None] * (2 ** self.global_depth)
+        self.buckets = []
+
+    def _hash(self, key):
+        """计算哈希值"""
+        return hash(key)
+
+    def _get_index(self, key):
+        """获取目录索引"""
+        hash_val = self._hash(key)
+        return hash_val & ((1 << self.global_depth) - 1)
+
+    def insert(self, key, value):
+        """插入键值对"""
+        index = self._get_index(key)
+
+        if self.directory[index] is None:
+            bucket = Bucket(self.bucket_size)
+            self.directory[index] = bucket
+            self.buckets.append(bucket)
+
+        bucket = self.directory[index]
+
+        if not bucket.is_full():
+            bucket.insert(key, value)
+        else:
+            # 桶已满，需要分裂
+            if bucket.local_depth < self.global_depth:
+                self._split_bucket(bucket, index)
+                self.insert(key, value)  # 重新插入
+            else:
+                self._expand_directory()
+                self.insert(key, value)  # 重新插入
+
+    def _split_bucket(self, bucket, old_index):
+        """分裂桶"""
+        bucket.local_depth += 1
+        new_bucket = Bucket(self.bucket_size)
+        new_bucket.local_depth = bucket.local_depth
+        self.buckets.append(new_bucket)
+
+        # 重新分配元素
+        keys_to_move = []
+        for item in bucket.items:
+            new_index = self._get_index(item.key)
+            if new_index != old_index:
+                keys_to_move.append(item)
+
+        for item in keys_to_move:
+            bucket.items.remove(item)
+            new_bucket.insert(item.key, item.value)
+
+        # 更新目录
+        mask = 1 << (bucket.local_depth - 1)
+        for i in range(len(self.directory)):
+            if (i & mask) == (old_index & mask):
+                if (i >> (bucket.local_depth - 1)) & 1:
+                    self.directory[i] = new_bucket
+
+    def _expand_directory(self):
+        """扩展目录"""
+        self.global_depth += 1
+        new_directory = [None] * (2 ** self.global_depth)
+
+        # 复制现有目录
+        for i in range(len(self.directory)):
+            new_directory[i] = self.directory[i]
+            new_directory[i + len(self.directory)] = self.directory[i]
+
+        self.directory = new_directory
+
+class Bucket:
+    """可扩展哈希的桶"""
+    def __init__(self, size):
+        self.size = size
+        self.items = []
+        self.local_depth = 1
+
+    def insert(self, key, value):
+        self.items.append(HashItem(key, value))
+
+    def is_full(self):
+        return len(self.items) >= self.size
+
+class HashItem:
+    """哈希项"""
+    def __init__(self, key, value):
+        self.key = key
+        self.value = value
+```
+
+### 2. 哈希表的并行化
+
+```python
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+class ConcurrentHashTable:
+    """
+    线程安全的哈希表
+    使用分段锁提高并发性能
+    """
+    def __init__(self, capacity=16, segments=16):
+        self.capacity = capacity
+        self.segments = segments
+        self.segment_mask = segments - 1
+        self.segment_size = capacity // segments
+
+        # 创建分段
+        self.segments = [Segment(self.segment_size) for _ in range(segments)]
+
+    def _get_segment(self, key):
+        """获取键对应的分段"""
+        hash_val = hash(key)
+        return self.segments[hash_val & self.segment_mask]
+
+    def put(self, key, value):
+        """插入键值对"""
+        segment = self._get_segment(key)
+        with segment.lock:
+            return segment.put(key, value)
+
+    def get(self, key):
+        """获取值"""
+        segment = self._get_segment(key)
+        with segment.lock:
+            return segment.get(key)
+
+    def remove(self, key):
+        """删除键值对"""
+        segment = self._get_segment(key)
+        with segment.lock:
+            return segment.remove(key)
+
+class Segment:
+    """哈希表分段"""
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.table = [None] * capacity
+        self.lock = threading.Lock()
+        self.size = 0
+
+    def put(self, key, value):
+        index = hash(key) % self.capacity
+
+        # 检查是否已存在
+        current = self.table[index]
+        while current:
+            if current.key == key:
+                current.value = value
+                return
+            current = current.next
+
+        # 插入新节点
+        new_node = ListNode(key, value)
+        new_node.next = self.table[index]
+        self.table[index] = new_node
+        self.size += 1
+
+    def get(self, key):
+        index = hash(key) % self.capacity
+        current = self.table[index]
+
+        while current:
+            if current.key == key:
+                return current.value
+            current = current.next
+
+        raise KeyError(key)
+
+    def remove(self, key):
+        index = hash(key) % self.capacity
+        current = self.table[index]
+        prev = None
+
+        while current:
+            if current.key == key:
+                if prev:
+                    prev.next = current.next
+                else:
+                    self.table[index] = current.next
+                self.size -= 1
+                return
+            prev = current
+            current = current.next
+
+        raise KeyError(key)
+```
+
+<ExerciseBlock
+  title="综合应用"
+  question:"设计一个分布式缓存系统，需要支持高并发读写、数据分片、故障转移。应该如何设计？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "使用单个Redis实例处理所有请求",
+      correct: false,
+      explanation: "单点故障，无法扩展"
+    },
+    {
+      id: "b",
+      text: "使用一致性哈希进行数据分片，每个节点独立处理",
+      correct: true,
+      explanation: "正确！一致性哈希支持动态扩缩容和故障转移"
+    },
+    {
+      id: "c",
+      text: "使用轮询算法在多个节点间分配请求",
+      correct: false,
+      explanation: "轮询不考虑数据一致性"
+    },
+    {
+      id: "d",
+      text: "每个节点存储完整的数据副本",
+      correct: false,
+      explanation: "存储效率低，扩展性差"
+    }
+  ]}
+  hint="考虑分布式系统的CAP理论和数据一致性"
+/>
+
+## 📝 总结与最佳实践
+
+### 关键要点
+
+1. **哈希函数选择**：
+   - 计算快速，分布均匀
+   - 根据数据类型选择合适的哈希算法
+   - 考虑使用全域哈希避免最坏情况
+
+2. **冲突解决策略**：
+   - 链地址法：适合负载因子变化大的场景
+   - 开放寻址法：缓存友好，内存效率高
+   - 根据应用场景选择合适的策略
+
+3. **性能优化**：
+   - 动态调整表大小
+   - 选择合适的负载因子阈值
+   - 考虑使用增量扩容减少暂停时间
+
+### 实际应用建议
+
+```python
+def hash_table_recommendation(use_case: str) -> str:
+    """
+    根据应用场景推荐哈希表实现
+    """
+    recommendations = {
+        "general_purpose": "标准哈希表（链地址法）",
+        "memory_constrained": "开放寻址法",
+        "high_concurrency": "分段锁哈希表",
+        "distributed_system": "一致性哈希",
+        "existence_check": "布隆过滤器",
+        "cache_system": "LRU/LFU缓存",
+        "database_index": "可扩展哈希",
+        "real_time_system": "完美哈希（编译时已知键集合）"
+    }
+
+    return recommendations.get(use_case, "根据具体需求分析")
+```
+
+### 性能监控指标
+
+```python
+class HashTableMonitor:
+    """哈希表性能监控"""
+    def __init__(self, hash_table):
+        self.hash_table = hash_table
+
+    def get_metrics(self):
+        """获取性能指标"""
+        metrics = {
+            "size": self.hash_table.size,
+            "capacity": self.hash_table.capacity,
+            "load_factor": self.hash_table.load_factor(),
+            "collision_rate": self._calculate_collision_rate(),
+            "average_chain_length": self._calculate_average_chain_length(),
+            "memory_usage": self._calculate_memory_usage()
+        }
+        return metrics
+
+    def _calculate_collision_rate(self):
+        """计算冲突率"""
+        total_buckets = self.hash_table.capacity
+        non_empty_buckets = sum(1 for bucket in self.hash_table.table if bucket)
+        return non_empty_buckets / total_buckets
+
+    def _calculate_average_chain_length(self):
+        """计算平均链长"""
+        if isinstance(self.hash_table, ChainedHashTable):
+            total_length = sum(self._count_chain_length(bucket)
+                             for bucket in self.hash_table.table if bucket)
+            non_empty_buckets = sum(1 for bucket in self.hash_table.table if bucket)
+            return total_length / non_empty_buckets if non_empty_buckets > 0 else 0
+        return 0
+
+    def _count_chain_length(self, bucket):
+        """计算链长"""
+        length = 0
+        current = bucket
+        while current:
+            length += 1
+            current = current.next
+        return length
+
+    def _calculate_memory_usage(self):
+        """计算内存使用"""
+        # 简化的内存计算
+        base_memory = self.hash_table.capacity * 8  # 指针数组
+        if isinstance(self.hash_table, ChainedHashTable):
+            node_count = self.hash_table.size
+            node_size = 48  # 每个节点大约48字节（Python）
+            return base_memory + node_count * node_size
+        return base_memory
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question:"当哈希表的负载因子接近1时，会发生什么？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "哈希表性能会显著下降",
+      correct: true,
+      explanation: "正确！高负载因子会导致大量冲突，操作时间接近O(n)"
+    },
+    {
+      id: "b",
+      text: "哈希表性能会提高",
+      correct: false,
+      explanation: "高负载因子会降低性能"
+    },
+    {
+      id: "c",
+      text: "内存使用会减少",
+      correct: false,
+      explanation: "高负载因子时内存利用率高，但性能差"
+    },
+    {
+      id: "d",
+      text: "不会影响性能",
+      correct: false,
+      explanation: "负载因子直接影响冲突概率和性能"
+    }
+  ]}
+  hint="考虑负载因子对冲突概率的影响"
+/>
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：实现各种哈希函数和冲突解决方法
+2. **进阶练习**：实现布隆过滤器和一致性哈希
+3. **实战练习**：设计并实现一个高性能的缓存系统
+4. **项目练习**：构建分布式哈希表和监控系统
+
+**记住**：哈希表是计算机科学中最实用的数据结构之一，掌握它的原理和优化技巧对解决实际问题至关重要！🔑

@@ -1,0 +1,1421 @@
+---
+title: Advanced Topics II - ML Integration & Vector Databases
+desc: This lecture covers machine learning integration with database systems and vector databases, including feature stores, model inference acceleration, and vector similarity search.
+---
+
+# 第25讲：高级主题 II - 机器学习集成与向量数据库
+
+## 课程概述
+
+本节课我们将探讨数据库系统与机器学习的深度融合，以及专门为 AI 应用设计的向量数据库。这些技术正在重塑数据处理和分析的方式，为实时智能应用提供了强大的基础设施。
+
+## 学习目标
+
+- 理解数据库与机器学习集成的模式和优势
+- 掌握特征存储和模型推理加速技术
+- 学习向量数据库的核心原理和实现
+- 了解相似性搜索和嵌入向量的应用场景
+
+## 1. 数据库与机器学习集成
+
+### 1.1 特征存储系统
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <chrono>
+#include <mutex>
+#include <thread>
+#include <atomic>
+
+namespace ml_db {
+
+/**
+ * 特征数据类型枚举
+ */
+enum class FeatureType {
+    NUMERICAL,     // 数值型特征
+    CATEGORICAL,   // 分类型特征
+    TEXT,          // 文本特征
+    IMAGE,         // 图像特征
+    VECTOR,        // 向量特征
+    TIME_SERIES    // 时间序列特征
+};
+
+/**
+ * 特征版本控制
+ */
+struct FeatureVersion {
+    int version_id;
+    std::chrono::system_clock::time_point created_at;
+    std::string description;
+    std::string author;
+    std::unordered_map<std::string, std::string> metadata;
+
+    FeatureVersion(int id, const std::string& desc)
+        : version_id(id), created_at(std::chrono::system_clock::now()),
+          description(desc), author("system") {}
+};
+
+/**
+ * 特征定义
+ */
+struct FeatureDefinition {
+    std::string feature_name;
+    FeatureType feature_type;
+    std::string source_table;
+    std::string transformation_logic;
+    std::vector<FeatureVersion> versions;
+    int current_version;
+    std::unordered_map<std::string, std::string> properties;
+
+    FeatureDefinition(const std::string& name, FeatureType type, const std::string& source)
+        : feature_name(name), feature_type(type), source_table(source),
+          current_version(1) {}
+
+    void addVersion(const std::string& description) {
+        FeatureVersion version(current_version, description);
+        versions.push_back(version);
+    }
+
+    FeatureVersion* getCurrentVersion() {
+        for (auto& version : versions) {
+            if (version.version_id == current_version) {
+                return &version;
+            }
+        }
+        return nullptr;
+    }
+};
+
+/**
+ * 特征值
+ */
+struct FeatureValue {
+    std::string entity_id;      // 实体ID
+    std::string feature_name;   // 特征名
+    std::string value;         // 特征值（字符串表示）
+    int version;               // 版本号
+    std::chrono::system_clock::time_point timestamp;
+    bool is_valid;             // 是否有效
+
+    FeatureValue(const std::string& entity, const std::string& feature, const std::string& val, int ver)
+        : entity_id(entity), feature_name(feature), value(val),
+          version(ver), timestamp(std::chrono::system_clock::now()), is_valid(true) {}
+};
+
+/**
+ * 特征存储系统
+ */
+class FeatureStore {
+private:
+    std::unordered_map<std::string, std::shared_ptr<FeatureDefinition>> feature_definitions;
+    std::unordered_map<std::string, std::vector<FeatureValue>> feature_values;  // feature_name -> values
+    std::unordered_map<std::string, std::unordered_map<std::string, FeatureValue>> entity_features;  // entity_id -> feature_name -> value
+    std::mutex store_mutex;
+    std::atomic<uint64_t> total_features{0};
+    std::atomic<uint64_t> total_entities{0};
+
+public:
+    /**
+     * 注册特征
+     * @param feature_def 特征定义
+     * @return 是否成功注册
+     */
+    bool registerFeature(const FeatureDefinition& feature_def) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        if (feature_definitions.find(feature_def.feature_name) != feature_definitions.end()) {
+            return false;  // 特征已存在
+        }
+
+        auto def = std::make_shared<FeatureDefinition>(feature_def);
+        def->addVersion("Initial version");
+        feature_definitions[feature_def.feature_name] = def;
+
+        // 初始化特征值存储
+        feature_values[feature_def.feature_name] = std::vector<FeatureValue>();
+
+        std::cout << "Registered feature: " << feature_def.feature_name
+                  << " (type: " << static_cast<int>(feature_def.feature_type) << ")" << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 写入特征值
+     * @param entity_id 实体ID
+     * @param feature_name 特征名
+     * @param value 特征值
+     * @param version 版本号
+     * @return 是否成功写入
+     */
+    bool writeFeature(const std::string& entity_id, const std::string& feature_name,
+                     const std::string& value, int version = -1) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        auto def_it = feature_definitions.find(feature_name);
+        if (def_it == feature_definitions.end()) {
+            return false;  // 特征未注册
+        }
+
+        int target_version = (version == -1) ? def_it->second->current_version : version;
+
+        // 写入特征值
+        FeatureValue feature_value(entity_id, feature_name, value, target_version);
+        feature_values[feature_name].push_back(feature_value);
+
+        // 更新实体特征索引
+        entity_features[entity_id][feature_name] = feature_value;
+
+        total_features++;
+        if (entity_features[entity_id].size() == 1) {
+            total_entities++;  // 新实体
+        }
+
+        return true;
+    }
+
+    /**
+     * 读取特征值
+     * @param entity_id 实体ID
+     * @param feature_name 特征名
+     * @param version 版本号（-1表示最新版本）
+     * @return 特征值
+     */
+    std::string readFeature(const std::string& entity_id, const std::string& feature_name, int version = -1) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        // 查找实体特征
+        auto entity_it = entity_features.find(entity_id);
+        if (entity_it == entity_features.end()) {
+            return "";
+        }
+
+        auto feature_it = entity_it->second.find(feature_name);
+        if (feature_it == entity_it->second.end()) {
+            return "";
+        }
+
+        const FeatureValue& feature_value = feature_it->second;
+
+        // 检查版本
+        if (version == -1 || feature_value.version == version) {
+            return feature_value.value;
+        }
+
+        // 如果指定了版本但不匹配，查找历史版本（简化实现）
+        return "";
+    }
+
+    /**
+     * 批量读取特征
+     * @param entity_id 实体ID
+     * @param feature_names 特征名列表
+     * @return 特征值映射
+     */
+    std::unordered_map<std::string, std::string> readFeatures(
+        const std::string& entity_id, const std::vector<std::string>& feature_names) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        std::unordered_map<std::string, std::string> result;
+
+        for (const auto& feature_name : feature_names) {
+            result[feature_name] = readFeature(entity_id, feature_name);
+        }
+
+        return result;
+    }
+
+    /**
+     * 训练集生成
+     * @param entity_ids 实体ID列表
+     * @param feature_names 特征名列表
+     * @param label_feature 标签特征名
+     * @return 训练数据（特征向量和标签）
+     */
+    std::pair<std::vector<std::vector<std::string>>, std::vector<std::string>> generateTrainingSet(
+        const std::vector<std::string>& entity_ids,
+        const std::vector<std::string>& feature_names,
+        const std::string& label_feature) {
+        std::vector<std::vector<std::string>> feature_vectors;
+        std::vector<std::string> labels;
+
+        for (const auto& entity_id : entity_ids) {
+            auto features = readFeatures(entity_id, feature_names);
+            std::string label = readFeature(entity_id, label_feature);
+
+            if (!label.empty()) {
+                std::vector<std::string> feature_vector;
+                for (const auto& feature_name : feature_names) {
+                    feature_vector.push_back(features[feature_name]);
+                }
+
+                feature_vectors.push_back(feature_vector);
+                labels.push_back(label);
+            }
+        }
+
+        return {feature_vectors, labels};
+    }
+
+    /**
+     * 特征转换和预处理
+     * @param feature_name 特征名
+     * @param transformation 转换函数
+     * @return 是否成功应用转换
+     */
+    bool applyTransformation(const std::string& feature_name,
+                           std::function<std::string(const std::string&)> transformation) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        auto values_it = feature_values.find(feature_name);
+        if (values_it == feature_values.end()) {
+            return false;
+        }
+
+        // 应用转换到所有特征值
+        for (auto& feature_value : values_it->second) {
+            feature_value.value = transformation(feature_value.value);
+        }
+
+        // 更新实体特征索引
+        for (auto& entity_pair : entity_features) {
+            auto feature_it = entity_pair.second.find(feature_name);
+            if (feature_it != entity_pair.second.end()) {
+                feature_it->second.value = transformation(feature_it->second.value);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * 获取特征统计信息
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, uint64_t> getFeatureStats() {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["total_features"] = total_features.load();
+        stats["total_entities"] = total_entities.load();
+        stats["registered_feature_definitions"] = feature_definitions.size();
+
+        // 计算每个特征值的数量
+        for (const auto& pair : feature_values) {
+            stats["feature_" + pair.first + "_count"] = pair.second.size();
+        }
+
+        return stats;
+    }
+
+    /**
+     * 特征版本管理
+     * @param feature_name 特征名
+     * @param new_version 新版本描述
+     * @return 新版本号
+     */
+    int createNewVersion(const std::string& feature_name, const std::string& new_version_desc) {
+        std::lock_guard<std::mutex> lock(store_mutex);
+
+        auto def_it = feature_definitions.find(feature_name);
+        if (def_it == feature_definitions.end()) {
+            return -1;
+        }
+
+        auto& definition = def_it->second;
+        definition->current_version++;
+        definition->addVersion(new_version_desc);
+
+        std::cout << "Created version " << definition->current_version
+                  << " for feature " << feature_name << std::endl;
+
+        return definition->current_version;
+    }
+};
+
+}
+
+// 命名空间继续
+namespace ml_db {
+
+/**
+ * 模型推理引擎
+ */
+class ModelInferenceEngine {
+private:
+    struct ModelInfo {
+        std::string model_id;
+        std::string model_name;
+        std::string model_version;
+        std::chrono::system_clock::time_point loaded_at;
+        size_t model_size_bytes;
+        std::vector<std::string> input_features;
+        std::vector<std::string> output_features;
+        std::unordered_map<std::string, std::string> model_metadata;
+        bool is_loaded;
+
+        ModelInfo(const std::string& id, const std::string& name, const std::string& version)
+            : model_id(id), model_name(name), model_version(version),
+              loaded_at(std::chrono::system_clock::now()), model_size_bytes(0),
+              is_loaded(false) {}
+    };
+
+    std::unordered_map<std::string, std::shared_ptr<ModelInfo>> loaded_models;
+    std::shared_ptr<FeatureStore> feature_store;
+    std::mutex inference_mutex;
+    std::atomic<uint64_t> total_inferences{0};
+    std::atomic<uint64_t> cache_hits{0};
+
+    // 简单的推理缓存
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> inference_cache;
+
+public:
+    ModelInferenceEngine(std::shared_ptr<FeatureStore> store)
+        : feature_store(store) {}
+
+    /**
+     * 加载模型
+     * @param model_id 模型ID
+     * @param model_name 模型名
+     * @param model_version 模型版本
+     * @param input_features 输入特征
+     * @param output_features 输出特征
+     * @return 是否成功加载
+     */
+    bool loadModel(const std::string& model_id, const std::string& model_name,
+                   const std::string& model_version,
+                   const std::vector<std::string>& input_features,
+                   const std::vector<std::string>& output_features) {
+        std::lock_guard<std::mutex> lock(inference_mutex);
+
+        if (loaded_models.find(model_id) != loaded_models.end()) {
+            return false;  // 模型已加载
+        }
+
+        auto model_info = std::make_shared<ModelInfo>(model_id, model_name, model_version);
+        model_info->input_features = input_features;
+        model_info->output_features = output_features;
+
+        // 模拟模型加载过程
+        std::this_thread::sleep_for(std::chrono::milliseconds(100 + rand() % 200));
+
+        model_info->is_loaded = true;
+        model_info->model_size_bytes = 1024 * 1024 + rand() % (10 * 1024 * 1024);  // 1-11MB
+
+        loaded_models[model_id] = model_info;
+
+        std::cout << "Loaded model " << model_name << " version " << model_version
+                  << " (" << (model_info->model_size_bytes / (1024.0 * 1024.0)) << " MB)" << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 执行模型推理
+     * @param model_id 模型ID
+     * @param entity_id 实体ID
+     * @return 推理结果
+     */
+    std::unordered_map<std::string, std::string> infer(const std::string& model_id,
+                                                       const std::string& entity_id) {
+        std::lock_guard<std::mutex> lock(inference_mutex);
+
+        // 检查模型是否存在
+        auto model_it = loaded_models.find(model_id);
+        if (model_it == loaded_models.end()) {
+            throw std::runtime_error("Model not found: " + model_id);
+        }
+
+        auto model_info = model_it->second;
+
+        // 检查推理缓存
+        std::string cache_key = model_id + ":" + entity_id;
+        auto cache_it = inference_cache.find(cache_key);
+        if (cache_it != inference_cache.end()) {
+            cache_hits++;
+            return cache_it->second;
+        }
+
+        // 获取输入特征
+        auto input_features = feature_store->readFeatures(entity_id, model_info->input_features);
+
+        // 验证输入特征完整性
+        bool has_all_features = true;
+        for (const auto& feature_name : model_info->input_features) {
+            if (input_features[feature_name].empty()) {
+                has_all_features = false;
+                break;
+            }
+        }
+
+        if (!has_all_features) {
+            throw std::runtime_error("Missing required features for inference");
+        }
+
+        // 模拟模型推理过程
+        std::unordered_map<std::string, std::string> result;
+        for (const auto& output_feature : model_info->output_features) {
+            // 简化推理：基于输入特征生成伪随机输出
+            std::string feature_hash = "";
+            for (const auto& input_feature : model_info->input_features) {
+                feature_hash += input_features[input_feature];
+            }
+
+            std::hash<std::string> hasher;
+            size_t hash_value = hasher(feature_hash + output_feature + entity_id);
+
+            // 根据输出特征类型生成不同格式的结果
+            if (output_feature.find("probability") != std::string::npos) {
+                double prob = (hash_value % 1000) / 1000.0;  // 0-1之间的概率值
+                result[output_feature] = std::to_string(prob);
+            } else if (output_feature.find("class") != std::string::npos) {
+                int class_id = hash_value % 10;  // 0-9之间的类别
+                result[output_feature] = "class_" + std::to_string(class_id);
+            } else {
+                result[output_feature] = std::to_string(hash_value % 10000);  // 通用数值
+            }
+        }
+
+        // 缓存推理结果
+        inference_cache[cache_key] = result;
+
+        // 限制缓存大小
+        if (inference_cache.size() > 10000) {
+            inference_cache.erase(inference_cache.begin());
+        }
+
+        total_inferences++;
+
+        return result;
+    }
+
+    /**
+     * 批量推理
+     * @param model_id 模型ID
+     * @param entity_ids 实体ID列表
+     * @return 批量推理结果
+     */
+    std::vector<std::unordered_map<std::string, std::string>> batchInfer(
+        const std::string& model_id, const std::vector<std::string>& entity_ids) {
+        std::vector<std::unordered_map<std::string, std::string>> results;
+
+        for (const auto& entity_id : entity_ids) {
+            try {
+                auto result = infer(model_id, entity_id);
+                results.push_back(result);
+            } catch (const std::exception& e) {
+                // 记录推理失败，但继续处理其他实体
+                std::cerr << "Inference failed for entity " << entity_id << ": " << e.what() << std::endl;
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * 实时特征工程
+     * @param entity_id 实体ID
+     * @param feature_name 特征名
+     * @param raw_value 原始值
+     * @return 处理后的特征值
+     */
+    std::string realtimeFeatureEngineering(const std::string& entity_id,
+                                         const std::string& feature_name,
+                                         const std::string& raw_value) {
+        // 简单的特征工程示例：标准化
+        try {
+            double value = std::stod(raw_value);
+            // 简单的标准化：假设均值为0，标准差为1
+            double standardized = (value - 0.0) / 1.0;
+            return std::to_string(standardized);
+        } catch (const std::exception&) {
+            return raw_value;  // 转换失败，返回原始值
+        }
+    }
+
+    /**
+     * 获取推理统计信息
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, double> getInferenceStats() {
+        std::lock_guard<std::mutex> lock(inference_mutex);
+
+        std::unordered_map<std::string, double> stats;
+        stats["total_inferences"] = static_cast<double>(total_inferences.load());
+        stats["cache_hits"] = static_cast<double>(cache_hits.load());
+        stats["cache_hit_rate"] = total_inferences.load() > 0 ?
+            static_cast<double>(cache_hits.load()) / total_inferences.load() : 0.0;
+        stats["loaded_models"] = loaded_models.size();
+
+        // 计算平均模型大小
+        double total_size = 0.0;
+        for (const auto& model_pair : loaded_models) {
+            total_size += model_pair.second->model_size_bytes;
+        }
+        stats["avg_model_size_mb"] = loaded_models.size() > 0 ?
+            total_size / loaded_models.size() / (1024.0 * 1024.0) : 0.0;
+
+        return stats;
+    }
+
+    /**
+     * 卸载模型
+     * @param model_id 模型ID
+     * @return 是否成功卸载
+     */
+    bool unloadModel(const std::string& model_id) {
+        std::lock_guard<std::mutex> lock(inference_mutex);
+
+        auto it = loaded_models.find(model_id);
+        if (it != loaded_models.end()) {
+            loaded_models.erase(it);
+            std::cout << "Unloaded model " << model_id << std::endl;
+            return true;
+        }
+
+        return false;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace ml_db;
+
+    // 创建特征存储
+    auto feature_store = std::make_shared<FeatureStore>();
+
+    // 注册特征
+    FeatureDefinition user_age("user_age", FeatureType::NUMERICAL, "users");
+    FeatureDefinition user_income("user_income", FeatureType::NUMERICAL, "users");
+    FeatureDefinition purchase_history("purchase_history", FeatureType::NUMERICAL, "transactions");
+    FeatureDefinition click_rate("click_rate", FeatureType::NUMERICAL, "user_behavior");
+    FeatureDefinition user_category("user_category", FeatureType::CATEGORICAL, "users");
+
+    feature_store->registerFeature(user_age);
+    feature_store->registerFeature(user_income);
+    feature_store->registerFeature(purchase_history);
+    feature_store->registerFeature(click_rate);
+    feature_store->registerFeature(user_category);
+
+    // 生成测试数据
+    std::cout << "\n=== Generating Test Data ===" << std::endl;
+    for (int i = 1; i <= 100; ++i) {
+        std::string user_id = "user_" + std::to_string(i);
+
+        feature_store->writeFeature(user_id, "user_age", std::to_string(18 + (i % 60)));
+        feature_store->writeFeature(user_id, "user_income", std::to_string(30000 + (i * 1000)));
+        feature_store->writeFeature(user_id, "purchase_history", std::to_string(i * 5));
+        feature_store->writeFeature(user_id, "click_rate", std::to_string(0.1 + (i % 50) / 100.0));
+        feature_store->writeFeature(user_id, "user_category", "category_" + std::to_string(i % 5));
+
+        if (i % 20 == 0) {
+            std::cout << "Generated features for " << i << " users" << std::endl;
+        }
+    }
+
+    // 创建模型推理引擎
+    ModelInferenceEngine inference_engine(feature_store);
+
+    // 加载模型
+    std::vector<std::string> input_features = {"user_age", "user_income", "purchase_history", "click_rate"};
+    std::vector<std::string> output_features = {"churn_probability", "user_segment"};
+
+    inference_engine.loadModel("churn_model", "customer_churn_predictor", "v1.0",
+                              input_features, output_features);
+
+    // 执行推理
+    std::cout << "\n=== Model Inference Examples ===" << std::endl;
+    for (int i = 1; i <= 5; ++i) {
+        std::string user_id = "user_" + std::to_string(i);
+        try {
+            auto result = inference_engine.infer("churn_model", user_id);
+            std::cout << "User " << user_id << " prediction:" << std::endl;
+            for (const auto& pair : result) {
+                std::cout << "  " << pair.first << ": " << pair.second << std::endl;
+            }
+            std::cout << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Inference failed for " << user_id << ": " << e.what() << std::endl;
+        }
+    }
+
+    // 生成训练集
+    std::cout << "\n=== Training Set Generation ===" << std::endl;
+    std::vector<std::string> train_entities;
+    for (int i = 1; i <= 50; ++i) {
+        train_entities.push_back("user_" + std::to_string(i));
+    }
+
+    auto training_data = feature_store->generateTrainingSet(
+        train_entities, input_features, "user_category");
+
+    std::cout << "Generated training set with " << training_data.first.size()
+              << " samples and " << training_data.second.size() << " labels" << std::endl;
+
+    // 显示统计信息
+    std::cout << "\n=== System Statistics ===" << std::endl;
+
+    auto feature_stats = feature_store->getFeatureStats();
+    std::cout << "Feature Store Statistics:" << std::endl;
+    for (const auto& stat : feature_stats) {
+        std::cout << "  " << stat.first << ": " << stat.second << std::endl;
+    }
+
+    auto inference_stats = inference_engine.getInferenceStats();
+    std::cout << "\nInference Engine Statistics:" << std::endl;
+    for (const auto& stat : inference_stats) {
+        std::cout << "  " << stat.first << ": " << stat.second << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 2. 向量数据库
+
+### 2.1 向量相似性搜索
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <cmath>
+#include <algorithm>
+#include <random>
+#include <chrono>
+
+namespace vector_db {
+
+/**
+ * 向量距离度量类型
+ */
+enum class DistanceMetric {
+    EUCLIDEAN,      // 欧几里得距离
+    COSINE,         // 余弦相似度
+    MANHATTAN,      // 曼哈顿距离
+    DOT_PRODUCT     // 点积
+};
+
+/**
+ * 向量数据结构
+ */
+struct VectorData {
+    std::string vector_id;
+    std::vector<float> embedding;
+    std::unordered_map<std::string, std::string> metadata;
+    std::chrono::system_clock::time_point created_at;
+
+    VectorData(const std::string& id, const std::vector<float>& emb)
+        : vector_id(id), embedding(emb), created_at(std::chrono::system_clock::now()) {}
+
+    void addMetadata(const std::string& key, const std::string& value) {
+        metadata[key] = value;
+    }
+
+    std::string getMetadata(const std::string& key) const {
+        auto it = metadata.find(key);
+        return it != metadata.end() ? it->second : "";
+    }
+};
+
+/**
+ * 相似性搜索结果
+ */
+struct SearchResult {
+    std::string vector_id;
+    double distance;
+    std::unordered_map<std::string, std::string> metadata;
+
+    SearchResult(const std::string& id, double dist)
+        : vector_id(id), distance(dist) {}
+
+    bool operator<(const SearchResult& other) const {
+        return distance < other.distance;
+    }
+};
+
+/**
+ * HNSW (Hierarchical Navigable Small World) 图节点
+ */
+struct HNSWNode {
+    std::string node_id;
+    std::vector<float> vector;
+    int level;
+    std::vector<std::shared_ptr<HNSWNode>> neighbors;
+
+    HNSWNode(const std::string& id, const std::vector<float>& vec, int lvl)
+        : node_id(id), vector(vec), level(lvl) {}
+};
+
+/**
+ * 向量索引接口
+ */
+class VectorIndex {
+public:
+    virtual ~VectorIndex() = default;
+
+    /**
+     * 添加向量
+     * @param vector_data 向量数据
+     * @return 是否成功添加
+     */
+    virtual bool addVector(const VectorData& vector_data) = 0;
+
+    /**
+     * 相似性搜索
+     * @param query_vector 查询向量
+     * @param k 返回的最近邻数量
+     * @return 搜索结果列表
+     */
+    virtual std::vector<SearchResult> search(const std::vector<float>& query_vector, int k) = 0;
+
+    /**
+     * 删除向量
+     * @param vector_id 向量ID
+     * @return 是否成功删除
+     */
+    virtual bool deleteVector(const std::string& vector_id) = 0;
+
+    /**
+     * 获取索引统计信息
+     * @return 统计信息
+     */
+    virtual std::unordered_map<std::string, uint64_t> getIndexStats() = 0;
+};
+
+/**
+ * HNSW 向量索引实现
+ */
+class HNSWIndex : public VectorIndex {
+private:
+    int max_connections;          // 每个节点的最大连接数
+    int max_connections_0;        // 第0层的最大连接数
+    double ef_construction;       // 构建时的搜索范围
+    int ml;                      // 最大层数
+    std::shared_ptr<HNSWNode> entry_point;  // 入口点
+    std::unordered_map<std::string, std::shared_ptr<HNSWNode>> nodes;
+    std::mt19937 generator;
+    DistanceMetric distance_metric;
+    std::mutex index_mutex;
+    std::atomic<uint64_t> total_vectors{0};
+
+public:
+    HNSWDistanceMetric(int max_conn = 16, int max_conn_0 = 32, double ef = 200,
+                     DistanceMetric metric = DistanceMetric::COSINE)
+        : max_connections(max_conn), max_connections_0(max_conn_0),
+          ef_construction(ef), ml(0), distance_metric(metric),
+          generator(std::random_device{}()) {}
+
+    bool addVector(const VectorData& vector_data) override {
+        std::lock_guard<std::mutex> lock(index_mutex);
+
+        if (nodes.find(vector_data.vector_id) != nodes.end()) {
+            return false;  // 向量已存在
+        }
+
+        // 随机选择插入层级
+        int insertion_level = getRandomLevel();
+
+        // 创建新节点
+        auto new_node = std::make_shared<HNSWNode>(
+            vector_data.vector_id, vector_data.embedding, insertion_level);
+
+        nodes[vector_data.vector_id] = new_node;
+
+        // 更新入口点
+        if (!entry_point || insertion_level > entry_point->level) {
+            entry_point = new_node;
+        }
+
+        // HNSW 插入算法
+        if (entry_point && entry_point != new_node) {
+            // 从顶层开始搜索
+            std::shared_ptr<HNSWNode> curr = entry_point;
+            for (int level = entry_point->level; level > insertion_level; --level) {
+                curr = searchLayer(curr, vector_data.embedding, 1, level);
+            }
+
+            // 在插入层和以下层搜索最近邻
+            for (int level = std::min(insertion_level, entry_point->level); level >= 0; --level) {
+                int ef = level == 0 ? max_connections_0 : max_connections;
+                auto neighbors = searchLayer(curr, vector_data.embedding, ef, level);
+                selectNeighbors(new_node, neighbors, max_connections);
+                connectNeighbors(new_node, neighbors, level);
+            }
+        }
+
+        total_vectors++;
+        return true;
+    }
+
+    std::vector<SearchResult> search(const std::vector<float>& query_vector, int k) override {
+        std::lock_guard<std::mutex> lock(index_mutex);
+
+        if (!entry_point) {
+            return {};
+        }
+
+        std::vector<SearchResult> results;
+
+        // 从入口点开始搜索
+        std::shared_ptr<HNSWNode> curr = entry_point;
+
+        // 从顶层向下搜索
+        for (int level = entry_point->level; level > 0; --level) {
+            curr = searchLayer(curr, query_vector, 1, level);
+        }
+
+        // 在第0层进行精确搜索
+        auto nearest_neighbors = searchLayer(curr, query_vector, std::max(k, ef_construction), 0);
+
+        // 转换为搜索结果
+        for (const auto& neighbor : nearest_neighbors) {
+            double distance = calculateDistance(query_vector, neighbor->vector);
+            SearchResult result(neighbor->node_id, distance);
+            result.metadata = neighbor->node_id;  // 简化实现
+            results.push_back(result);
+        }
+
+        // 返回前k个结果
+        if (results.size() > k) {
+            results.resize(k);
+        }
+
+        std::sort(results.begin(), results.end());
+        return results;
+    }
+
+    bool deleteVector(const std::string& vector_id) override {
+        std::lock_guard<std::mutex> lock(index_mutex);
+
+        auto it = nodes.find(vector_id);
+        if (it == nodes.end()) {
+            return false;
+        }
+
+        // 从所有邻居中删除该节点
+        auto node_to_delete = it->second;
+
+        // 遍历所有节点，删除指向被删除节点的连接
+        for (auto& node_pair : nodes) {
+            auto& node = node_pair.second;
+            if (node != node_to_delete) {
+                auto& neighbors = node->neighbors;
+                neighbors.erase(
+                    std::remove_if(neighbors.begin(), neighbors.end(),
+                                 [&node_to_delete](const std::shared_ptr<HNSWNode>& n) {
+                                     return n == node_to_delete;
+                                 }),
+                    neighbors.end());
+            }
+        }
+
+        // 删除节点
+        nodes.erase(it);
+
+        // 如果删除的是入口点，选择新的入口点
+        if (entry_point == node_to_delete) {
+            entry_point = nodes.empty() ? nullptr : nodes.begin()->second;
+        }
+
+        total_vectors--;
+        return true;
+    }
+
+    std::unordered_map<std::string, uint64_t> getIndexStats() override {
+        std::lock_guard<std::mutex> lock(index_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["total_vectors"] = total_vectors.load();
+        stats["total_nodes"] = nodes.size();
+        stats["max_level"] = ml.load();
+
+        if (entry_point) {
+            stats["entry_point_level"] = entry_point->level;
+        }
+
+        // 计算平均连接数
+        uint64_t total_connections = 0;
+        for (const auto& node_pair : nodes) {
+            total_connections += node_pair.second->neighbors.size();
+        }
+        stats["avg_connections"] = nodes.size() > 0 ? total_connections / nodes.size() : 0;
+
+        return stats;
+    }
+
+private:
+    /**
+     * 获取随机层级
+     */
+    int getRandomLevel() {
+        std::uniform_real_distribution<double> distribution(0.0, 1.0);
+        double r = -std::log(distribution(generator)) * ml;
+        return static_cast<int>(r);
+    }
+
+    /**
+     * 在指定层搜索最近邻
+     */
+    std::shared_ptr<HNSWNode> searchLayer(std::shared_ptr<HNSWNode> entry,
+                                          const std::vector<float>& query_vector,
+                                          int ef, int level) {
+        std::vector<std::shared_ptr<HNSWNode>> candidates = {entry};
+        std::vector<std::shared_ptr<HNSWNode>> visited = {entry};
+
+        while (!candidates.empty()) {
+            // 找到候选集中距离查询向量最近的节点
+            auto curr = candidates[0];
+            double curr_dist = calculateDistance(query_vector, curr->vector);
+
+            for (const auto& candidate : candidates) {
+                double candidate_dist = calculateDistance(query_vector, candidate->vector);
+                if (candidate_dist < curr_dist) {
+                    curr = candidate;
+                    curr_dist = candidate_dist;
+                }
+            }
+
+            // 检查是否有更近的邻居
+            bool found_better = false;
+            for (const auto& neighbor : curr->neighbors) {
+                if (neighbor->level != level) continue;
+
+                double neighbor_dist = calculateDistance(query_vector, neighbor->vector);
+                if (neighbor_dist < curr_dist) {
+                    // 如果邻居不在候选集中，加入候选集
+                    if (std::find(visited.begin(), visited.end(), neighbor) == visited.end()) {
+                        candidates.push_back(neighbor);
+                        visited.push_back(neighbor);
+                        found_better = true;
+                    }
+                }
+            }
+
+            if (!found_better) {
+                break;
+            }
+        }
+
+        // 返回距离最近的节点
+        std::shared_ptr<HNSWNode> best = visited[0];
+        double best_dist = calculateDistance(query_vector, best->vector);
+
+        for (const auto& node : visited) {
+            double dist = calculateDistance(query_vector, node->vector);
+            if (dist < best_dist) {
+                best = node;
+                best_dist = dist;
+            }
+        }
+
+        return best;
+    }
+
+    /**
+     * 选择邻居（启发式算法）
+     */
+    void selectNeighbors(std::shared_ptr<HNSWNode> new_node,
+                        std::vector<std::shared_ptr<HNSWNode>>& candidates,
+                        int max_connections) {
+        // 按距离排序
+        std::sort(candidates.begin(), candidates.end(),
+                 [&new_node, this](const std::shared_ptr<HNSWNode>& a,
+                                  const std::shared_ptr<HNSWNode>& b) {
+                     double dist_a = calculateDistance(new_node->vector, a->vector);
+                     double dist_b = calculateDistance(new_node->vector, b->vector);
+                     return dist_a < dist_b;
+                 });
+
+        // 选择前max_connections个邻居
+        if (candidates.size() > max_connections) {
+            candidates.resize(max_connections);
+        }
+    }
+
+    /**
+     * 连接邻居
+     */
+    void connectNeighbors(std::shared_ptr<HNSWNode> new_node,
+                          std::vector<std::shared_ptr<HNSWNode>>& neighbors,
+                          int level) {
+        for (const auto& neighbor : neighbors) {
+            // 双向连接
+            if (new_node->neighbors.size() < getMaxConnectionsForLevel(level)) {
+                new_node->neighbors.push_back(neighbor);
+            }
+
+            if (neighbor->neighbors.size() < getMaxConnectionsForLevel(level)) {
+                neighbor->neighbors.push_back(new_node);
+            }
+        }
+    }
+
+    /**
+     * 计算距离
+     */
+    double calculateDistance(const std::vector<float>& vec1, const std::vector<float>& vec2) {
+        if (vec1.size() != vec2.size()) {
+            return std::numeric_limits<double>::max();
+        }
+
+        switch (distance_metric) {
+            case DistanceMetric::EUCLIDEAN: {
+                double sum = 0.0;
+                for (size_t i = 0; i < vec1.size(); ++i) {
+                    double diff = vec1[i] - vec2[i];
+                    sum += diff * diff;
+                }
+                return std::sqrt(sum);
+            }
+            case DistanceMetric::COSINE: {
+                double dot_product = 0.0;
+                double norm1 = 0.0;
+                double norm2 = 0.0;
+
+                for (size_t i = 0; i < vec1.size(); ++i) {
+                    dot_product += vec1[i] * vec2[i];
+                    norm1 += vec1[i] * vec1[i];
+                    norm2 += vec2[i] * vec2[i];
+                }
+
+                norm1 = std::sqrt(norm1);
+                norm2 = std::sqrt(norm2);
+
+                if (norm1 == 0.0 || norm2 == 0.0) {
+                    return 1.0;
+                }
+
+                return 1.0 - dot_product / (norm1 * norm2);
+            }
+            case DistanceMetric::MANHATTAN: {
+                double sum = 0.0;
+                for (size_t i = 0; i < vec1.size(); ++i) {
+                    sum += std::abs(vec1[i] - vec2[i]);
+                }
+                return sum;
+            }
+            case DistanceMetric::DOT_PRODUCT: {
+                double dot_product = 0.0;
+                for (size_t i = 0; i < vec1.size(); ++i) {
+                    dot_product += vec1[i] * vec2[i];
+                }
+                return -dot_product;  // 返回负值以便排序
+            }
+            default:
+                return std::numeric_limits<double>::max();
+        }
+    }
+
+    /**
+     * 获取指定层的最大连接数
+     */
+    int getMaxConnectionsForLevel(int level) const {
+        return level == 0 ? max_connections_0 : max_connections;
+    }
+};
+
+/**
+ * 向量数据库
+ */
+class VectorDatabase {
+private:
+    std::unordered_map<std::string, std::shared_ptr<VectorIndex>> indexes;
+    std::unordered_map<std::string, VectorData> vectors;
+    std::mutex db_mutex;
+
+public:
+    /**
+     * 创建索引
+     * @param index_name 索引名
+     * @param dimension 向量维度
+     * @param distance_metric 距离度量
+     * @return 是否成功创建
+     */
+    bool createIndex(const std::string& index_name, int dimension,
+                    DistanceMetric distance_metric = DistanceMetric::COSINE) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        if (indexes.find(index_name) != indexes.end()) {
+            return false;  // 索引已存在
+        }
+
+        auto index = std::make_shared<HNSWIndex>(16, 32, 200, distance_metric);
+        indexes[index_name] = index;
+
+        std::cout << "Created vector index '" << index_name << "' with dimension "
+                  << dimension << " and metric " << static_cast<int>(distance_metric) << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 插入向量
+     * @param index_name 索引名
+     * @param vector_data 向量数据
+     * @return 是否成功插入
+     */
+    bool insertVector(const std::string& index_name, const VectorData& vector_data) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        auto index_it = indexes.find(index_name);
+        if (index_it == indexes.end()) {
+            return false;
+        }
+
+        // 添加到索引
+        bool index_result = index_it->second->addVector(vector_data);
+
+        // 添加到向量存储
+        if (index_result) {
+            vectors[vector_data.vector_id] = vector_data;
+        }
+
+        return index_result;
+    }
+
+    /**
+     * 搜索向量
+     * @param index_name 索引名
+     * @param query_vector 查询向量
+     * @param k 返回结果数量
+     * @return 搜索结果
+     */
+    std::vector<SearchResult> searchVectors(const std::string& index_name,
+                                             const std::vector<float>& query_vector,
+                                             int k = 10) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        auto index_it = indexes.find(index_name);
+        if (index_it == indexes.end()) {
+            return {};
+        }
+
+        auto results = index_it->second->search(query_vector, k);
+
+        // 补充元数据
+        for (auto& result : results) {
+            auto vector_it = vectors.find(result.vector_id);
+            if (vector_it != vectors.end()) {
+                result.metadata = vector_it->second.metadata;
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * 批量插入向量
+     * @param index_name 索引名
+     * @param vector_list 向量列表
+     * @return 成功插入的数量
+     */
+    int batchInsertVectors(const std::string& index_name,
+                          const std::vector<VectorData>& vector_list) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        auto index_it = indexes.find(index_name);
+        if (index_it == indexes.end()) {
+            return 0;
+        }
+
+        int success_count = 0;
+        for (const auto& vector_data : vector_list) {
+            if (index_it->second->addVector(vector_data)) {
+                vectors[vector_data.vector_id] = vector_data;
+                success_count++;
+            }
+        }
+
+        return success_count;
+    }
+
+    /**
+     * 删除向量
+     * @param index_name 索引名
+     * @param vector_id 向量ID
+     * @return 是否成功删除
+     */
+    bool deleteVector(const std::string& index_name, const std::string& vector_id) {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        auto index_it = indexes.find(index_name);
+        if (index_it == indexes.end()) {
+            return false;
+        }
+
+        bool index_result = index_it->second->deleteVector(vector_id);
+
+        if (index_result) {
+            vectors.erase(vector_id);
+        }
+
+        return index_result;
+    }
+
+    /**
+     * 获取数据库统计信息
+     * @return 统计信息
+     */
+    std::unordered_map<std::string, uint64_t> getDatabaseStats() {
+        std::lock_guard<std::mutex> lock(db_mutex);
+
+        std::unordered_map<std::string, uint64_t> stats;
+        stats["total_indexes"] = indexes.size();
+        stats["total_vectors"] = vectors.size();
+
+        // 合并所有索引的统计信息
+        for (const auto& index_pair : indexes) {
+            auto index_stats = index_pair.second->getIndexStats();
+            for (const auto& stat_pair : index_stats) {
+                stats["index_" + index_pair.first + "_" + stat_pair.first] = stat_pair.second;
+            }
+        }
+
+        return stats;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace vector_db;
+
+    // 创建向量数据库
+    VectorDatabase vector_db;
+
+    // 创建索引
+    vector_db.createIndex("text_embeddings", 128, DistanceMetric::COSINE);
+    vector_db.createIndex("image_embeddings", 512, DistanceMetric::EUCLIDEAN);
+
+    // 生成测试向量数据
+    std::cout << "\n=== Generating Test Vector Data ===" << std::endl;
+    std::vector<VectorData> text_vectors;
+    std::vector<VectorData> image_vectors;
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    // 生成文本嵌入向量
+    for (int i = 1; i <= 100; ++i) {
+        std::vector<float> embedding(128);
+        for (float& val : embedding) {
+            val = dist(gen);
+        }
+
+        VectorData vector("text_" + std::to_string(i), embedding);
+        vector.addMetadata("type", "text");
+        vector.addMetadata("category", "category_" + std::to_string(i % 10));
+        vector.addMetadata("language", (i % 2 == 0) ? "en" : "zh");
+
+        text_vectors.push_back(vector);
+    }
+
+    // 生成图像嵌入向量
+    for (int i = 1; i <= 50; ++i) {
+        std::vector<float> embedding(512);
+        for (float& val : embedding) {
+            val = dist(gen);
+        }
+
+        VectorData vector("image_" + std::to_string(i), embedding);
+        vector.addMetadata("type", "image");
+        vector.addMetadata("class", "class_" + std::to_string(i % 5));
+        vector.addMetadata("format", (i % 3 == 0) ? "jpg" : "png");
+
+        image_vectors.push_back(vector);
+    }
+
+    // 批量插入向量
+    int text_inserted = vector_db.batchInsertVectors("text_embeddings", text_vectors);
+    int image_inserted = vector_db.batchInsertVectors("image_embeddings", image_vectors);
+
+    std::cout << "Inserted " << text_inserted << " text vectors and "
+              << image_inserted << " image vectors" << std::endl;
+
+    // 执行相似性搜索
+    std::cout << "\n=== Similarity Search Examples ===" << std::endl;
+
+    // 文本搜索
+    std::vector<float> query_text(128);
+    for (float& val : query_text) {
+        val = dist(gen);
+    }
+
+    auto text_results = vector_db.searchVectors("text_embeddings", query_text, 5);
+    std::cout << "Text similarity search results:" << std::endl;
+    for (size_t i = 0; i < text_results.size(); ++i) {
+        const auto& result = text_results[i];
+        std::cout << "  " << (i + 1) << ". " << result.vector_id
+                  << " (distance: " << result.distance << ")" << std::endl;
+        std::cout << "     Category: " << result.metadata["category"]
+                  << ", Language: " << result.metadata["language"] << std::endl;
+    }
+
+    // 图像搜索
+    std::vector<float> query_image(512);
+    for (float& val : query_image) {
+        val = dist(gen);
+    }
+
+    auto image_results = vector_db.searchVectors("image_embeddings", query_image, 3);
+    std::cout << "\nImage similarity search results:" << std::endl;
+    for (size_t i = 0; i < image_results.size(); ++i) {
+        const auto& result = image_results[i];
+        std::cout << "  " << (i + 1) << ". " << result.vector_id
+                  << " (distance: " << result.distance << ")" << std::endl;
+        std::cout << "     Class: " << result.metadata["class"]
+                  << ", Format: " << result.metadata["format"] << std::endl;
+    }
+
+    // 显示统计信息
+    std::cout << "\n=== Vector Database Statistics ===" << std::endl;
+    auto db_stats = vector_db.getDatabaseStats();
+    for (const auto& stat : db_stats) {
+        std::cout << "  " << stat.first << ": " << stat.second << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 3. 实践练习
+
+### 练习1：实现完整的 MLOps 平台
+
+基于本节课的代码框架，实现一个完整的 MLOps 平台，包括特征存储、模型管理、实验跟踪和部署监控。
+
+### 练习2：向量数据库性能优化
+
+实现向量数据库的高级功能，包括量化索引、GPU 加速、分布式搜索和实时更新。
+
+### 练习3：多模态向量搜索
+
+设计并实现支持文本、图像、音频等多模态数据的统一向量搜索系统。
+
+### 练习4：实时特征工程管道
+
+实现一个实时特征工程管道，支持流数据处理、特征变换和自动特征选择。
+
+## 总结
+
+本节课我们深入学习了数据库系统与机器学习的前沿技术，包括：
+
+1. **特征存储系统**：统一管理机器学习特征，支持版本控制和训练集生成
+2. **模型推理引擎**：高效的模型部署和推理加速，支持缓存和批量处理
+3. **向量数据库**：专门为 AI 应用设计的向量存储和相似性搜索系统
+4. **HNSW 索引算法**：高效的近似最近邻搜索算法实现
+5. **实时特征工程**：在线特征转换和处理技术
+
+这些技术正在成为现代 AI 应用的核心基础设施。通过将数据库系统与机器学习深度集成，我们可以构建更智能、更高效的应用系统。向量数据库作为 AI 时代的新型数据库，正在重塑数据检索和分析的方式。
+
+在下一节课中，我们将完成整个课程的学习，探讨数据库系统的未来发展趋势，包括量子数据库、区块链数据库等前沿技术。

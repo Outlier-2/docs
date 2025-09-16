@@ -1,0 +1,1865 @@
+---
+title: "Lecture 18: 负载均衡 - 服务发现与流量分配"
+description: "深入理解分布式系统中的负载均衡算法、服务发现机制和流量控制策略"
+---
+
+# Lecture 18: 负载均衡 - 服务发现与流量分配
+
+## 本周内容
+
+- **负载均衡算法**：轮询、加权轮询、最少连接、一致性哈希、最少响应时间
+- **服务发现**：Consul、Etcd、ZooKeeper实现机制和对比
+- **健康检查**：主动检测、被动检测、自定义健康检查
+- **流量控制**：限流、熔断、降级、重试机制
+- **实践项目**：构建高可用负载均衡系统
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/8aGhZQkoFbQ" title="分布式系统负载均衡" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 负载均衡概述
+
+负载均衡是分布式系统中的关键组件，用于将请求智能地分配到多个服务器，确保系统的高可用性、可扩展性和性能。
+
+**负载均衡架构**
+```
+客户端
+   ↓
+负载均衡器
+   ↓
+┌─────────┬─────────┬─────────┐
+│ 服务器1 │ 服务器2 │ 服务器3 │
+└─────────┴─────────┴─────────┘
+```
+
+**负载均衡的层次**
+```
+客户端 → DNS负载均衡 → 网络负载均衡 → 应用负载均衡 → 数据库负载均衡
+```
+
+### 负载均衡算法详解
+
+#### 1. 轮询算法 (Round Robin)
+
+```go
+// 轮询负载均衡器
+type RoundRobinBalancer struct {
+    servers []string
+    current int
+    mu      sync.Mutex
+}
+
+func NewRoundRobinBalancer(servers []string) *RoundRobinBalancer {
+    return &RoundRobinBalancer{
+        servers: servers,
+        current: 0,
+    }
+}
+
+func (lb *RoundRobinBalancer) GetServer() string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(lb.servers) == 0 {
+        return ""
+    }
+
+    server := lb.servers[lb.current]
+    lb.current = (lb.current + 1) % len(lb.servers)
+    return server
+}
+
+// 带权重的轮询
+type WeightedRoundRobinBalancer struct {
+    servers []WeightedServer
+    current []int // 每个服务器的当前权重
+    mu      sync.Mutex
+}
+
+type WeightedServer struct {
+    Address string
+    Weight  int
+}
+
+func NewWeightedRoundRobinBalancer(servers []WeightedServer) *WeightedRoundRobinBalancer {
+    current := make([]int, len(servers))
+    return &WeightedRoundRobinBalancer{
+        servers: servers,
+        current: current,
+    }
+}
+
+func (lb *WeightedRoundRobinBalancer) GetServer() string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(lb.servers) == 0 {
+        return ""
+    }
+
+    // 平滑加权轮询算法
+    maxWeight := 0
+    bestServer := 0
+
+    for i, server := range lb.servers {
+        lb.current[i] += server.Weight
+        if lb.current[i] > maxWeight {
+            maxWeight = lb.current[i]
+            bestServer = i
+        }
+    }
+
+    lb.current[bestServer] -= maxWeight
+    return lb.servers[bestServer].Address
+}
+```
+
+#### 2. 最少连接算法 (Least Connections)
+
+```go
+// 最少连接负载均衡器
+type LeastConnectionsBalancer struct {
+    servers []*ServerStats
+    mu      sync.Mutex
+}
+
+type ServerStats struct {
+    Address      string
+    Connections  int32
+    Weight       int
+    LastActive   time.Time
+    HealthStatus bool
+}
+
+func NewLeastConnectionsBalancer(servers []string) *LeastConnectionsBalancer {
+    stats := make([]*ServerStats, len(servers))
+    for i, addr := range servers {
+        stats[i] = &ServerStats{
+            Address:      addr,
+            Connections:  0,
+            Weight:       1,
+            LastActive:   time.Now(),
+            HealthStatus: true,
+        }
+    }
+    return &LeastConnectionsBalancer{servers: stats}
+}
+
+func (lb *LeastConnectionsBalancer) GetServer() string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    bestServer := -1
+    minConnections := int32(math.MaxInt32)
+
+    for _, server := range lb.servers {
+        if !server.HealthStatus {
+            continue
+        }
+
+        // 计算加权连接数
+        weightedConns := server.Connections / int32(server.Weight)
+
+        if weightedConns < minConnections {
+            minConnections = weightedConns
+            bestServer = server.Address
+        }
+    }
+
+    if bestServer == -1 {
+        return ""
+    }
+
+    // 增加连接计数
+    for _, server := range lb.servers {
+        if server.Address == bestServer {
+            atomic.AddInt32(&server.Connections, 1)
+            server.LastActive = time.Now()
+            break
+        }
+    }
+
+    return bestServer
+}
+
+func (lb *LeastConnectionsBalancer) ReleaseServer(address string) {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    for _, server := range lb.servers {
+        if server.Address == address {
+            atomic.AddInt32(&server.Connections, -1)
+            break
+        }
+    }
+}
+```
+
+#### 3. 一致性哈希算法 (Consistent Hashing)
+
+```go
+// 一致性哈希负载均衡器
+type ConsistentHashBalancer struct {
+    ring         *HashRing
+    virtualNodes int
+}
+
+type HashRing struct {
+    virtualNodes map[uint32]string
+    nodes        []string
+    mu           sync.RWMutex
+}
+
+func NewConsistentHashBalancer(servers []string, virtualNodes int) *ConsistentHashBalancer {
+    ring := NewHashRing()
+    for _, server := range servers {
+        ring.AddNode(server, virtualNodes)
+    }
+
+    return &ConsistentHashBalancer{
+        ring:         ring,
+        virtualNodes: virtualNodes,
+    }
+}
+
+func NewHashRing() *HashRing {
+    return &HashRing{
+        virtualNodes: make(map[uint32]string),
+        nodes:        make([]string, 0),
+    }
+}
+
+func (hr *HashRing) AddNode(node string, virtualNodes int) {
+    hr.mu.Lock()
+    defer hr.mu.Unlock()
+
+    hr.nodes = append(hr.nodes, node)
+
+    // 添加虚拟节点
+    for i := 0; i < virtualNodes; i++ {
+        virtualKey := fmt.Sprintf("%s-%d", node, i)
+        hash := crc32.ChecksumIEEE([]byte(virtualKey))
+        hr.virtualNodes[hash] = node
+    }
+}
+
+func (hr *HashRing) RemoveNode(node string) {
+    hr.mu.Lock()
+    defer hr.mu.Unlock()
+
+    // 删除节点
+    for i, n := range hr.nodes {
+        if n == node {
+            hr.nodes = append(hr.nodes[:i], hr.nodes[i+1:]...)
+            break
+        }
+    }
+
+    // 删除虚拟节点
+    for i := 0; i < len(hr.virtualNodes); i++ {
+        virtualKey := fmt.Sprintf("%s-%d", node, i)
+        hash := crc32.ChecksumIEEE([]byte(virtualKey))
+        delete(hr.virtualNodes, hash)
+    }
+}
+
+func (hr *HashRing) GetNode(key string) string {
+    hr.mu.RLock()
+    defer hr.mu.RUnlock()
+
+    if len(hr.virtualNodes) == 0 {
+        return ""
+    }
+
+    hash := crc32.ChecksumIEEE([]byte(key))
+
+    // 查找第一个大于等于hash的节点
+    var keys []uint32
+    for k := range hr.virtualNodes {
+        keys = append(keys, k)
+    }
+    sort.Slice(keys, func(i, j int) bool {
+        return keys[i] < keys[j]
+    })
+
+    for _, k := range keys {
+        if k >= hash {
+            return hr.virtualNodes[k]
+        }
+    }
+
+    // 环形查找，返回第一个节点
+    return hr.virtualNodes[keys[0]]
+}
+
+func (lb *ConsistentHashBalancer) GetServer(key string) string {
+    return lb.ring.GetNode(key)
+}
+```
+
+#### 4. 最少响应时间算法 (Least Response Time)
+
+```go
+// 最少响应时间负载均衡器
+type LeastResponseTimeBalancer struct {
+    servers []*ServerMetrics
+    mu      sync.Mutex
+}
+
+type ServerMetrics struct {
+    Address       string
+    ResponseTime  time.Duration
+    RequestCount  int64
+    ErrorRate     float64
+    Weight        int
+    HealthStatus  bool
+    LastUpdated   time.Time
+}
+
+func NewLeastResponseTimeBalancer(servers []string) *LeastResponseTimeBalancer {
+    metrics := make([]*ServerMetrics, len(servers))
+    for i, addr := range servers {
+        metrics[i] = &ServerMetrics{
+            Address:       addr,
+            ResponseTime:  0,
+            RequestCount:  0,
+            ErrorRate:     0,
+            Weight:        1,
+            HealthStatus:  true,
+            LastUpdated:   time.Now(),
+        }
+    }
+    return &LeastResponseTimeBalancer{servers: metrics}
+}
+
+func (lb *LeastResponseTimeBalancer) GetServer() string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    bestServer := -1
+    bestScore := math.MaxFloat64
+
+    for _, server := range lb.servers {
+        if !server.HealthStatus {
+            continue
+        }
+
+        // 计算综合评分
+        // 考虑响应时间、请求量和错误率
+        score := float64(server.ResponseTime) * (1 + server.ErrorRate)
+
+        if score < bestScore {
+            bestScore = score
+            bestServer = server.Address
+        }
+    }
+
+    if bestServer == -1 {
+        return ""
+    }
+
+    // 更新服务器指标
+    for _, server := range lb.servers {
+        if server.Address == bestServer {
+            atomic.AddInt64(&server.RequestCount, 1)
+            break
+        }
+    }
+
+    return bestServer
+}
+
+func (lb *LeastResponseTimeBalancer) UpdateMetrics(address string, responseTime time.Duration, isError bool) {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    for _, server := range lb.servers {
+        if server.Address == address {
+            // 更新响应时间（滑动平均）
+            alpha := 0.3 // 平滑因子
+            server.ResponseTime = time.Duration(
+                float64(server.ResponseTime)*(1-alpha) + float64(responseTime)*alpha,
+            )
+
+            // 更新错误率
+            if isError {
+                server.ErrorRate = server.ErrorRate*0.9 + 0.1
+            } else {
+                server.ErrorRate = server.ErrorRate * 0.9
+            }
+
+            server.LastUpdated = time.Now()
+            break
+        }
+    }
+}
+```
+
+### 服务发现机制
+
+#### 1. 基于Consul的服务发现
+
+```go
+// Consul服务发现客户端
+type ConsulServiceDiscovery struct {
+    client    *api.Client
+    services  map[string][]string
+    watchers  map[string]*api.ServiceEntry
+    mu        sync.RWMutex
+}
+
+func NewConsulServiceDiscovery(address string) (*ConsulServiceDiscovery, error) {
+    config := api.DefaultConfig()
+    config.Address = address
+
+    client, err := api.NewClient(config)
+    if err != nil {
+        return nil, err
+    }
+
+    return &ConsulServiceDiscovery{
+        client:   client,
+        services: make(map[string][]string),
+        watchers: make(map[string]*api.ServiceEntry),
+    }, nil
+}
+
+// 注册服务
+func (sd *ConsulServiceDiscovery) RegisterService(serviceName, serviceAddress string, port int) error {
+    registration := &api.AgentServiceRegistration{
+        ID:      fmt.Sprintf("%s-%s", serviceName, serviceAddress),
+        Name:    serviceName,
+        Address: serviceAddress,
+        Port:    port,
+        Check: &api.AgentServiceCheck{
+            HTTP:     fmt.Sprintf("http://%s:%d/health", serviceAddress, port),
+            Interval: "10s",
+            Timeout:  "5s",
+        },
+    }
+
+    return sd.client.Agent().ServiceRegister(registration)
+}
+
+// 注销服务
+func (sd *ConsulServiceDiscovery) DeregisterService(serviceID string) error {
+    return sd.client.Agent().ServiceDeregister(serviceID)
+}
+
+// 发现服务
+func (sd *ConsulServiceDiscovery) DiscoverServices(serviceName string) ([]string, error) {
+    services, _, err := sd.client.Health().Service(serviceName, "", true, nil)
+    if err != nil {
+        return nil, err
+    }
+
+    var addresses []string
+    for _, service := range services {
+        addresses = append(addresses, fmt.Sprintf("%s:%d", service.Service.Address, service.Service.Port))
+    }
+
+    sd.mu.Lock()
+    sd.services[serviceName] = addresses
+    sd.mu.Unlock()
+
+    return addresses, nil
+}
+
+// 监控服务变化
+func (sd *ConsulServiceDiscovery) WatchService(serviceName string, callback func([]string)) {
+    go func() {
+        lastIndex := uint64(0)
+
+        for {
+            services, meta, err := sd.client.Health().Service(serviceName, "", true, &api.QueryOptions{
+                WaitIndex: lastIndex,
+            })
+
+            if err != nil {
+                time.Sleep(5 * time.Second)
+                continue
+            }
+
+            lastIndex = meta.LastIndex
+
+            var addresses []string
+            for _, service := range services {
+                addresses = append(addresses, fmt.Sprintf("%s:%d", service.Service.Address, service.Service.Port))
+            }
+
+            sd.mu.Lock()
+            sd.services[serviceName] = addresses
+            sd.mu.Unlock()
+
+            callback(addresses)
+        }
+    }()
+}
+```
+
+#### 2. 基于Etcd的服务发现
+
+```go
+// Etcd服务发现客户端
+type EtcdServiceDiscovery struct {
+    client    *clientv3.Client
+    services  map[string][]string
+    watchers  map[string]clientv3.WatchChan
+    mu        sync.RWMutex
+}
+
+func NewEtcdServiceDiscovery(endpoints []string) (*EtcdServiceDiscovery, error) {
+    cli, err := clientv3.New(clientv3.Config{
+        Endpoints:   endpoints,
+        DialTimeout: 5 * time.Second,
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    return &EtcdServiceDiscovery{
+        client:   cli,
+        services: make(map[string][]string),
+        watchers: make(map[string]clientv3.WatchChan),
+    }, nil
+}
+
+// 注册服务
+func (sd *EtcdServiceDiscovery) RegisterService(serviceName, serviceAddress string, ttl int) error {
+    lease, err := sd.client.Grant(context.Background(), int64(ttl))
+    if err != nil {
+        return err
+    }
+
+    key := fmt.Sprintf("/services/%s/%s", serviceName, serviceAddress)
+    _, err = sd.client.Put(context.Background(), key, serviceAddress, clientv3.WithLease(lease.ID))
+    if err != nil {
+        return err
+    }
+
+    // 保持租约
+    ch, kaerr := sd.client.KeepAlive(context.Background(), lease.ID)
+    if kaerr != nil {
+        return kaerr
+    }
+
+    go func() {
+        for ka := range ch {
+            _ = ka // 保持租约活跃
+        }
+    }()
+
+    return nil
+}
+
+// 注销服务
+func (sd *EtcdServiceDiscovery) DeregisterService(serviceName, serviceAddress string) error {
+    key := fmt.Sprintf("/services/%s/%s", serviceName, serviceAddress)
+    _, err := sd.client.Delete(context.Background(), key)
+    return err
+}
+
+// 发现服务
+func (sd *EtcdServiceDiscovery) DiscoverServices(serviceName string) ([]string, error) {
+    prefix := fmt.Sprintf("/services/%s/", serviceName)
+    resp, err := sd.client.Get(context.Background(), prefix, clientv3.WithPrefix())
+    if err != nil {
+        return nil, err
+    }
+
+    var addresses []string
+    for _, kv := range resp.Kvs {
+        addresses = append(addresses, string(kv.Value))
+    }
+
+    sd.mu.Lock()
+    sd.services[serviceName] = addresses
+    sd.mu.Unlock()
+
+    return addresses, nil
+}
+
+// 监控服务变化
+func (sd *EtcdServiceDiscovery) WatchService(serviceName string, callback func([]string)) {
+    prefix := fmt.Sprintf("/services/%s/", serviceName)
+    rch := sd.client.Watch(context.Background(), prefix, clientv3.WithPrefix())
+
+    sd.mu.Lock()
+    sd.watchers[serviceName] = rch
+    sd.mu.Unlock()
+
+    go func() {
+        for wresp := range rch {
+            var addresses []string
+            for _, event := range wresp.Events {
+                if event.Type == clientv3.EventTypePut {
+                    addresses = append(addresses, string(event.Kv.Value))
+                }
+            }
+
+            sd.mu.Lock()
+            sd.services[serviceName] = addresses
+            sd.mu.Unlock()
+
+            callback(addresses)
+        }
+    }()
+}
+```
+
+#### 3. 基于ZooKeeper的服务发现
+
+```go
+// ZooKeeper服务发现客户端
+type ZooKeeperServiceDiscovery struct {
+    conn      *zk.Conn
+    services  map[string][]string
+    watchers  map[string]<-chan zk.Event
+    mu        sync.RWMutex
+}
+
+func NewZooKeeperServiceDiscovery(servers []string) (*ZooKeeperServiceDiscovery, error) {
+    conn, _, err := zk.Connect(servers, time.Second*5)
+    if err != nil {
+        return nil, err
+    }
+
+    return &ZooKeeperServiceDiscovery{
+        conn:      conn,
+        services:  make(map[string][]string),
+        watchers:  make(map[string]<-chan zk.Event),
+    }, nil
+}
+
+// 注册服务
+func (sd *ZooKeeperServiceDiscovery) RegisterService(serviceName, serviceAddress string) error {
+    path := fmt.Sprintf("/services/%s/%s", serviceName, serviceAddress)
+
+    // 创建父节点
+    if err := sd.createParentNode(fmt.Sprintf("/services/%s", serviceName)); err != nil {
+        return err
+    }
+
+    // 创建临时节点
+    flags := int32(zk.FlagEphemeral)
+    acl := zk.WorldACL(zk.PermAll)
+
+    _, err := sd.conn.Create(path, []byte(serviceAddress), flags, acl)
+    return err
+}
+
+// 注销服务
+func (sd *ZooKeeperServiceDiscovery) DeregisterService(serviceName, serviceAddress string) error {
+    path := fmt.Sprintf("/services/%s/%s", serviceName, serviceAddress)
+    return sd.conn.Delete(path, -1)
+}
+
+// 发现服务
+func (sd *ZooKeeperServiceDiscovery) DiscoverServices(serviceName string) ([]string, error) {
+    path := fmt.Sprintf("/services/%s", serviceName)
+
+    children, _, err := sd.conn.Children(path)
+    if err != nil {
+        return nil, err
+    }
+
+    var addresses []string
+    for _, child := range children {
+        childPath := fmt.Sprintf("%s/%s", path, child)
+        data, _, err := sd.conn.Get(childPath)
+        if err == nil {
+            addresses = append(addresses, string(data))
+        }
+    }
+
+    sd.mu.Lock()
+    sd.services[serviceName] = addresses
+    sd.mu.Unlock()
+
+    return addresses, nil
+}
+
+// 监控服务变化
+func (sd *ZooKeeperServiceDiscovery) WatchService(serviceName string, callback func([]string)) {
+    path := fmt.Sprintf("/services/%s", serviceName)
+
+    _, _, events, err := sd.conn.ChildrenW(path)
+    if err != nil {
+        return
+    }
+
+    sd.mu.Lock()
+    sd.watchers[serviceName] = events
+    sd.mu.Unlock()
+
+    go func() {
+        for event := range events {
+            if event.Type == zk.EventNodeChildrenChanged {
+                addresses, err := sd.DiscoverServices(serviceName)
+                if err == nil {
+                    callback(addresses)
+                }
+            }
+        }
+    }()
+}
+
+func (sd *ZooKeeperServiceDiscovery) createParentNode(path string) error {
+    exists, _, err := sd.conn.Exists(path)
+    if err != nil {
+        return err
+    }
+
+    if !exists {
+        flags := int32(0)
+        acl := zk.WorldACL(zk.PermAll)
+        _, err = sd.conn.Create(path, []byte{}, flags, acl)
+        if err != nil && err != zk.ErrNodeExists {
+            return err
+        }
+    }
+
+    return nil
+}
+```
+
+### 健康检查机制
+
+#### 1. 健康检查接口
+
+```go
+// 健康检查接口
+type HealthChecker interface {
+    Check(address string) bool
+    GetType() string
+}
+
+// HTTP健康检查
+type HTTPHealthChecker struct {
+    path     string
+    timeout  time.Duration
+    client   *http.Client
+}
+
+func NewHTTPHealthChecker(path string, timeout time.Duration) *HTTPHealthChecker {
+    return &HTTPHealthChecker{
+        path:    path,
+        timeout: timeout,
+        client: &http.Client{
+            Timeout: timeout,
+        },
+    }
+}
+
+func (hc *HTTPHealthChecker) Check(address string) bool {
+    url := fmt.Sprintf("http://%s%s", address, hc.path)
+    resp, err := hc.client.Get(url)
+    if err != nil {
+        return false
+    }
+    defer resp.Body.Close()
+
+    return resp.StatusCode == http.StatusOK
+}
+
+func (hc *HTTPHealthChecker) GetType() string {
+    return "HTTP"
+}
+
+// TCP健康检查
+type TCPHealthChecker struct {
+    timeout time.Duration
+}
+
+func NewTCPHealthChecker(timeout time.Duration) *TCPHealthChecker {
+    return &TCPHealthChecker{timeout: timeout}
+}
+
+func (hc *TCPHealthChecker) Check(address string) bool {
+    conn, err := net.DialTimeout("tcp", address, hc.timeout)
+    if err != nil {
+        return false
+    }
+    conn.Close()
+    return true
+}
+
+func (hc *TCPHealthChecker) GetType() string {
+    return "TCP"
+}
+
+// 自定义健康检查
+type CustomHealthChecker struct {
+    checkFunc func(string) bool
+    checkType string
+}
+
+func NewCustomHealthChecker(checkType string, checkFunc func(string) bool) *CustomHealthChecker {
+    return &CustomHealthChecker{
+        checkFunc: checkFunc,
+        checkType: checkType,
+    }
+}
+
+func (hc *CustomHealthChecker) Check(address string) bool {
+    return hc.checkFunc(address)
+}
+
+func (hc *CustomHealthChecker) GetType() string {
+    return hc.checkType
+}
+```
+
+#### 2. 健康检查管理器
+
+```go
+// 健康检查管理器
+type HealthCheckManager struct {
+    servers      map[string]*ServerHealth
+    checkers     map[string]HealthChecker
+    checkInterval time.Duration
+    mu           sync.RWMutex
+}
+
+type ServerHealth struct {
+    Address      string
+    Status       bool
+    LastCheck    time.Time
+    LastSuccess  time.Time
+    FailCount    int
+    SuccessCount int
+    ConsecutiveFailures int
+}
+
+func NewHealthCheckManager(checkInterval time.Duration) *HealthCheckManager {
+    return &HealthCheckManager{
+        servers:        make(map[string]*ServerHealth),
+        checkers:       make(map[string]HealthChecker),
+        checkInterval:  checkInterval,
+    }
+}
+
+func (hcm *HealthCheckManager) AddServer(address string, checker HealthChecker) {
+    hcm.mu.Lock()
+    defer hcm.mu.Unlock()
+
+    hcm.servers[address] = &ServerHealth{
+        Address:      address,
+        Status:       true, // 初始状态为健康
+        LastCheck:    time.Now(),
+        LastSuccess:  time.Now(),
+        FailCount:    0,
+        SuccessCount: 0,
+        ConsecutiveFailures: 0,
+    }
+
+    hcm.checkers[address] = checker
+}
+
+func (hcm *HealthCheckManager) RemoveServer(address string) {
+    hcm.mu.Lock()
+    defer hcm.mu.Unlock()
+
+    delete(hcm.servers, address)
+    delete(hcm.checkers, address)
+}
+
+func (hcm *HealthCheckManager) Start() {
+    ticker := time.NewTicker(hcm.checkInterval)
+
+    go func() {
+        for range ticker.C {
+            hcm.checkAllServers()
+        }
+    }()
+}
+
+func (hcm *HealthCheckManager) checkAllServers() {
+    hcm.mu.Lock()
+    defer hcm.mu.Unlock()
+
+    var wg sync.WaitGroup
+
+    for address, health := range hcm.servers {
+        wg.Add(1)
+        go func(addr string, h *ServerHealth) {
+            defer wg.Done()
+            hcm.checkServer(addr, h)
+        }(address, health)
+    }
+
+    wg.Wait()
+}
+
+func (hcm *HealthCheckManager) checkServer(address string, health *ServerHealth) {
+    checker, exists := hcm.checkers[address]
+    if !exists {
+        return
+    }
+
+    isHealthy := checker.Check(address)
+    health.LastCheck = time.Now()
+
+    if isHealthy {
+        health.Status = true
+        health.LastSuccess = time.Now()
+        health.SuccessCount++
+        health.ConsecutiveFailures = 0
+    } else {
+        health.FailCount++
+        health.ConsecutiveFailures++
+
+        // 连续失败3次才标记为不健康
+        if health.ConsecutiveFailures >= 3 {
+            health.Status = false
+        }
+    }
+}
+
+func (hcm *HealthCheckManager) GetServerHealth(address string) (*ServerHealth, bool) {
+    hcm.mu.RLock()
+    defer hcm.mu.RUnlock()
+
+    health, exists := hcm.servers[address]
+    return health, exists
+}
+
+func (hcm *HealthCheckManager) GetHealthyServers() []string {
+    hcm.mu.RLock()
+    defer hcm.mu.RUnlock()
+
+    var healthyServers []string
+    for address, health := range hcm.servers {
+        if health.Status {
+            healthyServers = append(healthyServers, address)
+        }
+    }
+
+    return healthyServers
+}
+```
+
+### 流量控制机制
+
+#### 1. 限流器实现
+
+```go
+// 令牌桶限流器
+type TokenBucketRateLimiter struct {
+    capacity  int64
+    tokens    int64
+    rate      float64 // 每秒生成的令牌数
+    lastTime  time.Time
+    mu        sync.Mutex
+}
+
+func NewTokenBucketRateLimiter(capacity int64, rate float64) *TokenBucketRateLimiter {
+    return &TokenBucketRateLimiter{
+        capacity: capacity,
+        tokens:   capacity,
+        rate:     rate,
+        lastTime: time.Now(),
+    }
+}
+
+func (rl *TokenBucketRateLimiter) Allow() bool {
+    rl.mu.Lock()
+    defer rl.mu.Unlock()
+
+    now := time.Now()
+    elapsed := now.Sub(rl.lastTime).Seconds()
+
+    // 添加新生成的令牌
+    rl.tokens += int64(elapsed * rl.rate)
+    if rl.tokens > rl.capacity {
+        rl.tokens = rl.capacity
+    }
+
+    rl.lastTime = now
+
+    // 检查是否有足够的令牌
+    if rl.tokens > 0 {
+        rl.tokens--
+        return true
+    }
+
+    return false
+}
+
+// 滑动窗口限流器
+type SlidingWindowRateLimiter struct {
+    windowSize time.Duration
+    maxCount   int
+    requests   []time.Time
+    mu         sync.Mutex
+}
+
+func NewSlidingWindowRateLimiter(windowSize time.Duration, maxCount int) *SlidingWindowRateLimiter {
+    return &SlidingWindowRateLimiter{
+        windowSize: windowSize,
+        maxCount:   maxCount,
+        requests:   make([]time.Time, 0),
+    }
+}
+
+func (rl *SlidingWindowRateLimiter) Allow() bool {
+    rl.mu.Lock()
+    defer rl.mu.Unlock()
+
+    now := time.Now()
+
+    // 清理过期的请求
+    cutoff := now.Add(-rl.windowSize)
+    validRequests := make([]time.Time, 0)
+    for _, req := range rl.requests {
+        if req.After(cutoff) {
+            validRequests = append(validRequests, req)
+        }
+    }
+
+    rl.requests = validRequests
+
+    // 检查是否超过限制
+    if len(rl.requests) >= rl.maxCount {
+        return false
+    }
+
+    rl.requests = append(rl.requests, now)
+    return true
+}
+```
+
+#### 2. 熔断器实现
+
+```go
+// 熔断器状态
+type CircuitBreakerState int
+
+const (
+    CircuitBreakerClosed CircuitBreakerState = iota
+    CircuitBreakerOpen
+    CircuitBreakerHalfOpen
+)
+
+// 熔断器
+type CircuitBreaker struct {
+    state                CircuitBreakerState
+    failureCount         int
+    successCount         int
+    failureThreshold     int
+    successThreshold     int
+    timeout              time.Duration
+    lastFailureTime      time.Time
+    mu                   sync.Mutex
+}
+
+func NewCircuitBreaker(failureThreshold, successThreshold int, timeout time.Duration) *CircuitBreaker {
+    return &CircuitBreaker{
+        state:             CircuitBreakerClosed,
+        failureThreshold:  failureThreshold,
+        successThreshold:  successThreshold,
+        timeout:           timeout,
+    }
+}
+
+func (cb *CircuitBreaker) Call(fn func() error) error {
+    cb.mu.Lock()
+
+    // 检查熔断器状态
+    if cb.state == CircuitBreakerOpen {
+        if time.Since(cb.lastFailureTime) > cb.timeout {
+            cb.state = CircuitBreakerHalfOpen
+            cb.successCount = 0
+        } else {
+            cb.mu.Unlock()
+            return fmt.Errorf("circuit breaker is open")
+        }
+    }
+
+    cb.mu.Unlock()
+
+    // 执行函数
+    err := fn()
+
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+
+    if err != nil {
+        cb.lastFailureTime = time.Now()
+        cb.failureCount++
+
+        if cb.state == CircuitBreakerHalfOpen {
+            cb.state = CircuitBreakerOpen
+        } else if cb.failureCount >= cb.failureThreshold {
+            cb.state = CircuitBreakerOpen
+        }
+
+        return err
+    }
+
+    // 成功执行
+    cb.successCount++
+
+    if cb.state == CircuitBreakerHalfOpen {
+        if cb.successCount >= cb.successThreshold {
+            cb.state = CircuitBreakerClosed
+            cb.failureCount = 0
+        }
+    } else {
+        cb.failureCount = 0
+    }
+
+    return nil
+}
+
+func (cb *CircuitBreaker) GetState() CircuitBreakerState {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    return cb.state
+}
+```
+
+### 完整的负载均衡系统实现
+
+```go
+// 负载均衡器接口
+type LoadBalancer interface {
+    GetServer() string
+    AddServer(address string)
+    RemoveServer(address string)
+    GetServers() []string
+}
+
+// 智能负载均衡器
+type SmartLoadBalancer struct {
+    algorithm        string
+    servers          []string
+    weights          map[string]int
+    connections      map[string]int32
+    responseTimes    map[string]time.Duration
+    healthChecker    *HealthCheckManager
+    rateLimiter      *TokenBucketRateLimiter
+    circuitBreakers  map[string]*CircuitBreaker
+    mu               sync.RWMutex
+}
+
+func NewSmartLoadBalancer(algorithm string, rateLimit float64) *SmartLoadBalancer {
+    return &SmartLoadBalancer{
+        algorithm:       algorithm,
+        servers:         make([]string, 0),
+        weights:         make(map[string]int),
+        connections:     make(map[string]int32),
+        responseTimes:   make(map[string]time.Duration),
+        healthChecker:   NewHealthCheckManager(10 * time.Second),
+        rateLimiter:     NewTokenBucketRateLimiter(1000, rateLimit),
+        circuitBreakers: make(map[string]*CircuitBreaker),
+    }
+}
+
+func (lb *SmartLoadBalancer) AddServer(address string) {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    lb.servers = append(lb.servers, address)
+    lb.weights[address] = 1
+    lb.connections[address] = 0
+    lb.responseTimes[address] = 0
+
+    // 添加健康检查
+    checker := NewHTTPHealthChecker("/health", 5*time.Second)
+    lb.healthChecker.AddServer(address, checker)
+
+    // 添加熔断器
+    lb.circuitBreakers[address] = NewCircuitBreaker(5, 3, 30*time.Second)
+}
+
+func (lb *SmartLoadBalancer) RemoveServer(address string) {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    for i, addr := range lb.servers {
+        if addr == address {
+            lb.servers = append(lb.servers[:i], lb.servers[i+1:]...)
+            break
+        }
+    }
+
+    delete(lb.weights, address)
+    delete(lb.connections, address)
+    delete(lb.responseTimes, address)
+
+    lb.healthChecker.RemoveServer(address)
+    delete(lb.circuitBreakers, address)
+}
+
+func (lb *SmartLoadBalancer) GetServer() string {
+    if !lb.rateLimiter.Allow() {
+        return ""
+    }
+
+    lb.mu.RLock()
+    healthyServers := lb.healthChecker.GetHealthyServers()
+    lb.mu.RUnlock()
+
+    if len(healthyServers) == 0 {
+        return ""
+    }
+
+    switch lb.algorithm {
+    case "round-robin":
+        return lb.roundRobinSelect(healthyServers)
+    case "weighted-round-robin":
+        return lb.weightedRoundRobinSelect(healthyServers)
+    case "least-connections":
+        return lb.leastConnectionsSelect(healthyServers)
+    case "least-response-time":
+        return lb.leastResponseTimeSelect(healthyServers)
+    default:
+        return lb.roundRobinSelect(healthyServers)
+    }
+}
+
+func (lb *SmartLoadBalancer) roundRobinSelect(servers []string) string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(servers) == 0 {
+        return ""
+    }
+
+    // 简单的轮询实现
+    index := int(time.Now().UnixNano() / int64(time.Millisecond)) % len(servers)
+    return servers[index]
+}
+
+func (lb *SmartLoadBalancer) weightedRoundRobinSelect(servers []string) string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(servers) == 0 {
+        return ""
+    }
+
+    // 平滑加权轮询
+    bestServer := ""
+    maxWeight := 0
+
+    for _, server := range servers {
+        weight := lb.weights[server]
+        if weight > maxWeight {
+            maxWeight = weight
+            bestServer = server
+        }
+    }
+
+    return bestServer
+}
+
+func (lb *SmartLoadBalancer) leastConnectionsSelect(servers []string) string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(servers) == 0 {
+        return ""
+    }
+
+    bestServer := ""
+    minConnections := int32(math.MaxInt32)
+
+    for _, server := range servers {
+        connections := lb.connections[server]
+        if connections < minConnections {
+            minConnections = connections
+            bestServer = server
+        }
+    }
+
+    return bestServer
+}
+
+func (lb *SmartLoadBalancer) leastResponseTimeSelect(servers []string) string {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if len(servers) == 0 {
+        return ""
+    }
+
+    bestServer := ""
+    minResponseTime := time.Duration(math.MaxInt64)
+
+    for _, server := range servers {
+        responseTime := lb.responseTimes[server]
+        if responseTime < minResponseTime {
+            minResponseTime = responseTime
+            bestServer = server
+        }
+    }
+
+    return bestServer
+}
+
+func (lb *SmartLoadBalancer) UpdateMetrics(address string, responseTime time.Duration, isError bool) {
+    lb.mu.Lock()
+    defer lb.mu.Unlock()
+
+    if _, exists := lb.responseTimes[address]; exists {
+        // 更新响应时间（滑动平均）
+        alpha := 0.3
+        lb.responseTimes[address] = time.Duration(
+            float64(lb.responseTimes[address])*(1-alpha) + float64(responseTime)*alpha,
+        )
+    }
+}
+
+func (lb *SmartLoadBalancer) GetServers() []string {
+    lb.mu.RLock()
+    defer lb.mu.RUnlock()
+
+    return lb.healthChecker.GetHealthyServers()
+}
+
+func (lb *SmartLoadBalancer) Start() {
+    lb.healthChecker.Start()
+}
+```
+
+### HTTP反向代理实现
+
+```go
+// HTTP反向代理
+type ReverseProxy struct {
+    loadBalancer LoadBalancer
+    transport    *http.Transport
+    errorHandler func(http.ResponseWriter, *http.Request, error)
+}
+
+func NewReverseProxy(loadBalancer LoadBalancer) *ReverseProxy {
+    return &ReverseProxy{
+        loadBalancer: loadBalancer,
+        transport: &http.Transport{
+            MaxIdleConns:        100,
+            IdleConnTimeout:     90 * time.Second,
+            DisableCompression:  true,
+        },
+        errorHandler: defaultErrorHandler,
+    }
+}
+
+func defaultErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+    log.Printf("Proxy error: %v", err)
+    http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+}
+
+func (rp *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    // 获取目标服务器
+    target := rp.loadBalancer.GetServer()
+    if target == "" {
+        rp.errorHandler(w, r, fmt.Errorf("no available servers"))
+        return
+    }
+
+    // 创建目标URL
+    targetURL, err := url.Parse("http://" + target)
+    if err != nil {
+        rp.errorHandler(w, r, err)
+        return
+    }
+
+    // 修改请求
+    r.URL.Host = targetURL.Host
+    r.URL.Scheme = targetURL.Scheme
+    r.Header.Set("X-Forwarded-Host", r.Header.Get("Host"))
+    r.Host = targetURL.Host
+
+    // 记录开始时间
+    startTime := time.Now()
+
+    // 转发请求
+    resp, err := rp.transport.RoundTrip(r)
+    if err != nil {
+        // 更新负载均衡器指标
+        rp.loadBalancer.UpdateMetrics(target, 0, true)
+        rp.errorHandler(w, r, err)
+        return
+    }
+    defer resp.Body.Close()
+
+    // 更新负载均衡器指标
+    responseTime := time.Since(startTime)
+    rp.loadBalancer.UpdateMetrics(target, responseTime, false)
+
+    // 复制响应头
+    for key, values := range resp.Header {
+        for _, value := range values {
+            w.Header().Add(key, value)
+        }
+    }
+
+    // 设置状态码
+    w.WriteHeader(resp.StatusCode)
+
+    // 复制响应体
+    _, err = io.Copy(w, resp.Body)
+    if err != nil {
+        log.Printf("Error copying response body: %v", err)
+    }
+}
+```
+
+### 实践项目：构建高可用负载均衡系统
+
+#### 1. 项目结构
+
+```
+load-balancer/
+├── main.go
+├── config/
+│   └── config.go
+├── balancer/
+│   ├── algorithms.go
+│   ├── health_check.go
+│   └── service_discovery.go
+├── proxy/
+│   └── reverse_proxy.go
+├── metrics/
+│   └── metrics.go
+├── api/
+│   └── api.go
+└── web/
+    └── dashboard.html
+```
+
+#### 2. 主程序
+
+```go
+// main.go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "flag"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+type Config struct {
+    Port           int      `json:"port"`
+    Algorithm      string   `json:"algorithm"`
+    Servers        []string `json:"servers"`
+    HealthCheck    struct {
+        Interval time.Duration `json:"interval"`
+        Timeout  time.Duration `json:"timeout"`
+        Path     string        `json:"path"`
+    } `json:"health_check"`
+    RateLimit     float64 `json:"rate_limit"`
+    Metrics       struct {
+        Enabled bool   `json:"enabled"`
+        Port    int    `json:"port"`
+    } `json:"metrics"`
+}
+
+func main() {
+    configPath := flag.String("config", "config.json", "Configuration file path")
+    flag.Parse()
+
+    // 加载配置
+    config, err := loadConfig(*configPath)
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    // 创建负载均衡器
+    loadBalancer := NewSmartLoadBalancer(config.Algorithm, config.RateLimit)
+
+    // 添加服务器
+    for _, server := range config.Servers {
+        loadBalancer.AddServer(server)
+    }
+
+    // 启动健康检查
+    loadBalancer.Start()
+
+    // 创建反向代理
+    proxy := NewReverseProxy(loadBalancer)
+
+    // 设置HTTP服务器
+    mux := http.NewServeMux()
+    mux.Handle("/", proxy)
+    mux.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+    }))
+    mux.Handle("/metrics", promhttp.Handler())
+
+    // 启动API服务器
+    apiServer := &http.Server{
+        Addr:    fmt.Sprintf(":%d", config.Port),
+        Handler: mux,
+    }
+
+    // 启动指标服务器
+    if config.Metrics.Enabled {
+        go func() {
+            metricsAddr := fmt.Sprintf(":%d", config.Metrics.Port)
+            log.Printf("Starting metrics server on %s", metricsAddr)
+            log.Fatal(http.ListenAndServe(metricsAddr, promhttp.Handler()))
+        }()
+    }
+
+    // 启动主服务器
+    go func() {
+        log.Printf("Starting load balancer on port %d", config.Port)
+        if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("Failed to start server: %v", err)
+        }
+    }()
+
+    // 等待中断信号
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+
+    log.Println("Shutting down server...")
+
+    // 优雅关闭
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    if err := apiServer.Shutdown(ctx); err != nil {
+        log.Printf("Server forced to shutdown: %v", err)
+    }
+
+    log.Println("Server exited")
+}
+
+func loadConfig(path string) (*Config, error) {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+
+    var config Config
+    if err := json.Unmarshal(data, &config); err != nil {
+        return nil, err
+    }
+
+    // 设置默认值
+    if config.Port == 0 {
+        config.Port = 8080
+    }
+    if config.Algorithm == "" {
+        config.Algorithm = "round-robin"
+    }
+    if config.HealthCheck.Interval == 0 {
+        config.HealthCheck.Interval = 10 * time.Second
+    }
+    if config.HealthCheck.Timeout == 0 {
+        config.HealthCheck.Timeout = 5 * time.Second
+    }
+    if config.HealthCheck.Path == "" {
+        config.HealthCheck.Path = "/health"
+    }
+    if config.RateLimit == 0 {
+        config.RateLimit = 1000
+    }
+    if config.Metrics.Enabled && config.Metrics.Port == 0 {
+        config.Metrics.Port = 9090
+    }
+
+    return &config, nil
+}
+```
+
+#### 3. 测试用例
+
+```go
+// load_balancer_test.go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+    "net/http/httptest"
+    "testing"
+    "time"
+)
+
+func TestLoadBalancerBasic(t *testing.T) {
+    // 创建模拟服务器
+    servers := createTestServers(3, t)
+    defer shutdownTestServers(servers)
+
+    // 创建负载均衡器
+    lb := NewSmartLoadBalancer("round-robin", 1000)
+    for _, server := range servers {
+        lb.AddServer(server.URL)
+    }
+    lb.Start()
+
+    // 测试服务器选择
+    selections := make(map[string]int)
+    for i := 0; i < 100; i++ {
+        server := lb.GetServer()
+        if server == "" {
+            t.Fatal("No server selected")
+        }
+        selections[server]++
+    }
+
+    // 验证负载分布
+    if len(selections) != 3 {
+        t.Errorf("Expected 3 servers, got %d", len(selections))
+    }
+
+    for server, count := range selections {
+        if count < 20 || count > 50 {
+            t.Errorf("Uneven distribution for server %s: %d requests", server, count)
+        }
+    }
+}
+
+func TestHealthCheck(t *testing.T) {
+    // 创建模拟服务器
+    servers := createTestServers(3, t)
+    defer shutdownTestServers(servers)
+
+    // 关闭一个服务器
+    servers[1].Close()
+
+    // 创建负载均衡器
+    lb := NewSmartLoadBalancer("round-robin", 1000)
+    for _, server := range servers {
+        lb.AddServer(server.URL)
+    }
+    lb.Start()
+
+    // 等待健康检查
+    time.Sleep(2 * time.Second)
+
+    // 验证只有健康的服务器被选择
+    healthyServers := lb.GetServers()
+    if len(healthyServers) != 2 {
+        t.Errorf("Expected 2 healthy servers, got %d", len(healthyServers))
+    }
+}
+
+func TestRateLimiting(t *testing.T) {
+    // 创建模拟服务器
+    servers := createTestServers(1, t)
+    defer shutdownTestServers(servers)
+
+    // 创建低速率限制的负载均衡器
+    lb := NewSmartLoadBalancer("round-robin", 10) // 10 requests per second
+    lb.AddServer(servers[0].URL)
+    lb.Start()
+
+    // 快速发送请求
+    success := 0
+    for i := 0; i < 20; i++ {
+        if lb.GetServer() != "" {
+            success++
+        }
+    }
+
+    // 验证限流效果
+    if success > 15 {
+        t.Errorf("Rate limiting not effective: %d successes", success)
+    }
+}
+
+func TestCircuitBreaker(t *testing.T) {
+    // 创建会失败的服务器
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+    }))
+    defer server.Close()
+
+    // 创建负载均衡器
+    lb := NewSmartLoadBalancer("round-robin", 1000)
+    lb.AddServer(server.URL)
+    lb.Start()
+
+    // 发送多个失败的请求
+    for i := 0; i < 10; i++ {
+        server := lb.GetServer()
+        if server != "" {
+            lb.UpdateMetrics(server, 0, true)
+        }
+    }
+
+    // 验证熔断器触发
+    time.Sleep(1 * time.Second)
+    healthyServers := lb.GetServers()
+    if len(healthyServers) != 0 {
+        t.Errorf("Circuit breaker not triggered: %d healthy servers", len(healthyServers))
+    }
+}
+
+func createTestServers(count int, t *testing.T) []*httptest.Server {
+    servers := make([]*httptest.Server, count)
+    for i := 0; i < count; i++ {
+        server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            w.WriteHeader(http.StatusOK)
+            fmt.Fprintf(w, "Hello from server %d", i)
+        }))
+        servers[i] = server
+    }
+    return servers
+}
+
+func shutdownTestServers(servers []*httptest.Server) {
+    for _, server := range servers {
+        server.Close()
+    }
+}
+
+func BenchmarkLoadBalancer(b *testing.B) {
+    // 创建模拟服务器
+    servers := createTestServers(3, nil)
+    defer shutdownTestServers(servers)
+
+    // 创建负载均衡器
+    lb := NewSmartLoadBalancer("round-robin", 10000)
+    for _, server := range servers {
+        lb.AddServer(server.URL)
+    }
+    lb.Start()
+
+    // 基准测试
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        lb.GetServer()
+    }
+}
+```
+
+#### 4. 配置文件示例
+
+```json
+{
+    "port": 8080,
+    "algorithm": "least-connections",
+    "servers": [
+        "localhost:8081",
+        "localhost:8082",
+        "localhost:8083"
+    ],
+    "health_check": {
+        "interval": "10s",
+        "timeout": "5s",
+        "path": "/health"
+    },
+    "rate_limit": 1000,
+    "metrics": {
+        "enabled": true,
+        "port": 9090
+    }
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **负载均衡算法**：比较不同负载均衡算法的优缺点和适用场景。
+
+2. **服务发现**：分析Consul、Etcd、ZooKeeper在服务发现中的差异。
+
+3. **健康检查**：为什么需要健康检查？如何设计有效的健康检查策略？
+
+4. **流量控制**：解释限流、熔断、降级之间的关系和区别。
+
+### 编程题
+
+1. **一致性哈希**：实现一致性哈希算法，支持动态添加和删除节点。
+
+2. **自适应负载均衡**：实现一个能够根据服务器性能自动调整权重的负载均衡器。
+
+3. **服务发现客户端**：实现一个完整的服务注册和发现客户端。
+
+4. **监控仪表板**：创建一个实时监控负载均衡器状态的Web界面。
+
+### 设计题
+
+1. **多层负载均衡**：设计一个支持多层负载均衡的系统架构。
+
+2. **全局负载均衡**：设计一个跨数据中心的负载均衡解决方案。
+
+3. **容器编排集成**：设计一个与Kubernetes集成的负载均衡方案。
+
+4. **性能优化**：分析负载均衡器的性能瓶颈并提出优化方案。
+
+## 常见问题
+
+### Q: 如何选择合适的负载均衡算法？
+
+A: 选择算法需要考虑具体场景：
+- **轮询**：服务器性能相近，请求处理时间短
+- **加权轮询**：服务器性能差异明显
+- **最少连接**：长连接应用，如WebSocket
+- **最少响应时间**：对响应时间敏感的应用
+- **一致性哈希**：需要会话保持的场景
+
+### Q: 如何处理服务器动态扩缩容？
+
+A: 通过服务发现机制实现：
+1. 新服务器启动时自动注册到服务发现系统
+2. 负载均衡器监听服务变化事件
+3. 动态更新可用服务器列表
+4. 健康检查确保服务器可用性
+
+### Q: 如何保证负载均衡器的高可用性？
+
+A: 采用冗余部署策略：
+1. 部署多个负载均衡器实例
+2. 使用虚拟IP或DNS轮询实现故障转移
+3. 健康检查和自动故障恢复
+4. 状态同步确保数据一致性
+
+## 扩展资源
+
+### 必读论文
+
+1. **[The Power of Two Choices in Randomized Load Balancing](https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf)** - 随机负载均衡的理论基础
+2. **[Consistent Hashing and Random Trees](https://www.akamai.com/dl/technical_publications/ConsistenHashingandRandomTreesDistributedCachingProtocolsforAlleviatingHotSpotsontheWorldWideWeb1997.pdf)** - 一致性哈希算法
+3. **[A Survey of Load Balancing in Cloud Computing](https://ieeexplore.ieee.org/document/7965726)** - 云计算负载均衡综述
+
+### 实践项目
+
+1. **[HAProxy](https://www.haproxy.org/)** - 高性能负载均衡器
+2. **[Nginx](https://nginx.org/)** - Web服务器和反向代理
+3. **[Envoy Proxy](https://www.envoyproxy.io/)** - 云原生边缘和服务代理
+4. **[Traefik](https://traefik.io/)** - 现代反向代理和负载均衡器
+
+### 在线课程
+
+1. **[Cloud Load Balancing](https://cloud.google.com/load-balancing/docs)** - Google Cloud负载均衡文档
+2. **[AWS Elastic Load Balancing](https://aws.amazon.com/elasticloadbalancing/)** - AWS负载均衡服务
+3. **[Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)** - K8s入口控制器
+
+## 下一步学习
+
+在掌握负载均衡后，你可以继续学习：
+
+1. **服务网格**：深入了解Istio、Linkerd等服务网格技术
+2. **容器编排**：学习Kubernetes的服务发现和负载均衡
+3. **云原生架构**：探索现代云原生应用的负载均衡模式
+4. **性能优化**：学习如何优化负载均衡器的性能
+
+---
+
+*负载均衡是构建可扩展分布式系统的基石，通过智能的流量分配和服务管理，确保系统的高可用性和性能。掌握这些技术对于设计现代分布式架构至关重要。*

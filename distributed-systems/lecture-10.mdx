@@ -1,0 +1,1372 @@
+---
+title: "Lecture 10: 分布式事务"
+description: "分布式事务的原理、实现与最佳实践"
+---
+
+# Lecture 10: 分布式事务
+
+## 本周内容
+
+- **分布式事务基础**：ACID特性、CAP定理、事务分类
+- **两阶段提交(2PC)**：原理、实现、优缺点分析
+- **三阶段提交(3PC)**：优化2PC的阻塞问题
+- **SAGA模式**：长事务解决方案
+- **TCC模式**：Try-Confirm-Cancel模式详解
+- **实践项目**：实现分布式事务管理器
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/7cQq4L9JqoM" title="分布式事务" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 分布式事务概述
+
+分布式事务是指涉及多个独立资源管理器的事务，这些资源管理器可以是数据库、消息队列或其他存储系统。
+
+**事务分类**
+```
+单机事务：单一数据库操作
+           ┌─────────────┐
+           │  BEGIN     │
+           │  UPDATE A  │
+           │  UPDATE B  │
+           │  COMMIT    │
+           └─────────────┘
+
+分布式事务：跨多个资源管理器
+           ┌─────────────┐
+           │  BEGIN     │
+           │  UPDATE A  │◄─── Database 1
+           │  UPDATE B  │◄─── Database 2
+           │  UPDATE C  │◄─── Message Queue
+           │  COMMIT    │
+           └─────────────┘
+```
+
+### ACID特性在分布式环境中的挑战
+
+```go
+// 分布式事务的ACID挑战
+type DistributedTransaction struct {
+    TransactionID string
+    Participants  []Participant
+    State         TransactionState
+    Timeout       time.Duration
+}
+
+// 参与者定义
+type Participant struct {
+    ID       string
+    Resource Resource
+    Prepare  func() error
+    Commit   func() error
+    Rollback func() error
+}
+
+// 资源抽象
+type Resource interface {
+    Begin() error
+    Commit() error
+    Rollback() error
+}
+
+// 事务状态
+type TransactionState int
+
+const (
+    StateInitial TransactionState = iota
+    StateActive
+    StatePrepared
+    StateCommitted
+    StateRolledBack
+    StateTimeout
+    StateFailed
+)
+```
+
+## 两阶段提交(2PC)
+
+### 2PC工作原理
+
+两阶段提交是经典的分布式事务协议，通过两个阶段来保证所有参与者的事务一致性。
+
+**阶段划分**
+```
+Phase 1: 准备阶段
+           ┌─────────────┐
+           │  Coordinator │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P1   │   │
+           │  │Prepare│   │
+           │  └───────┘   │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P2   │   │
+           │  │Prepare│   │
+           │  └───────┘   │
+           └─────────────┘
+
+Phase 2: 提交/回滚阶段
+           ┌─────────────┐
+           │  Coordinator │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P1   │   │
+           │  │Commit │   │
+           │  └───────┘   │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P2   │   │
+           │  │Commit │   │
+           │  └───────┘   │
+           └─────────────┘
+```
+
+### 2PC实现
+
+```go
+package transaction
+
+import (
+    "context"
+    "errors"
+    "sync"
+    "time"
+)
+
+// 2PC协调器
+type TwoPhaseCoordinator struct {
+    mu             sync.Mutex
+    transactions   map[string]*TwoPhaseTransaction
+    participants   map[string]*TwoPhaseParticipant
+    timeout        time.Duration
+    logger         Logger
+}
+
+// 2PC事务
+type TwoPhaseTransaction struct {
+    ID           string
+    Participants []string
+    State        TransactionState
+    Votes        map[string]bool
+    startTime    time.Time
+    ctx          context.Context
+    cancel       context.CancelFunc
+}
+
+// 2PC参与者
+type TwoPhaseParticipant struct {
+    ID        string
+    Resource  Resource
+    Prepared  bool
+    Committed bool
+}
+
+// 开始事务
+func (c *TwoPhaseCoordinator) Begin(ctx context.Context, participants []string) (*TwoPhaseTransaction, error) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    tx := &TwoPhaseTransaction{
+        ID:           generateTransactionID(),
+        Participants: participants,
+        State:        StateActive,
+        Votes:        make(map[string]bool),
+        startTime:    time.Now(),
+    }
+
+    tx.ctx, tx.cancel = context.WithCancel(ctx)
+    c.transactions[tx.ID] = tx
+
+    // 设置超时
+    go c.handleTimeout(tx)
+
+    return tx, nil
+}
+
+// 第一阶段：准备
+func (c *TwoPhaseCoordinator) Prepare(ctx context.Context, txID string) error {
+    c.mu.Lock()
+    tx, exists := c.transactions[txID]
+    c.mu.Unlock()
+
+    if !exists {
+        return errors.New("transaction not found")
+    }
+
+    tx.State = StatePrepared
+
+    // 向所有参与者发送准备请求
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                errChan <- errors.New("participant not found")
+                return
+            }
+
+            // 执行准备操作
+            err := participant.Resource.Prepare()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            tx.Votes[pid] = true
+            participant.Prepared = true
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            // 有参与者失败，执行回滚
+            return c.Rollback(ctx, txID)
+        }
+    }
+
+    // 所有参与者都准备好了
+    return c.Commit(ctx, txID)
+}
+
+// 第二阶段：提交
+func (c *TwoPhaseCoordinator) Commit(ctx context.Context, txID string) error {
+    c.mu.Lock()
+    tx, exists := c.transactions[txID]
+    c.mu.Unlock()
+
+    if !exists {
+        return errors.New("transaction not found")
+    }
+
+    tx.State = StateCommitted
+
+    // 向所有参与者发送提交请求
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                errChan <- errors.New("participant not found")
+                return
+            }
+
+            // 执行提交操作
+            err := participant.Resource.Commit()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            participant.Committed = true
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            return err
+        }
+    }
+
+    // 清理事务
+    c.mu.Lock()
+    delete(c.transactions, txID)
+    c.mu.Unlock()
+
+    return nil
+}
+
+// 回滚事务
+func (c *TwoPhaseCoordinator) Rollback(ctx context.Context, txID string) error {
+    c.mu.Lock()
+    tx, exists := c.transactions[txID]
+    c.mu.Unlock()
+
+    if !exists {
+        return errors.New("transaction not found")
+    }
+
+    tx.State = StateRolledBack
+
+    // 向所有参与者发送回滚请求
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                return
+            }
+
+            // 执行回滚操作
+            err := participant.Resource.Rollback()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            participant.Prepared = false
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 清理事务
+    c.mu.Lock()
+    delete(c.transactions, txID)
+    c.mu.Unlock()
+
+    return nil
+}
+
+// 处理超时
+func (c *TwoPhaseCoordinator) handleTimeout(tx *TwoPhaseTransaction) {
+    select {
+    case <-time.After(c.timeout):
+        c.mu.Lock()
+        if tx.State != StateCommitted && tx.State != StateRolledBack {
+            tx.State = StateTimeout
+            tx.cancel()
+            go c.Rollback(tx.ctx, tx.ID)
+        }
+        c.mu.Unlock()
+    case <-tx.ctx.Done():
+        return
+    }
+}
+```
+
+## 三阶段提交(3PC)
+
+### 3PC优化原理
+
+三阶段提交在两阶段提交的基础上增加了一个"预提交"阶段，减少了阻塞问题。
+
+**三个阶段**
+```
+Phase 1: CanCommit (询问阶段)
+           ┌─────────────┐
+           │  Coordinator │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P1   │   │
+           │  │  Can?  │   │
+           │  └───────┘   │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P2   │   │
+           │  │  Can?  │   │
+           │  └───────┘   │
+           └─────────────┘
+
+Phase 2: PreCommit (预提交阶段)
+           ┌─────────────┐
+           │  Coordinator │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P1   │   │
+           │  │PreCom  │   │
+           │  └───────┘   │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P2   │   │
+           │  │PreCom  │   │
+           │  └───────┘   │
+           └─────────────┘
+
+Phase 3: DoCommit (提交阶段)
+           ┌─────────────┐
+           │  Coordinator │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P1   │   │
+           │  │Commit │   │
+           │  └───────┘   │
+           │     │        │
+           │     ▼        │
+           │  ┌───────┐   │
+           │  │  P2   │   │
+           │  │Commit │   │
+           │  └───────┘   │
+           └─────────────┘
+```
+
+### 3PC实现
+
+```go
+// 3PC协调器
+type ThreePhaseCoordinator struct {
+    mu           sync.Mutex
+    transactions map[string]*ThreePhaseTransaction
+    participants map[string]*ThreePhaseParticipant
+    timeout      time.Duration
+    logger       Logger
+}
+
+// 3PC事务
+type ThreePhaseTransaction struct {
+    ID           string
+    Participants []string
+    State        TransactionState
+    Votes        map[string]bool
+    startTime    time.Time
+    ctx          context.Context
+    cancel       context.CancelFunc
+    phase        int // 1: CanCommit, 2: PreCommit, 3: DoCommit
+}
+
+// 3PC参与者
+type ThreePhaseParticipant struct {
+    ID         string
+    Resource   Resource
+    CanCommit  bool
+    PreCommit  bool
+    Committed  bool
+}
+
+// 开始3PC事务
+func (c *ThreePhaseCoordinator) Begin(ctx context.Context, participants []string) (*ThreePhaseTransaction, error) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    tx := &ThreePhaseTransaction{
+        ID:           generateTransactionID(),
+        Participants: participants,
+        State:        StateActive,
+        Votes:        make(map[string]bool),
+        startTime:    time.Now(),
+        phase:        1,
+    }
+
+    tx.ctx, tx.cancel = context.WithCancel(ctx)
+    c.transactions[tx.ID] = tx
+
+    // 开始第一阶段
+    go c.canCommitPhase(tx)
+
+    return tx, nil
+}
+
+// 第一阶段：CanCommit
+func (c *ThreePhaseCoordinator) canCommitPhase(tx *ThreePhaseTransaction) {
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    // 向所有参与者发送CanCommit请求
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                errChan <- errors.New("participant not found")
+                return
+            }
+
+            // 检查是否可以提交
+            canCommit, err := participant.Resource.CanCommit()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            tx.Votes[pid] = canCommit
+            participant.CanCommit = canCommit
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否所有参与者都可以提交
+    allCanCommit := true
+    for _, vote := range tx.Votes {
+        if !vote {
+            allCanCommit = false
+            break
+        }
+    }
+
+    if allCanCommit {
+        // 进入第二阶段
+        c.mu.Lock()
+        tx.phase = 2
+        c.mu.Unlock()
+        go c.preCommitPhase(tx)
+    } else {
+        // 中止事务
+        c.Rollback(tx.ctx, tx.ID)
+    }
+}
+
+// 第二阶段：PreCommit
+func (c *ThreePhaseCoordinator) preCommitPhase(tx *ThreePhaseTransaction) {
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    // 向所有参与者发送PreCommit请求
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                errChan <- errors.New("participant not found")
+                return
+            }
+
+            // 执行预提交
+            err := participant.Resource.PreCommit()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            participant.PreCommit = true
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            c.Rollback(tx.ctx, tx.ID)
+            return
+        }
+    }
+
+    // 进入第三阶段
+    c.mu.Lock()
+    tx.phase = 3
+    c.mu.Unlock()
+    go c.doCommitPhase(tx)
+}
+
+// 第三阶段：DoCommit
+func (c *ThreePhaseCoordinator) doCommitPhase(tx *ThreePhaseTransaction) {
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    // 向所有参与者发送DoCommit请求
+    for _, participantID := range tx.Participants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            participant, exists := c.participants[pid]
+            if !exists {
+                errChan <- errors.New("participant not found")
+                return
+            }
+
+            // 执行提交
+            err := participant.Resource.Commit()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            c.mu.Lock()
+            participant.Committed = true
+            c.mu.Unlock()
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            c.Rollback(tx.ctx, tx.ID)
+            return
+        }
+    }
+
+    // 事务完成
+    c.mu.Lock()
+    tx.State = StateCommitted
+    delete(c.transactions, tx.ID)
+    c.mu.Unlock()
+}
+
+// 资源接口扩展
+type Resource interface {
+    CanCommit() (bool, error)
+    PreCommit() error
+    Commit() error
+    Rollback() error
+}
+```
+
+## SAGA模式
+
+### SAGA原理
+
+SAGA模式是一种长事务解决方案，通过将长事务分解为一系列本地事务，每个本地事务都有对应的补偿操作。
+
+**SAGA执行模式**
+```
+Order Saga:
+┌─────────────────┐
+│ Create Order    │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Reserve Payment │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Ship Product    │
+└─────────────────┘
+
+Compensation (on failure):
+┌─────────────────┐
+│ Cancel Shipping │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Refund Payment  │
+└─────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Cancel Order    │
+└─────────────────┘
+```
+
+### SAGA实现
+
+```go
+// SAGA事务管理器
+type SagaManager struct {
+    mu          sync.Mutex
+    transactions map[string]*SagaTransaction
+    logger      Logger
+}
+
+// SAGA事务
+type SagaTransaction struct {
+    ID          string
+    Steps       []SagaStep
+    CurrentStep int
+    State       TransactionState
+    Compensation bool
+    ctx         context.Context
+    cancel      context.CancelFunc
+}
+
+// SAGA步骤
+type SagaStep struct {
+    Name        string
+    Execute     func() error
+    Compensate  func() error
+    RetryCount  int
+    MaxRetries  int
+}
+
+// 开始SAGA事务
+func (s *SagaManager) Begin(ctx context.Context, steps []SagaStep) (*SagaTransaction, error) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    tx := &SagaTransaction{
+        ID:          generateTransactionID(),
+        Steps:       steps,
+        CurrentStep: 0,
+        State:       StateActive,
+        Compensation: false,
+    }
+
+    tx.ctx, tx.cancel = context.WithCancel(ctx)
+    s.transactions[tx.ID] = tx
+
+    // 开始执行
+    go s.executeSaga(tx)
+
+    return tx, nil
+}
+
+// 执行SAGA事务
+func (s *SagaManager) executeSaga(tx *SagaTransaction) {
+    for i, step := range tx.Steps {
+        if tx.Compensation {
+            // 执行补偿操作
+            s.logger.Printf("执行补偿操作: %s", step.Name)
+            err := s.executeWithRetry(step.Compensate, step.RetryCount, step.MaxRetries)
+            if err != nil {
+                s.logger.Printf("补偿操作失败: %s, 错误: %v", step.Name, err)
+                continue
+            }
+        } else {
+            // 执行正常操作
+            s.logger.Printf("执行步骤: %s", step.Name)
+            err := s.executeWithRetry(step.Execute, step.RetryCount, step.MaxRetries)
+            if err != nil {
+                s.logger.Printf("步骤执行失败: %s, 错误: %v", step.Name, err)
+                // 开始补偿
+                tx.Compensation = true
+                tx.CurrentStep = i
+                go s.executeSaga(tx)
+                return
+            }
+        }
+    }
+
+    // 事务完成
+    s.mu.Lock()
+    if tx.Compensation {
+        tx.State = StateRolledBack
+        s.logger.Printf("SAGA事务补偿完成: %s", tx.ID)
+    } else {
+        tx.State = StateCommitted
+        s.logger.Printf("SAGA事务执行成功: %s", tx.ID)
+    }
+    delete(s.transactions, tx.ID)
+    s.mu.Unlock()
+}
+
+// 带重试的执行
+func (s *SagaManager) executeWithRetry(fn func() error, retryCount, maxRetries int) error {
+    var err error
+    for i := 0; i <= maxRetries; i++ {
+        err = fn()
+        if err == nil {
+            return nil
+        }
+
+        if i < maxRetries {
+            // 指数退避
+            delay := time.Duration(i*i) * 100 * time.Millisecond
+            time.Sleep(delay)
+        }
+    }
+    return err
+}
+
+// 手动触发补偿
+func (s *SagaManager) Compensate(txID string) error {
+    s.mu.Lock()
+    tx, exists := s.transactions[txID]
+    s.mu.Unlock()
+
+    if !exists {
+        return errors.New("transaction not found")
+    }
+
+    tx.Compensation = true
+    tx.cancel()
+
+    return nil
+}
+```
+
+## TCC模式
+
+### TCC原理
+
+TCC (Try-Confirm-Cancel) 模式是一种柔性事务解决方案，通过预留资源和确认/取消操作来实现最终一致性。
+
+**TCC执行流程**
+```
+Try Phase (预留资源):
+┌─────────────────┐
+│ Try: Reserve    │
+│    - Deduct     │
+│      Balance    │
+│    - Lock       │
+│      Inventory │
+└─────────────────┘
+
+Confirm Phase (确认操作):
+┌─────────────────┐
+│ Confirm:        │
+│    - Confirm    │
+│      Deduction  │
+│    - Confirm    │
+│      Lock       │
+└─────────────────┘
+
+Cancel Phase (取消操作):
+┌─────────────────┐
+│ Cancel:         │
+│    - Refund     │
+│      Balance    │
+│    - Release    │
+│      Inventory │
+└─────────────────┘
+```
+
+### TCC实现
+
+```go
+// TCC事务管理器
+type TCCManager struct {
+    mu           sync.Mutex
+    transactions map[string]*TCCTransaction
+    logger      Logger
+}
+
+// TCC事务
+type TCCTransaction struct {
+    ID          string
+    Participants []TCCParticipant
+    State       TransactionState
+    Phase       int // 0: Try, 1: Confirm, 2: Cancel
+    ctx         context.Context
+    cancel      context.CancelFunc
+}
+
+// TCC参与者
+type TCCParticipant struct {
+    ID     string
+    Try    func() error
+    Confirm func() error
+    Cancel func() error
+    Tried  bool
+    Status string // "tried", "confirmed", "cancelled"
+}
+
+// 开始TCC事务
+func (t *TCCManager) Begin(ctx context.Context, participants []TCCParticipant) (*TCCTransaction, error) {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+
+    tx := &TCCTransaction{
+        ID:          generateTransactionID(),
+        Participants: participants,
+        State:       StateActive,
+        Phase:       0,
+    }
+
+    tx.ctx, tx.cancel = context.WithCancel(ctx)
+    t.transactions[tx.ID] = tx
+
+    // 开始Try阶段
+    go t.tryPhase(tx)
+
+    return tx, nil
+}
+
+// Try阶段
+func (t *TCCManager) tryPhase(tx *TCCTransaction) {
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+    successParticipants := make([]string, 0)
+
+    // 并行执行所有Try操作
+    for _, participant := range tx.Participants {
+        wg.Add(1)
+        go func(p TCCParticipant) {
+            defer wg.Done()
+
+            err := p.Try()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            t.mu.Lock()
+            p.Tried = true
+            p.Status = "tried"
+            successParticipants = append(successParticipants, p.ID)
+            t.mu.Unlock()
+        }(participant)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            t.logger.Printf("Try阶段失败，开始Cancel: %v", err)
+            // Try失败，执行Cancel
+            t.cancelPhase(tx, successParticipants)
+            return
+        }
+    }
+
+    // Try成功，等待Confirm
+    t.mu.Lock()
+    tx.State = StatePrepared
+    t.mu.Unlock()
+
+    // 设置超时自动Cancel
+    go func() {
+        select {
+        case <-time.After(30 * time.Second):
+            if tx.State == StatePrepared {
+                t.cancelPhase(tx, successParticipants)
+            }
+        case <-tx.ctx.Done():
+            return
+        }
+    }()
+}
+
+// Confirm阶段
+func (t *TCCManager) ConfirmPhase(tx *TCCTransaction) error {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+
+    if tx.State != StatePrepared {
+        return errors.New("transaction not in prepared state")
+    }
+
+    tx.Phase = 1
+    tx.State = StateCommitted
+
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(tx.Participants))
+
+    // 并行执行所有Confirm操作
+    for _, participant := range tx.Participants {
+        wg.Add(1)
+        go func(p TCCParticipant) {
+            defer wg.Done()
+
+            if !p.Tried {
+                return
+            }
+
+            err := p.Confirm()
+            if err != nil {
+                errChan <- err
+                return
+            }
+
+            t.mu.Lock()
+            p.Status = "confirmed"
+            t.mu.Unlock()
+        }(participant)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 检查是否有错误
+    for err := range errChan {
+        if err != nil {
+            t.logger.Printf("Confirm阶段出现错误: %v", err)
+        }
+    }
+
+    // 清理事务
+    delete(t.transactions, tx.ID)
+
+    return nil
+}
+
+// Cancel阶段
+func (t *TCCManager) cancelPhase(tx *TCCTransaction, successParticipants []string) {
+    t.mu.Lock()
+    tx.Phase = 2
+    tx.State = StateRolledBack
+    t.mu.Unlock()
+
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(successParticipants))
+
+    // 对成功的参与者执行Cancel操作
+    for _, participantID := range successParticipants {
+        wg.Add(1)
+        go func(pid string) {
+            defer wg.Done()
+
+            for _, participant := range tx.Participants {
+                if participant.ID == pid && participant.Tried {
+                    err := participant.Cancel()
+                    if err != nil {
+                        errChan <- err
+                        return
+                    }
+
+                    t.mu.Lock()
+                    participant.Status = "cancelled"
+                    t.mu.Unlock()
+                    break
+                }
+            }
+        }(participantID)
+    }
+
+    wg.Wait()
+    close(errChan)
+
+    // 记录错误
+    for err := range errChan {
+        t.logger.Printf("Cancel阶段出现错误: %v", err)
+    }
+
+    // 清理事务
+    t.mu.Lock()
+    delete(t.transactions, tx.ID)
+    t.mu.Unlock()
+}
+```
+
+## 实践项目：分布式事务管理器
+
+### 综合实现
+
+```go
+package main
+
+import (
+    "context"
+    "database/sql"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "sync"
+    "time"
+)
+
+// 分布式事务管理器
+type DistributedTransactionManager struct {
+    twoPhase   *TwoPhaseCoordinator
+    threePhase *ThreePhaseCoordinator
+    saga       *SagaManager
+    tcc        *TCCManager
+    logger     *log.Logger
+}
+
+// 订单服务
+type OrderService struct {
+    db        *sql.DB
+    txManager *DistributedTransactionManager
+}
+
+// 支付服务
+type PaymentService struct {
+    db        *sql.DB
+    txManager *DistributedTransactionManager
+}
+
+// 库存服务
+type InventoryService struct {
+    db        *sql.DB
+    txManager *DistributedTransactionManager
+}
+
+// 初始化事务管理器
+func NewDistributedTransactionManager(logger *log.Logger) *DistributedTransactionManager {
+    return &DistributedTransactionManager{
+        twoPhase:   &TwoPhaseCoordinator{transactions: make(map[string]*TwoPhaseTransaction)},
+        threePhase: &ThreePhaseCoordinator{transactions: make(map[string]*ThreePhaseTransaction)},
+        saga:       &SagaManager{transactions: make(map[string]*SagaTransaction)},
+        tcc:        &TCCManager{transactions: make(map[string]*TCCTransaction)},
+        logger:     logger,
+    }
+}
+
+// 创建订单（使用2PC）
+func (o *OrderService) CreateOrderWith2PC(ctx context.Context, order Order) error {
+    // 准备参与者
+    participants := []string{"order", "payment", "inventory"}
+
+    // 开始2PC事务
+    tx, err := o.txManager.twoPhase.Begin(ctx, participants)
+    if err != nil {
+        return err
+    }
+
+    // 执行准备阶段
+    err = o.txManager.twoPhase.Prepare(ctx, tx.ID)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+// 创建订单（使用SAGA）
+func (o *OrderService) CreateOrderWithSaga(ctx context.Context, order Order) error {
+    steps := []SagaStep{
+        {
+            Name: "create_order",
+            Execute: func() error {
+                return o.createOrder(order)
+            },
+            Compensate: func() error {
+                return o.cancelOrder(order.ID)
+            },
+            MaxRetries: 3,
+        },
+        {
+            Name: "process_payment",
+            Execute: func() error {
+                return o.processPayment(order.ID, order.Amount)
+            },
+            Compensate: func() error {
+                return o.refundPayment(order.ID)
+            },
+            MaxRetries: 3,
+        },
+        {
+            Name: "reserve_inventory",
+            Execute: func() error {
+                return o.reserveInventory(order.ProductID, order.Quantity)
+            },
+            Compensate: func() error {
+                return o.releaseInventory(order.ProductID, order.Quantity)
+            },
+            MaxRetries: 3,
+        },
+    }
+
+    // 开始SAGA事务
+    _, err := o.txManager.saga.Begin(ctx, steps)
+    return err
+}
+
+// 创建订单（使用TCC）
+func (o *OrderService) CreateOrderWithTCC(ctx context.Context, order Order) error {
+    participants := []TCCParticipant{
+        {
+            ID: "order",
+            Try: func() error {
+                return o.tryCreateOrder(order)
+            },
+            Confirm: func() error {
+                return o.confirmOrder(order.ID)
+            },
+            Cancel: func() error {
+                return o.cancelOrder(order.ID)
+            },
+        },
+        {
+            ID: "payment",
+            Try: func() error {
+                return o.tryProcessPayment(order.ID, order.Amount)
+            },
+            Confirm: func() error {
+                return o.confirmPayment(order.ID)
+            },
+            Cancel: func() error {
+                return o.cancelPayment(order.ID)
+            },
+        },
+        {
+            ID: "inventory",
+            Try: func() error {
+                return o.tryReserveInventory(order.ProductID, order.Quantity)
+            },
+            Confirm: func() error {
+                return o.confirmInventory(order.ProductID, order.Quantity)
+            },
+            Cancel: func() error {
+                return o.cancelInventory(order.ProductID, order.Quantity)
+            },
+        },
+    }
+
+    // 开始TCC事务
+    tx, err := o.txManager.tcc.Begin(ctx, participants)
+    if err != nil {
+        return err
+    }
+
+    // 等待用户确认
+    time.Sleep(5 * time.Second)
+
+    // 确认事务
+    return o.txManager.tcc.ConfirmPhase(tx)
+}
+
+// HTTP处理器
+func (o *OrderService) HandleCreateOrder(w http.ResponseWriter, r *http.Request) {
+    var order Order
+    if err := json.NewDecoder(r.Body).Decode(&order); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    // 选择事务模式
+    txMode := r.URL.Query().Get("tx_mode")
+
+    var err error
+    ctx := r.Context()
+
+    switch txMode {
+    case "2pc":
+        err = o.CreateOrderWith2PC(ctx, order)
+    case "saga":
+        err = o.CreateOrderWithSaga(ctx, order)
+    case "tcc":
+        err = o.CreateOrderWithTCC(ctx, order)
+    default:
+        err = o.CreateOrderWithSaga(ctx, order)
+    }
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func main() {
+    // 初始化日志
+    logger := log.New(os.Stdout, "TX_MANAGER: ", log.LstdFlags)
+
+    // 初始化事务管理器
+    txManager := NewDistributedTransactionManager(logger)
+
+    // 初始化数据库连接
+    db, err := sql.Open("mysql", "user:password@tcp(localhost:3306)/orders")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    // 初始化服务
+    orderService := &OrderService{
+        db:        db,
+        txManager: txManager,
+    }
+
+    // 设置HTTP路由
+    http.HandleFunc("/orders", orderService.HandleCreateOrder)
+
+    // 启动服务器
+    fmt.Println("Transaction Management Server started on :8080")
+    log.Fatal(http.ListenAndServe(":8080", nil))
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **CAP定理**：在分布式事务中如何平衡一致性、可用性和分区容错性？
+
+2. **2PC vs 3PC**：比较两阶段提交和三阶段提交的优缺点。
+
+3. **SAGA vs TCC**：分析SAGA模式和TCC模式的适用场景。
+
+4. **最终一致性**：解释最终一致性在分布式事务中的作用。
+
+### 编程题
+
+1. **补偿机制**：实现一个带补偿机制的SAGA事务。
+
+2. **超时处理**：为2PC事务实现超时处理机制。
+
+3. **重试策略**：实现指数退避重试算法。
+
+4. **状态监控**：创建一个分布式事务状态监控工具。
+
+### 设计题
+
+1. **高可用设计**：设计一个高可用的分布式事务协调器。
+
+2. **性能优化**：优化分布式事务的性能，减少延迟。
+
+3. **容错机制**：设计事务协调器的容错和恢复机制。
+
+4. **监控告警**：设计分布式事务的监控和告警系统。
+
+## 常见问题
+
+### Q: 如何选择合适的事务模式？
+
+A: 根据业务场景选择：
+- 2PC：适合短事务，对一致性要求高
+- SAGA：适合长事务，业务流程明确
+- TCC：适合高并发，性能要求高的场景
+
+### Q: 如何处理事务超时？
+
+A: 设置合理的超时时间，实现超时自动回滚机制，确保资源不长期锁定。
+
+### Q: 如何保证事务的幂等性？
+
+A: 通过事务ID去重、状态检查、乐观锁等机制保证操作的幂等性。
+
+## 扩展资源
+
+### 必读论文
+
+1. **[The Saga Pattern](https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf)** - SAGA模式原始论文
+2. **[The Two-Phase Commit Protocol](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-21.pdf)** - 2PC协议详细分析
+3. **[Consensus in the Cloud](https://arxiv.org/pdf/1504.06975.pdf)** - 云环境中的共识算法
+
+### 实践项目
+
+1. **[Seata](https://github.com/seata/seata)** - 阿里开源的分布式事务框架
+2. **[DTF](https://github.com/dtm-labs/dtm)** - 分布式事务管理器
+3. **[Narayana](https://github.com/jbosstm/narayana)** - JBoss事务管理器
+
+### 在线课程
+
+1. **[分布式系统设计](https://www.coursera.org/learn/cloud-computing)** - 分布式事务专题
+2. **[数据库系统实现](https://15445.courses.cs.cmu.edu/fall2020/)** - CMU数据库课程
+3. **[分布式事务实战](https://time.geekbang.org/column/intro/219)** - 分布式事务实践
+
+## 下一步学习
+
+在完成分布式事务学习后，你应该继续：
+
+1. **消息队列**：学习异步消息处理和事务消息
+2. **分布式锁**：实现分布式锁机制
+3. **服务网格**：学习微服务架构中的事务处理
+4. **实际项目**：在实践中应用分布式事务技术
+
+---
+
+*分布式事务是构建可靠分布式系统的核心技术。通过掌握2PC、3PC、SAGA和TCC等模式，你将能够处理各种复杂的事务场景，确保系统的一致性和可靠性。*

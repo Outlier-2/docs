@@ -1,0 +1,885 @@
+---
+title: "Week 8：路由"
+description: "CS144 Week 8 - 路由协议、路由算法、OSPF、BGP"
+---
+
+# Week 8：路由
+
+## 课程概述
+
+Week 8深入探讨路由协议和算法，包括OSPF、BGP等重要路由协议的实现原理。
+
+## 路由基础
+
+### 路由的概念
+
+路由是指在网络中选择最佳路径将数据包从源地址传输到目的地址的过程。
+
+#### 路由表
+
+```cpp
+class RoutingTable {
+private:
+    struct RouteEntry {
+        IPPrefix destination;
+        IPAddress next_hop;
+        Interface interface;
+        uint32_t metric;
+        RouteType type;  // 静态、动态、直连
+        std::chrono::steady_clock::time_point last_updated;
+    };
+
+    std::vector<RouteEntry> routes;
+
+public:
+    void add_route(const IPPrefix& dest, const IPAddress& next_hop,
+                   const Interface& interface, uint32_t metric,
+                   RouteType type = RouteType::STATIC) {
+        RouteEntry entry;
+        entry.destination = dest;
+        entry.next_hop = next_hop;
+        entry.interface = interface;
+        entry.metric = metric;
+        entry.type = type;
+        entry.last_updated = std::chrono::steady_clock::now();
+
+        // 检查是否已存在相同路由
+        auto it = std::find_if(routes.begin(), routes.end(),
+            [&dest](const RouteEntry& r) {
+                return r.destination == dest;
+            });
+
+        if (it != routes.end()) {
+            *it = entry;  // 更新现有路由
+        } else {
+            routes.push_back(entry);  // 添加新路由
+        }
+    }
+
+    void remove_route(const IPPrefix& dest) {
+        routes.erase(
+            std::remove_if(routes.begin(), routes.end(),
+                [&dest](const RouteEntry& r) {
+                    return r.destination == dest;
+                }),
+            routes.end());
+    }
+
+    RouteEntry* lookup_route(const IPAddress& dest) {
+        RouteEntry* best_match = nullptr;
+        uint8_t longest_prefix = 0;
+
+        for (auto& route : routes) {
+            if (route.destination.matches(dest)) {
+                if (route.destination.prefix_length > longest_prefix) {
+                    best_match = &route;
+                    longest_prefix = route.destination.prefix_length;
+                }
+            }
+        }
+
+        return best_match;
+    }
+
+    void cleanup_old_routes() {
+        auto now = std::chrono::steady_clock::now();
+        routes.erase(
+            std::remove_if(routes.begin(), routes.end(),
+                [now](const RouteEntry& r) {
+                    return now - r.last_updated > std::chrono::seconds(ROUTE_TIMEOUT);
+                }),
+            routes.end());
+    }
+};
+```
+
+### 路由算法
+
+#### 最短路径优先 (Dijkstra算法)
+
+```cpp
+class DijkstraRouter {
+private:
+    struct Graph {
+        std::map<IPAddress, std::map<IPAddress, uint32_t>> adjacency_list;
+    };
+
+    Graph network_graph;
+
+public:
+    void add_edge(const IPAddress& from, const IPAddress& to, uint32_t weight) {
+        network_graph.adjacency_list[from][to] = weight;
+        network_graph.adjacency_list[to][from] = weight;
+    }
+
+    std::vector<IPAddress> find_shortest_path(const IPAddress& source,
+                                             const IPAddress& destination) {
+        std::map<IPAddress, uint32_t> distances;
+        std::map<IPAddress, IPAddress> previous;
+        std::set<IPAddress> unvisited;
+
+        // 初始化
+        for (const auto& [node, _] : network_graph.adjacency_list) {
+            distances[node] = UINT32_MAX;
+            unvisited.insert(node);
+        }
+        distances[source] = 0;
+
+        while (!unvisited.empty()) {
+            // 找到距离最小的未访问节点
+            IPAddress current = *std::min_element(unvisited.begin(), unvisited.end(),
+                [&distances](const IPAddress& a, const IPAddress& b) {
+                    return distances[a] < distances[b];
+                });
+
+            if (distances[current] == UINT32_MAX) break;
+
+            unvisited.erase(current);
+
+            // 更新邻居节点距离
+            for (const auto& [neighbor, weight] : network_graph.adjacency_list[current]) {
+                if (unvisited.find(neighbor) != unvisited.end()) {
+                    uint32_t new_distance = distances[current] + weight;
+                    if (new_distance < distances[neighbor]) {
+                        distances[neighbor] = new_distance;
+                        previous[neighbor] = current;
+                    }
+                }
+            }
+        }
+
+        // 构建路径
+        return build_path(previous, destination);
+    }
+
+private:
+    std::vector<IPAddress> build_path(const std::map<IPAddress, IPAddress>& previous,
+                                      const IPAddress& destination) {
+        std::vector<IPAddress> path;
+        IPAddress current = destination;
+
+        while (previous.find(current) != previous.end()) {
+            path.push_back(current);
+            current = previous.at(current);
+        }
+        path.push_back(current);
+
+        std::reverse(path.begin(), path.end());
+        return path;
+    }
+};
+```
+
+## 距离向量路由协议
+
+### RIP协议 (Routing Information Protocol)
+
+RIP是一种距离向量路由协议，使用跳数作为度量。
+
+```cpp
+class RIPRouter {
+private:
+    RoutingTable routing_table;
+    std::vector<IPAddress> neighbors;
+    uint32_t update_interval = 30;  // 30秒更新一次
+
+public:
+    void send_routing_update() {
+        RIPMessage message;
+        message.command = RIP_RESPONSE;
+
+        for (const auto& route : routing_table.get_routes()) {
+            RIPRouteEntry rip_entry;
+            rip_entry.network = route.destination.network;
+            rip_entry.mask = route.destination.mask;
+            rip_entry.next_hop = route.next_hop;
+            rip_entry.metric = route.metric;
+
+            message.routes.push_back(rip_entry);
+        }
+
+        // 广播给所有邻居
+        for (const auto& neighbor : neighbors) {
+            send_rip_message(neighbor, message);
+        }
+    }
+
+    void receive_routing_update(const IPAddress& from, const RIPMessage& message) {
+        for (const auto& rip_route : message.routes) {
+            // 水平分割：不向来源邻居回传路由
+            if (rip_route.next_hop == from) {
+                continue;
+            }
+
+            uint32_t new_metric = rip_route.metric + 1;
+            if (new_metric > 16) {
+                new_metric = 16;  // 16表示无穷大
+            }
+
+            // 检查是否更新路由表
+            auto current_route = routing_table.lookup_route(rip_route.network);
+            if (!current_route || new_metric < current_route->metric) {
+                routing_table.add_route(
+                    IPPrefix(rip_route.network, rip_route.mask),
+                    from,
+                    get_interface_for_neighbor(from),
+                    new_metric,
+                    RouteType::RIP
+                );
+            }
+        }
+    }
+
+    void start_routing_loop() {
+        std::thread([this]() {
+            while (true) {
+                send_routing_update();
+                std::this_thread::sleep_for(std::chrono::seconds(update_interval));
+            }
+        }).detach();
+    }
+};
+```
+
+### 水平分割和毒性逆转
+
+```cpp
+class RIPSplitHorizon {
+private:
+    std::map<IPAddress, std::set<IPPrefix>> advertised_routes;
+
+public:
+    void apply_split_horizon(RIPMessage& message, const IPAddress& neighbor) {
+        // 水平分割：不向邻居发送从该邻居学到的路由
+        message.routes.erase(
+            std::remove_if(message.routes.begin(), message.routes.end(),
+                [this, &neighbor](const RIPRouteEntry& route) {
+                    return learned_from_neighbor(route.network, neighbor);
+                }),
+            message.routes.end());
+    }
+
+    void apply_poison_reverse(RIPMessage& message, const IPAddress& neighbor) {
+        // 毒性逆转：向邻居发送从该邻居学到的路由，但度量设为无穷大
+        for (auto& route : message.routes) {
+            if (learned_from_neighbor(route.network, neighbor)) {
+                route.metric = 16;  // 无穷大
+            }
+        }
+    }
+
+private:
+    bool learned_from_neighbor(const IPAddress& network, const IPAddress& neighbor) {
+        auto it = advertised_routes.find(neighbor);
+        return it != advertised_routes.end() && it->second.count(network);
+    }
+};
+```
+
+## 链路状态路由协议
+
+### OSPF协议 (Open Shortest Path First)
+
+OSPF是一种链路状态路由协议，使用Dijkstra算法计算最短路径。
+
+```cpp
+class OSPFRouter {
+private:
+    struct OSPFNeighbor {
+        IPAddress address;
+        RouterID router_id;
+        NeighborState state;
+        std::chrono::steady_clock::time_point last_hello;
+    };
+
+    struct LinkStateAdvertisement {
+        RouterID advertising_router;
+        uint32_t sequence_number;
+        uint32_t age;
+        std::vector<Link> links;
+    };
+
+    RouterID router_id;
+    std::map<RouterID, OSPFNeighbor> neighbors;
+    std::map<RouterID, LinkStateAdvertisement> lsdb;
+    std::thread hello_thread;
+    std::thread lsa_thread;
+
+public:
+    void start_ospf() {
+        start_hello_protocol();
+        start_lsa_flooding();
+        start_spf_calculation();
+    }
+
+    void send_hello_packet() {
+        OSPFHelloPacket hello;
+        hello.router_id = router_id;
+        hello.area_id = 0;  // 主干区域
+        hello.neighbors = get_active_neighbors();
+
+        // 组播发送
+        multicast_hello(hello);
+    }
+
+    void receive_hello_packet(const OSPFHelloPacket& hello) {
+        auto it = neighbors.find(hello.router_id);
+        if (it != neighbors.end()) {
+            // 更新邻居状态
+            it->second.last_hello = std::chrono::steady_clock::now();
+
+            if (it->second.state == NeighborState::DOWN) {
+                it->second.state = NeighborState::INIT;
+
+                // 检查是否在对方的邻居列表中
+                if (hello.neighbors.count(router_id)) {
+                    it->second.state = NeighborState::TWO_WAY;
+                    start_database_exchange(hello.router_id);
+                }
+            }
+        } else {
+            // 发现新邻居
+            add_neighbor(hello.router_id, hello.source_address);
+        }
+    }
+
+    void originate_lsa() {
+        LinkStateAdvertisement lsa;
+        lsa.advertising_router = router_id;
+        lsa.sequence_number = get_next_sequence_number();
+        lsa.links = get_local_links();
+
+        // 更新本地LSDB
+        lsdb[router_id] = lsa;
+
+        // 泛洪LSA
+        flood_lsa(lsa);
+    }
+
+    void flood_lsa(const LinkStateAdvertisement& lsa) {
+        OSPFLSAUpdate update;
+        update.lsa = lsa;
+
+        // 向所有邻居泛洪，除了来源邻居
+        for (const auto& [router_id, neighbor] : neighbors) {
+            if (neighbor.state == NeighborState::FULL &&
+                router_id != lsa.advertising_router) {
+                send_lsa_update(neighbor.address, update);
+            }
+        }
+    }
+
+    void calculate_spf_tree() {
+        // 构建网络拓扑图
+        DijkstraRouter dijkstra;
+
+        for (const auto& [router_id, lsa] : lsdb) {
+            for (const auto& link : lsa.links) {
+                dijkstra.add_edge(router_id, link.to_router, link.cost);
+            }
+        }
+
+        // 计算到所有路由器的最短路径
+        for (const auto& [dest_router, _] : lsdb) {
+            if (dest_router != router_id) {
+                auto path = dijkstra.find_shortest_path(router_id, dest_router);
+                update_routing_table(dest_router, path);
+            }
+        }
+    }
+
+private:
+    void start_hello_protocol() {
+        hello_thread = std::thread([this]() {
+            while (true) {
+                send_hello_packet();
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+            }
+        });
+    }
+
+    void start_lsa_flooding() {
+        lsa_thread = std::thread([this]() {
+            while (true) {
+                originate_lsa();
+                std::this_thread::sleep_for(std::chrono::minutes(30));
+            }
+        });
+    }
+};
+```
+
+## 路径向量路由协议
+
+### BGP协议 (Border Gateway Protocol)
+
+BGP是互联网上使用的路径向量路由协议。
+
+```cpp
+class BGPRouter {
+private:
+    struct BGPRoute {
+        IPAddress network;
+        IPAddress next_hop;
+        std::vector<ASNumber> as_path;
+        uint32_t local_pref;
+        uint32_t med;
+        OriginType origin;
+    };
+
+    struct BGPPeer {
+        IPAddress address;
+        ASNumber as_number;
+        PeerState state;
+        bool is_external;
+    };
+
+    ASNumber local_as;
+    std::vector<BGPPeer> peers;
+    std::map<IPAddress, BGPRoute> bgp_table;
+    RoutingTable rib;
+
+public:
+    void establish_peer_session(const BGPPeer& peer) {
+        // 发送OPEN消息
+        BGPOpenMessage open;
+        open.as_number = local_as;
+        open.bgp_identifier = get_bgp_identifier();
+        open.hold_time = 180;
+
+        send_bgp_message(peer.address, open);
+
+        // 等待OPEN响应
+        auto response = receive_bgp_message(peer.address);
+        if (response.type == BGP_OPEN) {
+            // 发送KEEPALIVE
+            BGPKeepaliveMessage keepalive;
+            send_bgp_message(peer.address, keepalive);
+
+            // 进入ESTABLISHED状态
+            peer.state = PeerState::ESTABLISHED;
+        }
+    }
+
+    void advertise_route(const BGPPeer& peer, const BGPRoute& route) {
+        BGPUpdateMessage update;
+        update.nlri = route.network;
+        update.next_hop = route.next_hop;
+        update.as_path = route.as_path;
+        update.local_pref = route.local_pref;
+        update.med = route.med;
+        update.origin = route.origin;
+
+        // 应用出口策略
+        if (apply_export_policy(update, peer)) {
+            send_bgp_message(peer.address, update);
+        }
+    }
+
+    void receive_update(const BGPPeer& peer, const BGPUpdateMessage& update) {
+        // 应用入口策略
+        if (!apply_import_policy(update, peer)) {
+            return;
+        }
+
+        // 检查环路
+        if (contains_loop(update.as_path, local_as)) {
+            return;
+        }
+
+        // 创建路由
+        BGPRoute route;
+        route.network = update.nlri;
+        route.next_hop = update.next_hop;
+        route.as_path = update.as_path;
+        route.local_pref = update.local_pref;
+        route.med = update.med;
+        route.origin = update.origin;
+
+        // 添加本地AS
+        route.as_path.push_back(local_as);
+
+        // 更新BGP表
+        bgp_table[route.network] = route;
+
+        // 重新计算最佳路径
+        select_best_route(route.network);
+
+        // 向其他邻居重新广播
+        for (const auto& other_peer : peers) {
+            if (other_peer.address != peer.address &&
+                other_peer.state == PeerState::ESTABLISHED) {
+                advertise_route(other_peer, route);
+            }
+        }
+    }
+
+    void select_best_route(const IPAddress& network) {
+        auto it = bgp_table.find(network);
+        if (it == bgp_table.end()) return;
+
+        // 找到所有到达该网络的路由
+        std::vector<BGPRoute> routes;
+        for (const auto& [net, route] : bgp_table) {
+            if (net == network) {
+                routes.push_back(route);
+            }
+        }
+
+        if (routes.empty()) return;
+
+        // BGP最佳路径选择算法
+        BGPRoute best_route = routes[0];
+
+        for (const auto& route : routes) {
+            if (is_better_route(route, best_route)) {
+                best_route = route;
+            }
+        }
+
+        // 安装到RIB
+        rib.add_route(
+            IPPrefix(network, 32),
+            best_route.next_hop,
+            get_interface_for_next_hop(best_route.next_hop),
+            calculate_metric(best_route),
+            RouteType::BGP
+        );
+    }
+
+private:
+    bool is_better_route(const BGPRoute& route1, const BGPRoute& route2) {
+        // 1. 最高Local Preference
+        if (route1.local_pref != route2.local_pref) {
+            return route1.local_pref > route2.local_pref;
+        }
+
+        // 2. 最短AS Path
+        if (route1.as_path.size() != route2.as_path.size()) {
+            return route1.as_path.size() < route2.as_path.size();
+        }
+
+        // 3. 最低Origin Type (IGP < EGP < Incomplete)
+        if (route1.origin != route2.origin) {
+            return route1.origin < route2.origin;
+        }
+
+        // 4. 最低MED
+        if (route1.med != route2.med) {
+            return route1.med < route2.med;
+        }
+
+        // 5. EBGP优先于IBGP
+        bool route1_ebgp = is_ebgp_route(route1);
+        bool route2_ebgp = is_ebgp_route(route2);
+        if (route1_ebgp != route2_ebgp) {
+            return route1_ebgp;
+        }
+
+        // 6. 最低Router ID
+        return route1.next_hop < route2.next_hop;
+    }
+};
+```
+
+## 路由策略
+
+### 路由策略语言
+
+```cpp
+class RoutingPolicy {
+private:
+    struct PolicyRule {
+        std::string name;
+        std::vector<PolicyCondition> conditions;
+        PolicyAction action;
+    };
+
+    std::vector<PolicyRule> rules;
+
+public:
+    void add_import_policy(const std::string& name,
+                          const std::vector<PolicyCondition>& conditions,
+                          const PolicyAction& action) {
+        PolicyRule rule;
+        rule.name = name;
+        rule.conditions = conditions;
+        rule.action = action;
+        rules.push_back(rule);
+    }
+
+    bool apply_import_policy(BGPUpdateMessage& update, const BGPPeer& peer) {
+        for (const auto& rule : rules) {
+            if (match_conditions(rule.conditions, update, peer)) {
+                return apply_action(rule.action, update);
+            }
+        }
+        return true;  // 默认允许
+    }
+
+    bool apply_export_policy(BGPUpdateMessage& update, const BGPPeer& peer) {
+        for (const auto& rule : rules) {
+            if (match_conditions(rule.conditions, update, peer)) {
+                return apply_action(rule.action, update);
+            }
+        }
+        return true;  // 默认允许
+    }
+
+private:
+    bool match_conditions(const std::vector<PolicyCondition>& conditions,
+                         const BGPUpdateMessage& update, const BGPPeer& peer) {
+        for (const auto& condition : conditions) {
+            if (!match_single_condition(condition, update, peer)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool match_single_condition(const PolicyCondition& condition,
+                               const BGPUpdateMessage& update, const BGPPeer& peer) {
+        switch (condition.type) {
+            case PolicyCondition::AS_PATH:
+                return match_as_path(condition.value, update.as_path);
+            case PolicyCondition::PREFIX:
+                return match_prefix(condition.value, update.nlri);
+            case PolicyCondition::COMMUNITY:
+                return match_community(condition.value, update.communities);
+            case PolicyCondition::PEER:
+                return match_peer(condition.value, peer);
+            default:
+                return false;
+        }
+    }
+};
+```
+
+## 实验项目：Checkpoint 8
+
+### 目标
+- 实现多种路由协议
+- 模拟复杂的网络拓扑
+- 测试路由收敛和稳定性
+
+### 实现步骤
+
+#### 1. 路由模拟器
+
+```cpp
+class RoutingSimulator {
+private:
+    std::vector<Router> routers;
+    std::vector<Link> links;
+    std::thread simulation_thread;
+
+public:
+    void add_router(const Router& router) {
+        routers.push_back(router);
+    }
+
+    void add_link(const IPAddress& router1, const IPAddress& router2, uint32_t delay) {
+        Link link;
+        link.router1 = router1;
+        link.router2 = router2;
+        link.delay = delay;
+        links.push_back(link);
+    }
+
+    void start_simulation() {
+        simulation_thread = std::thread([this]() {
+            while (true) {
+                // 模拟网络传输
+                simulate_network_traffic();
+
+                // 更新路由表
+                update_routing_tables();
+
+                // 收集统计信息
+                collect_statistics();
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+    }
+
+    void simulate_link_failure(const IPAddress& router1, const IPAddress& router2) {
+        // 模拟链路故障
+        for (auto& link : links) {
+            if ((link.router1 == router1 && link.router2 == router2) ||
+                (link.router1 == router2 && link.router2 == router1)) {
+                link.active = false;
+                notify_link_failure(router1, router2);
+            }
+        }
+    }
+
+    void simulate_link_recovery(const IPAddress& router1, const IPAddress& router2) {
+        // 模拟链路恢复
+        for (auto& link : links) {
+            if ((link.router1 == router1 && link.router2 == router2) ||
+                (link.router1 == router2 && link.router2 == router1)) {
+                link.active = true;
+                notify_link_recovery(router1, router2);
+            }
+        }
+    }
+};
+```
+
+#### 2. 路由性能测试
+
+```cpp
+class RoutingPerformanceTest {
+private:
+    RoutingSimulator simulator;
+    PerformanceMetrics metrics;
+
+public:
+    void test_convergence_time() {
+        std::cout << "Testing routing convergence time..." << std::endl;
+
+        // 记录初始状态
+        auto start_time = std::chrono::steady_clock::now();
+
+        // 模拟链路故障
+        simulator.simulate_link_failure("192.168.1.1", "192.168.1.2");
+
+        // 等待收敛
+        wait_for_convergence();
+
+        // 记录收敛时间
+        auto end_time = std::chrono::steady_clock::now();
+        auto convergence_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+            end_time - start_time);
+
+        std::cout << "Convergence time: " << convergence_time.count() << " ms" << std::endl;
+    }
+
+    void test_stability() {
+        std::cout << "Testing routing stability..." << std::endl;
+
+        // 模拟频繁的链路变化
+        for (int i = 0; i < 100; i++) {
+            simulator.simulate_link_failure("192.168.1.1", "192.168.1.2");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            simulator.simulate_link_recovery("192.168.1.1", "192.168.1.2");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        // 检查路由表稳定性
+        check_routing_stability();
+    }
+
+    void test_scaling() {
+        std::cout << "Testing routing scalability..." << std::endl;
+
+        // 创建大规模网络拓扑
+        create_large_topology();
+
+        // 测试路由更新性能
+        auto start_time = std::chrono::steady_clock::now();
+        simulator.update_routing_tables();
+        auto end_time = std::chrono::steady_clock::now();
+
+        auto update_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+            end_time - start_time);
+
+        std::cout << "Routing table update time: " << update_time.count() << " ms" << std::endl;
+    }
+};
+```
+
+## 调试和监控
+
+### 路由表监控
+
+```cpp
+class RoutingMonitor {
+private:
+    std::vector<Router> monitored_routers;
+
+public:
+    void monitor_routing_tables() {
+        std::cout << "=== Routing Table Monitor ===" << std::endl;
+
+        for (const auto& router : monitored_routers) {
+            std::cout << "Router: " << router.get_id() << std::endl;
+            std::cout << "Routing Table:" << std::endl;
+
+            for (const auto& route : router.get_routing_table()) {
+                std::cout << "  " << route.destination.to_string()
+                          << " -> " << route.next_hop.to_string()
+                          << " (metric: " << route.metric << ")" << std::endl;
+            }
+            std::cout << std::endl;
+        }
+    }
+
+    void detect_routing_loops() {
+        std::cout << "=== Routing Loop Detection ===" << std::endl;
+
+        for (const auto& router : monitored_routers) {
+            auto next_hops = get_next_hops(router);
+
+            // 检查是否存在循环
+            if (has_routing_loop(next_hops)) {
+                std::cout << "⚠️  Routing loop detected on router "
+                          << router.get_id() << std::endl;
+                print_loop_details(next_hops);
+            }
+        }
+    }
+
+    void track_convergence() {
+        std::cout << "=== Convergence Tracking ===" << std::endl;
+
+        auto start_time = std::chrono::steady_clock::now();
+        bool converged = false;
+
+        while (!converged) {
+            converged = check_convergence();
+
+            if (!converged) {
+                auto current_time = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    current_time - start_time);
+
+                std::cout << "Still converging... Time elapsed: "
+                          << elapsed.count() << " seconds" << std::endl;
+
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+
+        auto total_time = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time);
+
+        std::cout << "✅ Network converged in " << total_time.count() << " seconds" << std::endl;
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 比较距离向量和链路状态路由协议的优缺点
+2. 解释BGP的路径选择过程
+3. 什么是路由策略？如何配置路由策略？
+
+### 实践练习
+1. 实现简单的RIP协议
+2. 实现OSPF的LSA泛洪
+3. 配置BGP邻居关系
+
+### 挑战项目
+1. 实现完整的OSPF路由器
+2. 创建路由策略配置系统
+3. 实现路由可视化和监控工具
+
+## 下周预告
+
+Week 9将学习弹性缓冲区和网络性能优化。
+
+---
+*继续学习：[Week 9：弹性缓冲区](./week9)*

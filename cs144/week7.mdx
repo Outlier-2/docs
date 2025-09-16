@@ -1,0 +1,844 @@
+---
+title: "Week 7：NAT穿越"
+description: "CS144 Week 7 - NAT穿越技术、端口转发、UPnP、P2P通信"
+---
+
+# Week 7：NAT穿越
+
+## 课程概述
+
+Week 7 focuses on NAT traversal techniques, including port forwarding, UPnP, and peer-to-peer communication.
+
+## NAT穿越基础
+
+### NAT穿越的挑战
+
+NAT设备为网络安全提供了保护，但也给P2P通信带来了挑战：
+
+1. **私有地址不可路由**：内网设备使用私有IP地址，外网无法直接访问
+2. **端口映射动态变化**：NAT映射的端口可能随时变化
+3. **对称NAT限制**：某些NAT设备对不同的目标使用不同的端口映射
+
+### NAT类型分类
+
+#### Cone NAT (锥形NAT)
+- **Full Cone**：来自任何外部IP和端口的连接都可以访问映射端口
+- **Restricted Cone**：只有来自内部设备曾经通信过的IP的连接可以访问
+- **Port Restricted Cone**：只有来自内部设备曾经通信过的IP和端口的连接可以访问
+
+#### Symmetric NAT (对称NAT)
+- 每个连接到不同外部IP/端口都会创建新的映射
+- 最难穿越的NAT类型
+
+### STUN协议
+
+Session Traversal Utilities for NAT (STUN)帮助设备发现其NAT映射。
+
+```cpp
+class STUNClient {
+private:
+    UDPSocket socket;
+    std::vector<STUNServer> servers;
+
+public:
+    struct NATMapping {
+        IPAddress external_ip;
+        uint16_t external_port;
+        IPAddress internal_ip;
+        uint16_t internal_port;
+        NATType nat_type;
+    };
+
+    NATMapping discover_nat_mapping() {
+        // 发送STUN绑定请求
+        STUNMessage request = create_binding_request();
+        socket.send_to(request, servers[0].address);
+
+        // 接收响应
+        auto response = socket.receive_from();
+        return parse_stun_response(response);
+    }
+
+    NATType determine_nat_type() {
+        // 通过多个STUN服务器确定NAT类型
+        auto mapping1 = discover_nat_mapping(servers[0]);
+        auto mapping2 = discover_nat_mapping(servers[1]);
+
+        if (mapping1.external_ip == mapping2.external_ip) {
+            if (mapping1.external_port == mapping2.external_port) {
+                return NATType::FULL_CONE;
+            } else {
+                return NATType::RESTRICTED_CONE;
+            }
+        } else {
+            return NATType::SYMMETRIC;
+        }
+    }
+};
+```
+
+## 端口转发
+
+### 手动端口转发
+
+手动在路由器上配置端口映射规则。
+
+```cpp
+class PortForwardingManager {
+private:
+    struct PortMapping {
+        uint16_t external_port;
+        uint16_t internal_port;
+        IPAddress internal_ip;
+        Protocol protocol;
+        std::string description;
+    };
+
+    std::vector<PortMapping> mappings;
+
+public:
+    bool add_mapping(uint16_t external_port, uint16_t internal_port,
+                     const IPAddress& internal_ip, Protocol protocol,
+                     const std::string& description) {
+        // 检查端口是否已被占用
+        for (const auto& mapping : mappings) {
+            if (mapping.external_port == external_port &&
+                mapping.protocol == protocol) {
+                return false;
+            }
+        }
+
+        // 添加映射
+        mappings.push_back({
+            external_port, internal_port, internal_ip, protocol, description
+        });
+
+        // 应用到路由器
+        apply_to_router();
+        return true;
+    }
+
+    bool remove_mapping(uint16_t external_port, Protocol protocol) {
+        auto it = std::remove_if(mappings.begin(), mappings.end(),
+            [external_port, protocol](const PortMapping& mapping) {
+                return mapping.external_port == external_port &&
+                       mapping.protocol == protocol;
+            });
+
+        if (it != mappings.end()) {
+            mappings.erase(it, mappings.end());
+            apply_to_router();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    void apply_to_router() {
+        // 通过路由器API应用端口转发规则
+        RouterAPI api;
+        api.clear_port_forwarding();
+
+        for (const auto& mapping : mappings) {
+            api.add_port_forwarding(
+                mapping.external_port,
+                mapping.internal_port,
+                mapping.internal_ip,
+                mapping.protocol
+            );
+        }
+    }
+};
+```
+
+### UPnP协议
+
+Universal Plug and Play (UPnP)允许设备自动发现和配置网络服务。
+
+```cpp
+class UPnPClient {
+private:
+    HTTPClient http_client;
+    SSDPClient ssdp_client;
+
+public:
+    bool discover_gateway() {
+        // 通过SSDP发现UPnP设备
+        std::vector<UPnPDevice> devices = ssdp_client.discover("upnp:rootdevice");
+
+        for (const auto& device : devices) {
+            if (device.is_igd()) {
+                gateway_url = device.get_location();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool add_port_mapping(uint16_t external_port, uint16_t internal_port,
+                          const IPAddress& internal_ip, Protocol protocol,
+                          const std::string& description, uint32_t duration = 3600) {
+        // 构建SOAP请求
+        std::string soap_request = build_add_port_mapping_request(
+            external_port, internal_port, internal_ip, protocol, description, duration
+        );
+
+        // 发送请求
+        HTTPResponse response = http_client.post(gateway_url, soap_request);
+
+        return response.is_successful();
+    }
+
+    bool remove_port_mapping(uint16_t external_port, Protocol protocol) {
+        // 构建删除端口映射的SOAP请求
+        std::string soap_request = build_remove_port_mapping_request(
+            external_port, protocol
+        );
+
+        // 发送请求
+        HTTPResponse response = http_client.post(gateway_url, soap_request);
+
+        return response.is_successful();
+    }
+
+    std::vector<PortMapping> get_port_mappings() {
+        // 获取当前所有端口映射
+        std::string soap_request = build_get_port_mappings_request();
+
+        HTTPResponse response = http_client.post(gateway_url, soap_request);
+
+        if (response.is_successful()) {
+            return parse_port_mappings(response.get_body());
+        }
+        return {};
+    }
+};
+```
+
+## P2P通信技术
+
+### 直接连接
+
+对于Full Cone NAT，可以直接进行P2P连接。
+
+```cpp
+class P2PConnection {
+private:
+    UDPSocket socket;
+    STUNClient stun;
+    UPnPClient upnp;
+
+public:
+    bool establish_direct_connection(const PeerAddress& peer) {
+        // 获取自己的外部地址
+        auto my_mapping = stun.discover_nat_mapping();
+
+        // 尝试UPnP端口转发
+        upnp.add_port_mapping(
+            my_mapping.external_port,
+            my_mapping.internal_port,
+            my_mapping.internal_ip,
+            Protocol::UDP,
+            "P2P Connection"
+        );
+
+        // 交换地址信息
+        exchange_addresses(peer, my_mapping);
+
+        // 尝试直接连接
+        return try_direct_connect(peer);
+    }
+
+    void exchange_addresses(const PeerAddress& peer, const NATMapping& my_mapping) {
+        AddressExchangeMessage msg;
+        msg.external_ip = my_mapping.external_ip;
+        msg.external_port = my_mapping.external_port;
+        msg.internal_ip = my_mapping.internal_ip;
+        msg.internal_port = my_mapping.internal_port;
+
+        // 通过信令服务器发送地址信息
+        signaling_server.send_to(peer, msg);
+    }
+};
+```
+
+### TCP打洞
+
+TCP打洞技术让两个NAT后的设备直接建立TCP连接。
+
+```cpp
+class TCPHolePunching {
+private:
+    TCPSocket socket;
+    STUNClient stun;
+    SignalingServer signaling;
+
+public:
+    bool establish_connection(const PeerAddress& peer) {
+        // 获取自己的NAT映射
+        auto my_mapping = stun.discover_nat_mapping();
+
+        // 通过信令服务器交换地址
+        auto peer_mapping = signaling.exchange_addresses(peer, my_mapping);
+
+        // 同时尝试连接和监听
+        std::thread listen_thread(&TCPHolePunching::listen_for_connection, this, peer_mapping);
+        std::thread connect_thread(&TCPHolePunching::try_connect, this, peer_mapping);
+
+        // 等待连接建立
+        bool connected = wait_for_connection();
+
+        listen_thread.join();
+        connect_thread.join();
+
+        return connected;
+    }
+
+private:
+    void listen_for_connection(const NATMapping& peer_mapping) {
+        socket.bind(my_mapping.internal_port);
+        socket.listen();
+
+        // 等待连接
+        auto connection = socket.accept();
+        if (connection) {
+            connection_established = true;
+        }
+    }
+
+    void try_connect(const NATMapping& peer_mapping) {
+        while (!connection_established) {
+            try {
+                socket.connect(peer_mapping.external_ip, peer_mapping.external_port);
+                connection_established = true;
+            } catch (const std::exception& e) {
+                // 连接失败，继续尝试
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+    }
+};
+```
+
+### UDP打洞
+
+UDP打洞比TCP打洞更简单，成功率更高。
+
+```cpp
+class UDPHolePunching {
+private:
+    UDPSocket socket;
+    STUNClient stun;
+    SignalingServer signaling;
+
+public:
+    bool establish_connection(const PeerAddress& peer) {
+        // 获取自己的NAT映射
+        auto my_mapping = stun.discover_nat_mapping();
+
+        // 通过信令服务器交换地址
+        auto peer_mapping = signaling.exchange_addresses(peer, my_mapping);
+
+        // 同时发送数据包
+        std::thread send_thread(&UDPHolePunching::send_punch_packets, this, peer_mapping);
+        std::thread receive_thread(&UDPHolePunching::receive_punch_packets, this);
+
+        // 等待连接建立
+        bool connected = wait_for_connection();
+
+        send_thread.join();
+        receive_thread.join();
+
+        return connected;
+    }
+
+private:
+    void send_punch_packets(const NATMapping& peer_mapping) {
+        while (!connection_established) {
+            PunchPacket packet;
+            packet.type = PunchPacket::HOLE_PUNCH;
+            packet.peer_id = my_peer_id;
+
+            socket.send_to(packet, peer_mapping.external_ip, peer_mapping.external_port);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+
+    void receive_punch_packets() {
+        while (!connection_established) {
+            auto packet = socket.receive_from();
+
+            if (packet && packet->type == PunchPacket::HOLE_PUNCH) {
+                // 收到打洞包，连接建立
+                connection_established = true;
+                peer_address = {packet->source_ip, packet->source_port};
+            }
+        }
+    }
+};
+```
+
+## 中继服务器
+
+当直接连接不可行时，使用中继服务器转发数据。
+
+```cpp
+class RelayServer {
+private:
+    std::map<std::string, PeerSession> sessions;
+    UDPSocket socket;
+
+public:
+    void handle_relay_request(const RelayRequest& request) {
+        // 查找或创建会话
+        std::string session_id = request.session_id;
+        if (sessions.find(session_id) == sessions.end()) {
+            sessions[session_id] = PeerSession(session_id);
+        }
+
+        auto& session = sessions[session_id];
+
+        // 注册对等节点
+        if (request.is_initiator) {
+            session.initiator = {request.source_ip, request.source_port};
+        } else {
+            session.responder = {request.source_ip, request.source_port};
+        }
+
+        // 如果两个节点都已注册，开始中继
+        if (session.initiator && session.responder) {
+            start_relaying(session);
+        }
+    }
+
+    void handle_relay_data(const RelayData& data) {
+        auto it = sessions.find(data.session_id);
+        if (it != sessions.end()) {
+            // 转发数据到另一个节点
+            if (data.source == it->second.initiator) {
+                socket.send_to(data.payload, it->second.responder.ip, it->second.responder.port);
+            } else {
+                socket.send_to(data.payload, it->second.initiator.ip, it->second.initiator.port);
+            }
+        }
+    }
+
+private:
+    void start_relaying(PeerSession& session) {
+        // 发送会话已建立的通知
+        RelayResponse response;
+        response.status = RelayResponse::SESSION_ESTABLISHED;
+        response.peer_info = session.responder;
+
+        socket.send_to(response, session.initiator.ip, session.initiator.port);
+
+        response.peer_info = session.initiator;
+        socket.send_to(response, session.responder.ip, session.responder.port);
+    }
+};
+```
+
+## ICE协议
+
+Interactive Connectivity Establishment (ICE)结合了多种NAT穿越技术。
+
+```cpp
+class ICEAgent {
+private:
+    STUNClient stun;
+    UPnPClient upnp;
+    RelayClient relay;
+    std::vector<Candidate> local_candidates;
+    std::vector<Candidate> remote_candidates;
+
+public:
+    void gather_candidates() {
+        // 1. 主机候选
+        gather_host_candidates();
+
+        // 2. 反射候选（通过STUN）
+        gather_reflexive_candidates();
+
+        // 3. 中继候选（通过TURN）
+        gather_relay_candidates();
+    }
+
+    void gather_host_candidates() {
+        // 获取所有网络接口
+        auto interfaces = NetworkInterface::get_all_interfaces();
+
+        for (const auto& interface : interfaces) {
+            Candidate candidate;
+            candidate.type = Candidate::HOST;
+            candidate.foundation = "host" + std::to_string(interface.index);
+            candidate.component_id = 1;
+            candidate.priority = calculate_priority(candidate.type);
+            candidate.connection_address = interface.address;
+            candidate.related_address = interface.address;
+
+            local_candidates.push_back(candidate);
+        }
+    }
+
+    void gather_reflexive_candidates() {
+        // 通过STUN服务器获取反射地址
+        auto mapping = stun.discover_nat_mapping();
+
+        Candidate candidate;
+        candidate.type = Candidate::REFLEXIVE;
+        candidate.foundation = "srflx" + std::to_string(mapping.external_port);
+        candidate.component_id = 1;
+        candidate.priority = calculate_priority(candidate.type);
+        candidate.connection_address = {mapping.external_ip, mapping.external_port};
+        candidate.related_address = {mapping.internal_ip, mapping.internal_port};
+
+        local_candidates.push_back(candidate);
+    }
+
+    void gather_relay_candidates() {
+        // 通过TURN服务器获取中继地址
+        auto relay_address = relay.allocate_relay_address();
+
+        Candidate candidate;
+        candidate.type = Candidate::RELAY;
+        candidate.foundation = "relay" + std::to_string(relay_address.port);
+        candidate.component_id = 1;
+        candidate.priority = calculate_priority(candidate.type);
+        candidate.connection_address = relay_address;
+        candidate.related_address = relay_address;
+
+        local_candidates.push_back(candidate);
+    }
+
+    void perform_connectivity_checks() {
+        // 对每个本地候选和远程候选进行连接测试
+        for (const auto& local : local_candidates) {
+            for (const auto& remote : remote_candidates) {
+                if (should_test_pair(local, remote)) {
+                    test_candidate_pair(local, remote);
+                }
+            }
+        }
+    }
+
+    Candidate select_best_candidate() {
+        // 根据连接测试结果选择最佳候选
+        Candidate best_candidate;
+        uint32_t highest_priority = 0;
+
+        for (const auto& candidate : local_candidates) {
+            if (candidate.check_succeeded && candidate.priority > highest_priority) {
+                best_candidate = candidate;
+                highest_priority = candidate.priority;
+            }
+        }
+
+        return best_candidate;
+    }
+};
+```
+
+## 实践应用
+
+### 文件传输应用
+
+```cpp
+class P2PFileTransfer {
+private:
+    P2PConnection connection;
+    FileTransferProtocol protocol;
+
+public:
+    bool send_file(const std::string& filename, const PeerAddress& peer) {
+        // 建立P2P连接
+        if (!connection.establish(peer)) {
+            std::cout << "Failed to establish P2P connection" << std::endl;
+            return false;
+        }
+
+        // 发送文件信息
+        FileInfo info = get_file_info(filename);
+        protocol.send_file_info(connection, info);
+
+        // 发送文件数据
+        std::ifstream file(filename, std::ios::binary);
+        std::vector<char> buffer(CHUNK_SIZE);
+
+        while (file.read(buffer.data(), buffer.size())) {
+            protocol.send_chunk(connection, buffer.data(), file.gcount());
+        }
+
+        // 发送完成信号
+        protocol.send_complete(connection);
+
+        return true;
+    }
+
+    bool receive_file(const std::string& filename) {
+        // 接收文件信息
+        FileInfo info = protocol.receive_file_info(connection);
+
+        // 接收文件数据
+        std::ofstream file(filename, std::ios::binary);
+        size_t total_received = 0;
+
+        while (total_received < info.file_size) {
+            auto chunk = protocol.receive_chunk(connection);
+            file.write(chunk.data(), chunk.size());
+            total_received += chunk.size();
+
+            // 显示进度
+            double progress = (double)total_received / info.file_size * 100;
+            std::cout << "Progress: " << progress << "%" << std::endl;
+        }
+
+        // 等待完成信号
+        protocol.wait_for_complete(connection);
+
+        return true;
+    }
+};
+```
+
+### 实时音视频通话
+
+```cpp
+class WebRTCManager {
+private:
+    ICEAgent ice;
+    MediaStream audio_stream;
+    MediaStream video_stream;
+    DataChannel data_channel;
+
+public:
+    bool start_call(const PeerAddress& peer) {
+        // 收集ICE候选
+        ice.gather_candidates();
+
+        // 创建媒体流
+        setup_media_streams();
+
+        // 创建数据通道
+        data_channel = DataChannel::create("chat");
+
+        // 发送SDP offer
+        SDPOffer offer = create_sdp_offer();
+        signaling_server.send_to(peer, offer);
+
+        // 等待SDP answer
+        auto answer = signaling_server.receive_answer(peer);
+
+        // 设置远程描述
+        ice.set_remote_description(answer);
+
+        // 执行连接检查
+        ice.perform_connectivity_checks();
+
+        // 选择最佳候选
+        auto best_candidate = ice.select_best_candidate();
+
+        // 建立媒体连接
+        return establish_media_connection(best_candidate);
+    }
+
+private:
+    void setup_media_streams() {
+        // 获取摄像头和麦克风
+        audio_stream = MediaStream::get_microphone();
+        video_stream = MediaStream::get_camera();
+
+        // 设置编码器
+        audio_stream.set_encoder(AudioCodec::OPUS);
+        video_stream.set_encoder(VideoCodec::VP8);
+    }
+
+    bool establish_media_connection(const Candidate& candidate) {
+        // 建立音频连接
+        bool audio_connected = audio_stream.connect(candidate);
+
+        // 建立视频连接
+        bool video_connected = video_stream.connect(candidate);
+
+        // 建立数据通道连接
+        bool data_connected = data_channel.connect(candidate);
+
+        return audio_connected && video_connected && data_connected;
+    }
+};
+```
+
+## 实验项目：Checkpoint 7
+
+### 目标
+- 实现NAT穿越技术
+- 建立P2P连接
+- 测试不同NAT环境下的连接成功率
+
+### 实现步骤
+
+#### 1. NAT检测工具
+
+```cpp
+class NATDetectionTool {
+private:
+    STUNClient stun;
+
+public:
+    NATType detect_nat_type() {
+        return stun.determine_nat_type();
+    }
+
+    void print_nat_info() {
+        auto mapping = stun.discover_nat_mapping();
+        auto type = detect_nat_type();
+
+        std::cout << "=== NAT Detection Results ===" << std::endl;
+        std::cout << "NAT Type: " << nat_type_to_string(type) << std::endl;
+        std::cout << "External IP: " << mapping.external_ip.to_string() << std::endl;
+        std::cout << "External Port: " << mapping.external_port << std::endl;
+        std::cout << "Internal IP: " << mapping.internal_ip.to_string() << std::endl;
+        std::cout << "Internal Port: " << mapping.internal_port << std::endl;
+    }
+};
+```
+
+#### 2. P2P连接测试
+
+```cpp
+class P2PConnectionTester {
+private:
+    std::vector<ConnectionMethod> methods;
+    TestResults results;
+
+public:
+    void test_all_methods(const PeerAddress& peer) {
+        // 测试直接连接
+        test_direct_connection(peer);
+
+        // 测试TCP打洞
+        test_tcp_hole_punching(peer);
+
+        // 测试UDP打洞
+        test_udp_hole_punching(peer);
+
+        // 测试UPnP
+        test_upnp_connection(peer);
+
+        // 测试中继
+        test_relay_connection(peer);
+
+        // 输出结果
+        print_results();
+    }
+
+private:
+    void test_direct_connection(const PeerAddress& peer) {
+        DirectConnection connection;
+        auto start = std::chrono::steady_clock::now();
+
+        bool success = connection.establish(peer);
+        auto duration = std::chrono::steady_clock::now() - start;
+
+        results.add_result("Direct Connection", success, duration);
+    }
+
+    void test_tcp_hole_punching(const PeerAddress& peer) {
+        TCPHolePunching connection;
+        auto start = std::chrono::steady_clock::now();
+
+        bool success = connection.establish(peer);
+        auto duration = std::chrono::steady_clock::now() - start;
+
+        results.add_result("TCP Hole Punching", success, duration);
+    }
+
+    void test_udp_hole_punching(const PeerAddress& peer) {
+        UDPHolePunching connection;
+        auto start = std::chrono::steady_clock::now();
+
+        bool success = connection.establish(peer);
+        auto duration = std::chrono::steady_clock::now() - start;
+
+        results.add_result("UDP Hole Punching", success, duration);
+    }
+};
+```
+
+## 调试和测试
+
+### NAT穿越问题诊断
+
+```cpp
+class NATTraversalDebugger {
+public:
+    void diagnose_connection_issues(const PeerAddress& peer) {
+        std::cout << "=== NAT Traversal Debugging ===" << std::endl;
+
+        // 检查网络连接
+        if (!check_network_connectivity()) {
+            std::cout << "❌ No network connectivity" << std::endl;
+            return;
+        }
+
+        // 检查STUN服务器
+        if (!check_stun_server()) {
+            std::cout << "❌ STUN server not reachable" << std::endl;
+            return;
+        }
+
+        // 检查UPnP
+        if (!check_upnp_availability()) {
+            std::cout << "⚠️  UPnP not available" << std::endl;
+        }
+
+        // 检查防火墙
+        if (!check_firewall_rules()) {
+            std::cout << "⚠️  Firewall may be blocking connections" << std::endl;
+        }
+
+        // 分析NAT类型
+        analyze_nat_types();
+    }
+
+    void analyze_connection_logs() {
+        std::cout << "=== Connection Log Analysis ===" << std::endl;
+
+        // 分析连接尝试
+        analyze_connection_attempts();
+
+        // 分析超时
+        analyze_timeouts();
+
+        // 分析失败原因
+        analyze_failure_reasons();
+
+        // 提供建议
+        provide_recommendations();
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 解释不同NAT类型的特点和穿越难度
+2. STUN、TURN和ICE协议的作用是什么？
+3. 为什么UDP打洞比TCP打洞更容易成功？
+
+### 实践练习
+1. 实现STUN客户端
+2. 实现TCP/UDP打洞
+3. 创建简单的P2P聊天应用
+
+### 挑战项目
+1. 实现完整的WebRTC stack
+2. 创建支持多种NAT穿越方式的P2P文件传输
+3. 实现分布式P2P网络
+
+## 下周预告
+
+Week 8将学习路由协议和路由算法。
+
+---
+*继续学习：[Week 8：路由](./week8)*
