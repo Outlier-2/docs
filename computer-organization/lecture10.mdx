@@ -1,0 +1,1873 @@
+---
+title: 第10讲：I/O系统
+description: 输入输出系统架构、总线设计、中断处理和DMA传输
+---
+
+# 第10讲：I/O系统
+
+## I/O系统概述
+
+输入输出系统是计算机系统中负责与外部设备通信的重要组成部分，它连接处理器、内存和各种外围设备。
+
+### I/O系统的层次结构
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// I/O层次级别
+typedef enum {
+    IO_LEVEL_APPLICATION,    // 应用层
+    IO_LEVEL_DEVICE_DRIVER,  // 设备驱动层
+    IO_LEVEL_DEVICE_CONTROLLER, // 设备控制器层
+    IO_LEVEL_HARDWARE        // 硬件层
+} IOLevel;
+
+// I/O设备类型
+typedef enum {
+    IO_DEVICE_BLOCK,         // 块设备
+    IO_DEVICE_CHARACTER,     // 字符设备
+    IO_DEVICE_NETWORK,       // 网络设备
+    IO_DEVICE_GRAPHICS,      // 图形设备
+    IO_DEVICE_STORAGE        // 存储设备
+} IODeviceType;
+
+// I/O操作类型
+typedef enum {
+    IO_OP_READ,              // 读操作
+    IO_OP_WRITE,             // 写操作
+    IO_OP_CONTROL,           // 控制操作
+    IO_OP_SEEK,              // 寻址操作
+    IO_OP_RESET              // 复位操作
+} IOOperationType;
+
+// I/O传输方式
+typedef enum {
+    IO_TRANSFER_PROGRAMMED,  // 程序控制I/O
+    IO_TRANSFER_INTERRUPT,    // 中断驱动I/O
+    IO_TRANSFER_DMA,          // DMA传输
+    IO_TRANSFER_CHANNEL       // 通道传输
+} IOTransferMode;
+
+// I/O系统配置
+typedef struct {
+    IODeviceType device_type;
+    IOTransferMode transfer_mode;
+    uint32_t data_width;      // 数据宽度
+    uint32_t clock_speed;     // 时钟频率
+    uint32_t buffer_size;     // 缓冲区大小
+    bool interrupt_enabled;    // 中断使能
+    bool dma_supported;        // DMA支持
+} IOSystemConfig;
+
+// I/O性能指标
+typedef struct {
+    double throughput;         // 吞吐量 (MB/s)
+    double latency;            // 延迟 (ms)
+    double cpu_utilization;    // CPU利用率 (%)
+    uint32_t interrupt_rate;   // 中断率
+    uint32_t error_rate;       // 错误率
+    double bandwidth;          // 带宽利用率
+} IOPerformanceMetrics;
+
+// I/O层次结构分析器
+typedef struct {
+    IOSystemConfig config;
+    IOPerformanceMetrics metrics;
+    uint32_t total_operations;  // 总操作数
+    uint32_t successful_ops;     // 成功操作数
+    uint32_t failed_ops;         // 失败操作数
+} IOHierarchyAnalyzer;
+
+// 初始化I/O系统配置
+IOSystemConfig* init_io_config(IODeviceType dev_type, IOTransferMode transfer_mode) {
+    IOSystemConfig* config = malloc(sizeof(IOSystemConfig));
+    config->device_type = dev_type;
+    config->transfer_mode = transfer_mode;
+    config->data_width = 32;
+    config->clock_speed = 1000000;  // 1MHz
+    config->buffer_size = 4096;     // 4KB
+    config->interrupt_enabled = true;
+    config->dma_supported = (transfer_mode == IO_TRANSFER_DMA);
+    return config;
+}
+
+// 计算I/O性能指标
+void calculate_io_performance(IOHierarchyAnalyzer* analyzer) {
+    double success_rate = analyzer->total_operations > 0 ?
+                         (double)analyzer->successful_ops / analyzer->total_operations : 0;
+
+    // 根据设备和传输方式计算性能
+    switch (analyzer->config.device_type) {
+        case IO_DEVICE_BLOCK:
+            analyzer->metrics.throughput = 50.0 * success_rate;
+            analyzer->metrics.latency = 10.0 / success_rate;
+            break;
+        case IO_DEVICE_CHARACTER:
+            analyzer->metrics.throughput = 0.5 * success_rate;
+            analyzer->metrics.latency = 1.0 / success_rate;
+            break;
+        case IO_DEVICE_NETWORK:
+            analyzer->metrics.throughput = 100.0 * success_rate;
+            analyzer->metrics.latency = 5.0 / success_rate;
+            break;
+        case IO_DEVICE_GRAPHICS:
+            analyzer->metrics.throughput = 500.0 * success_rate;
+            analyzer->metrics.latency = 2.0 / success_rate;
+            break;
+        default:
+            analyzer->metrics.throughput = 10.0 * success_rate;
+            analyzer->metrics.latency = 20.0 / success_rate;
+    }
+
+    // 根据传输方式调整CPU利用率
+    switch (analyzer->config.transfer_mode) {
+        case IO_TRANSFER_PROGRAMMED:
+            analyzer->metrics.cpu_utilization = 95.0 * success_rate;
+            break;
+        case IO_TRANSFER_INTERRUPT:
+            analyzer->metrics.cpu_utilization = 80.0 * success_rate;
+            break;
+        case IO_TRANSFER_DMA:
+            analyzer->metrics.cpu_utilization = 20.0 * success_rate;
+            break;
+        case IO_TRANSFER_CHANNEL:
+            analyzer->metrics.cpu_utilization = 5.0 * success_rate;
+            break;
+    }
+
+    analyzer->metrics.bandwidth = analyzer->metrics.throughput /
+                                 (analyzer->config.data_width / 8.0);
+}
+
+// 分析I/O层次结构
+void analyze_io_hierarchy() {
+    printf("I/O系统层次结构分析\n");
+    printf("==================\n\n");
+
+    printf("层次结构组成：\n");
+    printf("1. 应用层\n");
+    printf("   - 用户程序接口\n");
+    printf("   - 系统调用封装\n");
+    printf("   - 设备独立操作\n\n");
+
+    printf("2. 设备驱动层\n");
+    printf("   - 设备特定操作\n");
+    printf("   - 中断处理程序\n");
+    printf("   - 缓冲区管理\n\n");
+
+    printf("3. 设备控制器层\n");
+    printf("   - 设寄存器操作\n");
+    printf("   - 数据传输控制\n");
+    printf("   - 状态监控\n\n");
+
+    printf("4. 硬件层\n");
+    printf("   - 物理接口\n");
+    printf("   - 电气特性\n");
+    printf("   - 机械特性\n\n");
+
+    printf("层次间通信：\n");
+    printf("- 上层向下层：I/O请求、配置命令\n");
+    printf("- 下层向上层：状态信息、中断通知\n");
+    printf("- 同层通信：数据传输、控制信号\n");
+}
+
+// 比较不同I/O传输方式
+void compare_io_transfer_modes() {
+    printf("\nI/O传输方式比较\n");
+    printf("==============\n");
+
+    struct {
+        IOTransferMode mode;
+        const char* name;
+        double cpu_overhead;
+        double throughput;
+        double latency;
+        const char* description;
+    } modes[] = {
+        {IO_TRANSFER_PROGRAMMED, "程序控制I/O", 95.0, 1.0, 100.0,
+         "CPU直接控制，简单但效率低"},
+        {IO_TRANSFER_INTERRUPT, "中断驱动I/O", 80.0, 10.0, 50.0,
+         "设备中断通知，平衡CPU利用率"},
+        {IO_TRANSFER_DMA, "DMA传输", 20.0, 100.0, 10.0,
+         "专用控制器，高效率"},
+        {IO_TRANSFER_CHANNEL, "通道传输", 5.0, 1000.0, 1.0,
+         "独立处理器，最高效率"}
+    };
+
+    printf("传输方式\tCPU开销\t吞吐量\t延迟\t描述\n");
+    printf("--------\t------\t----\t----\t----\n");
+
+    for (int i = 0; i < 4; i++) {
+        printf("%s\t%.1f%%\t%.1f\t%.1f\t%s\n",
+               modes[i].name, modes[i].cpu_overhead, modes[i].throughput,
+               modes[i].latency, modes[i].description);
+    }
+
+    printf("\n选择建议：\n");
+    printf("- 低速设备：程序控制I/O\n");
+    printf("- 中速设备：中断驱动I/O\n");
+    printf("- 高速设备：DMA传输\n");
+    printf("- 批量传输：通道传输\n");
+}
+
+// I/O设备分类分析
+void analyze_io_device_types() {
+    printf("\nI/O设备分类分析\n");
+    printf("==============\n");
+
+    struct {
+        IODeviceType type;
+        const char* name;
+        const char* characteristics;
+        const char* examples;
+        const char* protocols;
+    } devices[] = {
+        {IO_DEVICE_BLOCK, "块设备",
+         "固定大小块，可寻址，缓存友好",
+         "硬盘、SSD、光盘",
+         "SATA, SAS, NVMe"},
+        {IO_DEVICE_CHARACTER, "字符设备",
+         "字节流，不可寻址，实时性",
+         "键盘、鼠标、串口",
+         "UART, USB"},
+        {IO_DEVICE_NETWORK, "网络设备",
+         "数据包，异步，复杂协议",
+         "网卡、调制解调器",
+         "Ethernet, WiFi"},
+        {IO_DEVICE_GRAPHICS, "图形设备",
+         "高带宽，专用接口",
+         "显卡、显示器",
+         "HDMI, DisplayPort"},
+        {IO_DEVICE_STORAGE, "存储设备",
+         "大容量，持久化",
+         "USB存储、SD卡",
+         "USB, SDIO"}
+    };
+
+    printf("类型\t\t特征\t\t\t示例\t\t协议\n");
+    printf("----\t\t----\t\t\t----\t\t----\n");
+
+    for (int i = 0; i < 5; i++) {
+        printf("%s\t%s\t%s\t%s\n",
+               devices[i].name, devices[i].characteristics,
+               devices[i].examples, devices[i].protocols);
+    }
+
+    printf("\n设备接口标准：\n");
+    printf("1. 并行接口：PCI, SCSI\n");
+    printf("2. 串行接口：USB, SATA\n");
+    printf("3. 无线接口：WiFi, Bluetooth\n");
+    printf("4. 专用接口：HDMI, DisplayPort\n");
+}
+
+// I/O性能瓶颈分析
+void analyze_io_bottlenecks() {
+    printf("\nI/O性能瓶颈分析\n");
+    printf("==============\n");
+
+    printf("常见瓶颈：\n");
+    printf("1. CPU瓶颈\n");
+    printf("   - 过多的中断处理\n");
+    printf("   - 复杂的协议处理\n");
+    printf("   - 缓冲区管理开销\n\n");
+
+    printf("2. 内存瓶颈\n");
+    printf("   - 缓冲区不足\n");
+    printf("   - 内存带宽限制\n");
+    printf("   - 地址转换开销\n\n");
+
+    printf("3. 总线瓶颈\n");
+    printf("   - 总线带宽限制\n");
+    printf("   - 总线争用\n");
+    printf("   - 协议开销\n\n");
+
+    printf("4. 设备瓶颈\n");
+    printf("   - 设备速度限制\n");
+    printf("   - 设备队列长度\n");
+    printf("   - 机械延迟（如硬盘）\n\n");
+
+    printf("优化策略：\n");
+    printf("- 增加缓冲区大小\n");
+    printf("- 使用DMA传输\n");
+    printf("- 优化中断处理\n");
+    printf("- 使用高速接口\n");
+}
+
+// 主函数
+int main() {
+    printf("I/O系统层次结构分析器\n");
+    printf("===================\n\n");
+
+    // 分析I/O层次结构
+    analyze_io_hierarchy();
+
+    // 比较I/O传输方式
+    compare_io_transfer_modes();
+
+    // 分析I/O设备类型
+    analyze_io_device_types();
+
+    // 分析I/O性能瓶颈
+    analyze_io_bottlenecks();
+
+    // 模拟I/O系统配置
+    printf("\n模拟I/O系统配置\n");
+    printf("==============\n");
+
+    IOSystemConfig* config = init_io_config(IO_DEVICE_BLOCK, IO_TRANSFER_DMA);
+    IOHierarchyAnalyzer analyzer = {0};
+    analyzer.config = *config;
+    analyzer.total_operations = 1000;
+    analyzer.successful_ops = 980;
+
+    calculate_io_performance(&analyzer);
+
+    printf("设备类型: 块设备\n");
+    printf("传输方式: DMA传输\n");
+    printf("数据宽度: %u bits\n", config->data_width);
+    printf("缓冲区大小: %u bytes\n", config->buffer_size);
+    printf("吞吐量: %.2f MB/s\n", analyzer.metrics.throughput);
+    printf("延迟: %.2f ms\n", analyzer.metrics.latency);
+    printf("CPU利用率: %.1f%%\n", analyzer.metrics.cpu_utilization);
+
+    free(config);
+
+    return 0;
+}
+```
+
+### I/O系统的关键特性
+
+1. **层次化设计**：从应用到硬件的多层抽象
+2. **设备无关性**：统一的I/O接口
+3. **异步操作**：中断驱动的处理方式
+4. **缓冲机制**：解决速度差异问题
+5. **错误处理**：完善的错误检测和恢复机制
+
+## 总线设计
+
+总线是连接计算机系统各组件的通信通道，负责数据、地址和控制信号的传输。
+
+### 总线架构和协议
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
+
+// 总线类型
+typedef enum {
+    BUS_TYPE_DATA,         // 数据总线
+    BUS_TYPE_ADDRESS,      // 地址总线
+    BUS_TYPE_CONTROL,      // 控制总线
+    BUS_TYPE_SYSTEM,       // 系统总线
+    BUS_TYPE_MEMORY,       // 内存总线
+    BUS_TYPE_EXPANSION     // 扩展总线
+} BusType;
+
+// 总线协议
+typedef enum {
+    BUS_PROTOCOL_SYNC,     // 同步总线
+    BUS_PROTOCOL_ASYNC,    // 异步总线
+    BUS_PROTOCOL_SEMI_SYNC, // 半同步总线
+    BUS_PROTOCOL_SPLIT     // 分离事务总线
+} BusProtocol;
+
+// 总线仲裁方式
+typedef enum {
+    ARBITRATION_CENTRALIZED,  // 集中式仲裁
+    ARBITRATION_DISTRIBUTED,  // 分布式仲裁
+    ARBITRATION_PRIORITY,     // 优先级仲裁
+    ARBITRATION_ROUND_ROBIN   // 轮询仲裁
+} BusArbitration;
+
+// 总线传输类型
+typedef enum {
+    BUS_TRANSFER_SINGLE,      // 单次传输
+    BUS_TRANSFER_BURST,       // 突发传输
+    BUS_TRANSFER_BLOCK,       // 块传输
+    BUS_TRANSFER_PIPELINED    // 流水线传输
+} BusTransferType;
+
+// 总线配置
+typedef struct {
+    BusType type;
+    BusProtocol protocol;
+    BusArbitration arbitration;
+    uint32_t width;           // 总线宽度
+    uint32_t clock_freq;      // 时钟频率
+    uint32_t max_devices;     // 最大设备数
+    double bandwidth;         // 带宽
+    double latency;           // 延迟
+} BusConfig;
+
+// 总线事务
+typedef struct {
+    uint32_t address;        // 地址
+    uint32_t data;           // 数据
+    bool is_read;            // 读/写标志
+    uint32_t size;           // 传输大小
+    uint32_t master_id;      // 主设备ID
+    uint32_t slave_id;       // 从设备ID
+    uint32_t timestamp;      // 时间戳
+} BusTransaction;
+
+// 总线状态
+typedef struct {
+    bool busy;               // 总线忙标志
+    uint32_t current_master; // 当前主设备
+    uint32_t grant_master;   // 授权主设备
+    uint32_t pending_requests; // 待处理请求数
+    uint32_t completed_transfers; // 完成传输数
+    uint32_t failed_transfers;    // 失败传输数
+} BusState;
+
+// 总线性能指标
+typedef struct {
+    double utilization;      // 利用率
+    double throughput;       // 吞吐量
+    double avg_latency;      // 平均延迟
+    double bandwidth_efficiency; // 带宽效率
+    uint32_t arbitration_overhead; // 仲裁开销
+    uint32_t conflict_count;     // 冲突次数
+    uint32_t retry_count;         // 重试次数
+} BusPerformanceMetrics;
+
+// 总线模拟器
+typedef struct {
+    BusConfig config;
+    BusState state;
+    BusPerformanceMetrics metrics;
+    BusTransaction** transaction_queue;
+    uint32_t queue_size;
+    uint32_t queue_head;
+    uint32_t queue_tail;
+} BusSimulator;
+
+// 初始化总线配置
+BusConfig* init_bus_config(BusType type, uint32_t width, uint32_t freq) {
+    BusConfig* config = malloc(sizeof(BusConfig));
+    config->type = type;
+    config->protocol = BUS_PROTOCOL_SYNC;
+    config->arbitration = ARBITRATION_PRIORITY;
+    config->width = width;
+    config->clock_freq = freq;
+    config->max_devices = 16;
+    config->bandwidth = (double)width * freq / 8 / 1000000;  // MB/s
+    config->latency = 1000.0 / freq * 2;  // ns
+
+    return config;
+}
+
+// 初始化总线模拟器
+BusSimulator* init_bus_simulator(BusConfig* config) {
+    BusSimulator* sim = malloc(sizeof(BusSimulator));
+    sim->config = *config;
+    sim->state.busy = false;
+    sim->state.current_master = 0;
+    sim->state.grant_master = 0;
+    sim->state.pending_requests = 0;
+    sim->state.completed_transfers = 0;
+    sim->state.failed_transfers = 0;
+
+    // 初始化事务队列
+    sim->queue_size = 100;
+    sim->transaction_queue = malloc(sim->queue_size * sizeof(BusTransaction*));
+    for (int i = 0; i < sim->queue_size; i++) {
+        sim->transaction_queue[i] = malloc(sizeof(BusTransaction));
+    }
+    sim->queue_head = 0;
+    sim->queue_tail = 0;
+
+    return sim;
+}
+
+// 计算总线传输时间
+uint32_t calculate_transfer_time(BusConfig* config, uint32_t data_size,
+                               BusTransferType transfer_type) {
+    double base_time = (double)data_size * 8 / config->width / config->clock_freq * 1000000000;
+
+    switch (transfer_type) {
+        case BUS_TRANSFER_SINGLE:
+            return (uint32_t)base_time + config->latency;
+        case BUS_TRANSFER_BURST:
+            return (uint32_t)(base_time * 0.8 + config->latency);
+        case BUS_TRANSFER_BLOCK:
+            return (uint32_t)(base_time * 0.6 + config->latency);
+        case BUS_TRANSFER_PIPELINED:
+            return (uint32_t)(base_time * 0.4 + config->latency);
+        default:
+            return (uint32_t)base_time + config->latency;
+    }
+}
+
+// 总线仲裁
+uint32_t bus_arbitration(BusSimulator* sim, uint32_t* request_mask) {
+    uint32_t winner = 0;
+
+    switch (sim->config.arbitration) {
+        case ARBITRATION_PRIORITY:
+            // 优先级仲裁（优先选择高ID）
+            for (uint32_t i = 0; i < sim->config.max_devices; i++) {
+                if (request_mask[i]) {
+                    winner = i;
+                    break;
+                }
+            }
+            break;
+
+        case ARBITRATION_ROUND_ROBIN:
+            // 轮询仲裁
+            for (uint32_t i = 0; i < sim->config.max_devices; i++) {
+                uint32_t candidate = (sim->state.grant_master + 1 + i) % sim->config.max_devices;
+                if (request_mask[candidate]) {
+                    winner = candidate;
+                    break;
+                }
+            }
+            break;
+
+        case ARBITRATION_DISTRIBUTED:
+            // 分布式仲裁（简化为随机）
+            winner = rand() % sim->config.max_devices;
+            break;
+
+        default:
+            winner = 0;
+    }
+
+    sim->state.grant_master = winner;
+    return winner;
+}
+
+// 添加事务到队列
+bool enqueue_transaction(BusSimulator* sim, BusTransaction* trans) {
+    if ((sim->queue_tail + 1) % sim->queue_size == sim->queue_head) {
+        return false;  // 队列满
+    }
+
+    memcpy(sim->transaction_queue[sim->queue_tail], trans, sizeof(BusTransaction));
+    sim->queue_tail = (sim->queue_tail + 1) % sim->queue_size;
+    sim->state.pending_requests++;
+
+    return true;
+}
+
+// 从队列取出事务
+bool dequeue_transaction(BusSimulator* sim, BusTransaction* trans) {
+    if (sim->queue_head == sim->queue_tail) {
+        return false;  // 队列空
+    }
+
+    memcpy(trans, sim->transaction_queue[sim->queue_head], sizeof(BusTransaction));
+    sim->queue_head = (sim->queue_head + 1) % sim->queue_size;
+    sim->state.pending_requests--;
+
+    return true;
+}
+
+// 模拟总线传输
+bool simulate_bus_transfer(BusSimulator* sim, BusTransaction* trans) {
+    // 检查总线是否可用
+    if (sim->state.busy) {
+        sim->metrics.conflict_count++;
+        return false;
+    }
+
+    // 占用总线
+    sim->state.busy = true;
+    sim->state.current_master = trans->master_id;
+
+    // 计算传输时间
+    uint32_t transfer_time = calculate_transfer_time(&sim->config, trans->size,
+                                                   BUS_TRANSFER_SINGLE);
+
+    // 模拟传输延迟
+    sim->metrics.avg_latency = (sim->metrics.avg_latency * sim->metrics.completed_transfers +
+                               transfer_time) / (sim->metrics.completed_transfers + 1);
+
+    // 更新统计信息
+    sim->state.completed_transfers++;
+    sim->metrics.throughput = (double)trans->size / (transfer_time / 1000000000.0) / 1000000;
+
+    // 释放总线
+    sim->state.busy = false;
+
+    return true;
+}
+
+// 计算总线性能指标
+void calculate_bus_performance(BusSimulator* sim) {
+    if (sim->state.completed_transfers == 0) return;
+
+    // 计算利用率
+    sim->metrics.utilization = (double)sim->state.completed_transfers /
+                              (sim->state.completed_transfers + sim->metrics.conflict_count);
+
+    // 计算带宽效率
+    sim->metrics.bandwidth_efficiency = sim->metrics.throughput / sim->config.bandwidth;
+
+    // 计算仲裁开销
+    sim->metrics.arbitration_overhead = sim->state.pending_requests * 10;  // 简化计算
+}
+
+// 比较不同总线协议
+void compare_bus_protocols() {
+    printf("总线协议比较\n");
+    printf("============\n");
+
+    struct {
+        BusProtocol protocol;
+        const char* name;
+        double bandwidth;
+        double latency;
+        double complexity;
+        const char* advantages;
+        const char* disadvantages;
+    } protocols[] = {
+        {BUS_PROTOCOL_SYNC, "同步总线", 100, 10, 1.0,
+         "简单实现，确定性延迟", "时钟偏斜问题"},
+        {BUS_PROTOCOL_ASYNC, "异步总线", 80, 5, 2.0,
+         "无时钟偏斜，灵活", "实现复杂"},
+        {BUS_PROTOCOL_SEMI_SYNC, "半同步总线", 90, 8, 1.5,
+         "平衡性能和复杂度", "需要时钟同步"},
+        {BUS_PROTOCOL_SPLIT, "分离事务总线", 120, 15, 2.5,
+         "高带宽，高效率", "实现复杂，延迟高"}
+    };
+
+    printf("协议\t带宽\t延迟\t复杂度\t优势\t\t\t劣势\n");
+    printf("----\t----\t----\t----\t----\t\t\t----\n");
+
+    for (int i = 0; i < 4; i++) {
+        printf("%s\t%.0f\t%.0f\t%.1f\t%s\t%s\n",
+               protocols[i].name, protocols[i].bandwidth, protocols[i].latency,
+               protocols[i].complexity, protocols[i].advantages, protocols[i].disadvantages);
+    }
+}
+
+// 分析总线拓扑结构
+void analyze_bus_topologies() {
+    printf("\n总线拓扑结构分析\n");
+    printf("================\n");
+
+    printf("1. 单总线结构\n");
+    printf("   - 优点：简单、成本低\n");
+    printf("   - 缺点：带宽有限、扩展性差\n");
+    printf("   - 应用：早期计算机系统\n\n");
+
+    printf("2. 多总线结构\n");
+    printf("   - 优点：并行处理、高带宽\n");
+    printf("   - 缺点：复杂、成本高\n");
+    printf("   - 应用：现代计算机系统\n\n");
+
+    printf("3. 分层总线结构\n");
+    printf("   - 优点：层次化、可扩展\n");
+    printf("   - 缺点：协议复杂、延迟高\n");
+    printf("   - 应用：服务器系统\n\n");
+
+    printf("4. 交换结构\n");
+    printf("   - 优点：高带宽、低延迟\n");
+    printf("   - 缺点：成本高、功耗大\n");
+    printf("   - 应用：高性能计算\n");
+}
+
+// 总线带宽计算
+void calculate_bus_bandwidth() {
+    printf("\n总线带宽计算\n");
+    printf("============\n");
+
+    uint32_t frequencies[] = {100, 133, 200, 400, 800, 1600};  // MHz
+    uint32_t widths[] = {32, 64, 128, 256};  // bits
+
+    printf("时钟频率\t32位\t64位\t128位\t256位\n");
+    printf("--------\t----\t----\t----\t----\n");
+
+    for (int i = 0; i < 6; i++) {
+        printf("%u MHz\t", frequencies[i]);
+        for (int j = 0; j < 4; j++) {
+            double bandwidth = (double)frequencies[i] * widths[j] / 8 / 1000;  // GB/s
+            printf("%.2f\t", bandwidth);
+        }
+        printf("\n");
+    }
+
+    printf("\n理论最大带宽计算公式：\n");
+    printf("带宽 = 时钟频率 × 数据宽度 / 8\n");
+    printf("实际带宽通常为理论值的60-80%%\n");
+}
+
+// 主函数
+int main() {
+    printf("总线设计分析器\n");
+    printf("============\n\n");
+
+    // 初始化总线模拟器
+    BusConfig* config = init_bus_config(BUS_TYPE_SYSTEM, 64, 100);
+    BusSimulator* sim = init_bus_simulator(config);
+
+    printf("总线配置：\n");
+    printf("类型: 系统总线\n");
+    printf("宽度: %u bits\n", config->width);
+    printf("时钟频率: %u MHz\n", config->clock_freq);
+    printf("理论带宽: %.2f GB/s\n", config->bandwidth / 1000);
+    printf("最大设备数: %u\n", config->max_devices);
+
+    // 比较总线协议
+    compare_bus_protocols();
+
+    // 分析总线拓扑结构
+    analyze_bus_topologies();
+
+    // 计算总线带宽
+    calculate_bus_bandwidth();
+
+    // 模拟总线操作
+    printf("\n模拟总线操作\n");
+    printf("============\n");
+
+    // 创建测试事务
+    BusTransaction test_trans = {
+        .address = 0x10000000,
+        .data = 0x12345678,
+        .is_read = true,
+        .size = 64,
+        .master_id = 1,
+        .slave_id = 2,
+        .timestamp = 0
+    };
+
+    // 添加事务到队列
+    for (int i = 0; i < 10; i++) {
+        test_trans.timestamp = i;
+        enqueue_transaction(sim, &test_trans);
+    }
+
+    // 处理事务
+    BusTransaction trans;
+    int processed = 0;
+    while (dequeue_transaction(sim, &trans) && processed < 5) {
+        if (simulate_bus_transfer(sim, &trans)) {
+            printf("事务 %d: 成功传输\n", processed + 1);
+        } else {
+            printf("事务 %d: 传输失败（总线忙）\n", processed + 1);
+        }
+        processed++;
+    }
+
+    // 计算性能指标
+    calculate_bus_performance(sim);
+
+    printf("\n性能指标：\n");
+    printf("完成传输: %u\n", sim->state.completed_transfers);
+    printf("冲突次数: %u\n", sim->metrics.conflict_count);
+    printf("利用率: %.1f%%\n", sim->metrics.utilization * 100);
+    printf("平均延迟: %.1f ns\n", sim->metrics.avg_latency);
+    printf("带宽效率: %.1f%%\n", sim->metrics.bandwidth_efficiency * 100);
+
+    // 清理资源
+    free(config);
+    for (int i = 0; i < sim->queue_size; i++) {
+        free(sim->transaction_queue[i]);
+    }
+    free(sim->transaction_queue);
+    free(sim);
+
+    return 0;
+}
+```
+
+### 总线设计考虑因素
+
+1. **带宽**：数据传输能力
+2. **延迟**：传输时间
+3. **仲裁机制**：冲突解决策略
+4. **同步方式**：时钟域管理
+5. **拓扑结构**：物理连接方式
+
+## 中断系统
+
+中断系统是计算机中处理异步事件的重要机制，允许设备在需要时获得处理器的注意。
+
+### 中断处理机制
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <time.h>
+
+// 中断类型
+typedef enum {
+    INT_TYPE_HARDWARE,      // 硬件中断
+    INT_TYPE_SOFTWARE,      // 软件中断
+    INT_TYPE_EXCEPTION,     // 异常
+    INT_TYPE_NMI            // 不可屏蔽中断
+} InterruptType;
+
+// 中断优先级
+typedef enum {
+    INT_PRIORITY_LOWEST = 0,
+    INT_PRIORITY_LOW,
+    INT_PRIORITY_MEDIUM,
+    INT_PRIORITY_HIGH,
+    INT_PRIORITY_HIGHEST,
+    INT_PRIORITY_NMI
+} InterruptPriority;
+
+// 中断状态
+typedef enum {
+    INT_STATE_PENDING,      // 待处理
+    INT_STATE_PROCESSING,   // 处理中
+    INT_STATE_COMPLETED,    // 已完成
+    INT_STATE_MASKED        // 被屏蔽
+} InterruptState;
+
+// 中断向量
+typedef struct {
+    uint32_t number;         // 中断号
+    InterruptType type;     // 中断类型
+    InterruptPriority priority; // 优先级
+    InterruptState state;   // 中断状态
+    uint32_t source_id;      // 源设备ID
+    void (*handler)(void);  // 处理函数指针
+    uint32_t timestamp;     // 时间戳
+    uint32_t count;          // 触发次数
+} InterruptVector;
+
+// 中断控制器配置
+typedef struct {
+    uint32_t total_vectors;      // 总向量数
+    uint32_t enabled_vectors;    // 启用向量数
+    bool nmi_enabled;            // NMI使能
+    bool cascade_enabled;         // 级联使能
+    uint32_t priority_mask;      // 优先级屏蔽
+    uint32_t vector_base;        // 向量基地址
+} InterruptControllerConfig;
+
+// 中断控制器状态
+typedef struct {
+    InterruptVector* vectors;     // 中断向量表
+    uint32_t pending_count;       // 待处理中断数
+    uint32_t processing_count;    // 处理中中断数
+    uint32_t total_interrupts;    // 总中断数
+    uint32_t missed_interrupts;   // 丢失中断数
+    uint32_t current_priority;    // 当前优先级
+    uint32_t in_service;          // 服务中寄存器
+    uint32_t interrupt_request;   // 中断请求寄存器
+} InterruptControllerState;
+
+// 中断性能统计
+typedef struct {
+    uint32_t total_interrupts;     // 总中断数
+    uint32_t handled_interrupts;   // 处理中断数
+    uint32_t masked_interrupts;    // 屏蔽中断数
+    uint32_t spurious_interrupts;  // 伪中断数
+    uint32_t nested_interrupts;    // 嵌套中断数
+    double avg_response_time;       // 平均响应时间
+    double avg_processing_time;     // 平均处理时间
+    double interrupt_rate;          // 中断率
+} InterruptStats;
+
+// 中断控制器
+typedef struct {
+    InterruptControllerConfig config;
+    InterruptControllerState state;
+    InterruptStats stats;
+    bool enabled;                   // 控制器使能
+} InterruptController;
+
+// CPU上下文
+typedef struct {
+    uint32_t pc;                   // 程序计数器
+    uint32_t sp;                   // 栈指针
+    uint32_t registers[16];        // 通用寄存器
+    uint32_t flags;                // 标志寄存器
+    uint32_t priority;            // 当前优先级
+    bool interrupt_enabled;        // 中断使能
+} CPUContext;
+
+// 初始化中断控制器
+InterruptController* init_interrupt_controller(uint32_t total_vectors) {
+    InterruptController* ctrl = malloc(sizeof(InterruptController));
+
+    ctrl->config.total_vectors = total_vectors;
+    ctrl->config.enabled_vectors = 0;
+    ctrl->config.nmi_enabled = true;
+    ctrl->config.cascade_enabled = false;
+    ctrl->config.priority_mask = 0xFF;
+    ctrl->config.vector_base = 0;
+
+    ctrl->state.vectors = malloc(total_vectors * sizeof(InterruptVector));
+    for (uint32_t i = 0; i < total_vectors; i++) {
+        ctrl->state.vectors[i].number = i;
+        ctrl->state.vectors[i].type = INT_TYPE_HARDWARE;
+        ctrl->state.vectors[i].priority = INT_PRIORITY_LOW;
+        ctrl->state.vectors[i].state = INT_STATE_MASKED;
+        ctrl->state.vectors[i].source_id = 0;
+        ctrl->state.vectors[i].handler = NULL;
+        ctrl->state.vectors[i].timestamp = 0;
+        ctrl->state.vectors[i].count = 0;
+    }
+
+    ctrl->state.pending_count = 0;
+    ctrl->state.processing_count = 0;
+    ctrl->state.total_interrupts = 0;
+    ctrl->state.missed_interrupts = 0;
+    ctrl->state.current_priority = INT_PRIORITY_LOWEST;
+    ctrl->state.in_service = 0;
+    ctrl->state.interrupt_request = 0;
+
+    memset(&ctrl->stats, 0, sizeof(InterruptStats));
+    ctrl->enabled = true;
+
+    return ctrl;
+}
+
+// 注册中断处理函数
+bool register_interrupt_handler(InterruptController* ctrl, uint32_t vector_num,
+                              void (*handler)(void), InterruptType type,
+                              InterruptPriority priority) {
+    if (vector_num >= ctrl->config.total_vectors) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+    vec->handler = handler;
+    vec->type = type;
+    vec->priority = priority;
+    vec->state = INT_STATE_MASKED;
+
+    return true;
+}
+
+// 启用中断向量
+bool enable_interrupt_vector(InterruptController* ctrl, uint32_t vector_num) {
+    if (vector_num >= ctrl->config.total_vectors) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+    if (vec->state == INT_STATE_MASKED) {
+        vec->state = INT_STATE_PENDING;
+        ctrl->config.enabled_vectors++;
+    }
+
+    return true;
+}
+
+// 禁用中断向量
+bool disable_interrupt_vector(InterruptController* ctrl, uint32_t vector_num) {
+    if (vector_num >= ctrl->config.total_vectors) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+    vec->state = INT_STATE_MASKED;
+    if (ctrl->config.enabled_vectors > 0) {
+        ctrl->config.enabled_vectors--;
+    }
+
+    return true;
+}
+
+// 触发中断
+bool trigger_interrupt(InterruptController* ctrl, uint32_t vector_num, uint32_t source_id) {
+    if (vector_num >= ctrl->config.total_vectors || !ctrl->enabled) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+
+    // 检查优先级屏蔽
+    if (vec->priority <= ctrl->config.priority_mask) {
+        ctrl->stats.masked_interrupts++;
+        return false;
+    }
+
+    // 设置中断状态
+    if (vec->state == INT_STATE_PENDING) {
+        // 中断已在待处理
+        vec->count++;
+        return true;
+    }
+
+    vec->state = INT_STATE_PENDING;
+    vec->source_id = source_id;
+    vec->timestamp = time(NULL);
+    vec->count++;
+
+    ctrl->state.interrupt_request |= (1 << vector_num);
+    ctrl->state.pending_count++;
+    ctrl->state.total_interrupts++;
+
+    return true;
+}
+
+// 查找最高优先级待处理中断
+int find_highest_priority_interrupt(InterruptController* ctrl) {
+    int highest_vec = -1;
+    InterruptPriority highest_priority = INT_PRIORITY_LOWEST;
+
+    for (uint32_t i = 0; i < ctrl->config.total_vectors; i++) {
+        InterruptVector* vec = &ctrl->state.vectors[i];
+        if (vec->state == INT_STATE_PENDING && vec->priority > highest_priority) {
+            highest_priority = vec->priority;
+            highest_vec = i;
+        }
+    }
+
+    return highest_vec;
+}
+
+// 处理中断
+bool process_interrupt(InterruptController* ctrl, CPUContext* context) {
+    if (!ctrl->enabled || ctrl->state.pending_count == 0) {
+        return false;
+    }
+
+    // 查找最高优先级中断
+    int vector_num = find_highest_priority_interrupt(ctrl);
+    if (vector_num < 0) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+
+    // 检查优先级
+    if (vec->priority <= context->priority) {
+        // 优先级不够，不能处理
+        return false;
+    }
+
+    // 处理中断
+    vec->state = INT_STATE_PROCESSING;
+    ctrl->state.pending_count--;
+    ctrl->state.processing_count++;
+    ctrl->state.current_priority = vec->priority;
+    ctrl->state.in_service |= (1 << vector_num);
+    ctrl->state.interrupt_request &= ~(1 << vector_num);
+
+    // 更新统计
+    ctrl->stats.handled_interrupts++;
+    uint32_t start_time = time(NULL);
+
+    // 调用处理函数
+    if (vec->handler) {
+        vec->handler();
+    }
+
+    uint32_t processing_time = time(NULL) - start_time;
+    ctrl->stats.avg_processing_time =
+        (ctrl->stats.avg_processing_time * (ctrl->stats.handled_interrupts - 1) + processing_time) /
+        ctrl->stats.handled_interrupts;
+
+    // 完成中断处理
+    vec->state = INT_STATE_COMPLETED;
+    ctrl->state.processing_count--;
+    ctrl->state.current_priority = INT_PRIORITY_LOWEST;
+    ctrl->state.in_service &= ~(1 << vector_num);
+
+    return true;
+}
+
+// 中断嵌套处理
+bool handle_nested_interrupt(InterruptController* ctrl, CPUContext* context) {
+    if (!context->interrupt_enabled) {
+        return false;
+    }
+
+    int vector_num = find_highest_priority_interrupt(ctrl);
+    if (vector_num < 0) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+
+    // 检查是否允许嵌套
+    if (vec->priority <= context->priority) {
+        return false;
+    }
+
+    // 处理嵌套中断
+    ctrl->stats.nested_interrupts++;
+    return process_interrupt(ctrl, context);
+}
+
+// 设置优先级屏蔽
+void set_priority_mask(InterruptController* ctrl, uint32_t mask) {
+    ctrl->config.priority_mask = mask;
+}
+
+// 获取中断状态
+uint32_t get_interrupt_status(InterruptController* ctrl) {
+    return ctrl->state.interrupt_request;
+}
+
+// 清除中断
+bool clear_interrupt(InterruptController* ctrl, uint32_t vector_num) {
+    if (vector_num >= ctrl->config.total_vectors) {
+        return false;
+    }
+
+    InterruptVector* vec = &ctrl->state.vectors[vector_num];
+    if (vec->state == INT_STATE_PROCESSING) {
+        vec->state = INT_STATE_COMPLETED;
+        ctrl->state.processing_count--;
+        ctrl->state.in_service &= ~(1 << vector_num);
+    }
+
+    ctrl->state.interrupt_request &= ~(1 << vector_num);
+    return true;
+}
+
+// 更新中断统计
+void update_interrupt_stats(InterruptController* ctrl) {
+    ctrl->stats.total_interrupts = ctrl->state.total_interrupts;
+    ctrl->stats.interrupt_rate = (double)ctrl->stats.total_interrupts / 10.0;  // 假设10秒
+}
+
+// 打印中断统计信息
+void print_interrupt_stats(InterruptController* ctrl) {
+    printf("\n中断系统统计\n");
+    printf("============\n");
+    printf("总中断数: %u\n", ctrl->stats.total_interrupts);
+    printf("处理中断数: %u\n", ctrl->stats.handled_interrupts);
+    printf("屏蔽中断数: %u\n", ctrl->stats.masked_interrupts);
+    printf("伪中断数: %u\n", ctrl->stats.spurious_interrupts);
+    printf("嵌套中断数: %u\n", ctrl->stats.nested_interrupts);
+    printf("平均响应时间: %.2f ms\n", ctrl->stats.avg_response_time);
+    printf("平均处理时间: %.2f ms\n", ctrl->stats.avg_processing_time);
+    printf("中断率: %.2f Hz\n", ctrl->stats.interrupt_rate);
+}
+
+// 模拟中断处理场景
+void simulate_interrupt_handling() {
+    printf("\n模拟中断处理场景\n");
+    printf("================\n");
+
+    // 初始化中断控制器
+    InterruptController* ctrl = init_interrupt_controller(32);
+    CPUContext context = {
+        .pc = 0x1000,
+        .sp = 0x2000,
+        .priority = INT_PRIORITY_LOW,
+        .interrupt_enabled = true
+    };
+
+    // 注册一些中断处理函数
+    for (int i = 0; i < 4; i++) {
+        enable_interrupt_vector(ctrl, i);
+    }
+
+    // 模拟中断触发
+    printf("模拟中断序列：\n");
+    for (int i = 0; i < 10; i++) {
+        uint32_t vector = rand() % 4;
+        uint32_t source = rand() % 8;
+
+        if (trigger_interrupt(ctrl, vector, source)) {
+            printf("时间 %d: 触发中断 %u (源 %u)\n", i, vector, source);
+
+            // 处理中断
+            if (process_interrupt(ctrl, &context)) {
+                printf("  -> 处理完成\n");
+            } else {
+                printf("  -> 处理失败\n");
+            }
+        }
+    }
+
+    // 打印统计信息
+    update_interrupt_stats(ctrl);
+    print_interrupt_stats(ctrl);
+
+    // 清理资源
+    free(ctrl->state.vectors);
+    free(ctrl);
+}
+
+// 中断优化策略
+void interrupt_optimization_strategies() {
+    printf("\n中断优化策略\n");
+    printf("==============\n");
+
+    printf("1. 中断合并\n");
+    printf("   - 将多个小中断合并为一个大中断\n");
+    printf("   - 减少中断处理开销\n");
+    printf("   - 提高系统吞吐量\n\n");
+
+    printf("2. 中断共享\n");
+    printf("   - 多个设备共享中断线\n");
+    printf("   - 减少中断资源使用\n");
+    printf("   - 需要额外的处理逻辑\n\n");
+
+    printf("3. 中断负载均衡\n");
+    printf("   - 在多处理器间分配中断\n");
+    printf("   - 平衡CPU负载\n");
+    printf("   - 提高系统整体性能\n\n");
+
+    printf("4. 中断抑制\n");
+    printf("   - 临时禁用低优先级中断\n");
+    printf("   - 减少中断风暴\n");
+    printf("   - 保证关键任务执行\n\n");
+
+    printf("5. 中断线程化\n");
+    printf("   - 将中断处理放到线程中\n");
+    printf("   - 减少中断延迟\n");
+    printf("   - 提高系统响应性\n");
+}
+
+// 主函数
+int main() {
+    printf("中断系统分析器\n");
+    printf("=============\n\n");
+
+    // 模拟中断处理场景
+    simulate_interrupt_handling();
+
+    // 中断优化策略
+    interrupt_optimization_strategies();
+
+    // 中断类型比较
+    printf("\n中断类型比较\n");
+    printf("============\n");
+
+    const char* int_types[] = {"硬件中断", "软件中断", "异常", "不可屏蔽中断"};
+    const char* int_examples[] = {"定时器、键盘", "系统调用", "除零错误", "电源故障"};
+    const char* int_priorities[] = "可变", "固定", "最高", "最高";
+
+    printf("类型\t\t示例\t\t优先级\t\t特点\n");
+    printf("----\t\t----\t\t----\t\t----\n");
+
+    for (int i = 0; i < 4; i++) {
+        printf("%s\t%s\t%s\t\t", int_types[i], int_examples[i], int_priorities[i]);
+        switch (i) {
+            case 0: printf("异步，可屏蔽\n"); break;
+            case 1: printf("同步，可编程\n"); break;
+            case 2: printf("同步，不可屏蔽\n"); break;
+            case 3: printf("异步，不可屏蔽\n"); break;
+        }
+    }
+
+    return 0;
+}
+```
+
+### 中断系统设计要点
+
+1. **优先级管理**：确保重要中断得到及时处理
+2. **嵌套处理**：支持高优先级中断中断低优先级中断
+3. **快速响应**：最小化中断延迟
+4. **负载均衡**：在多处理器系统中分配中断负载
+5. **错误处理**：处理异常和错误情况
+
+## DMA（直接内存访问）
+
+DMA允许外设直接与内存进行数据传输，无需CPU参与，大大提高了I/O性能。
+
+### DMA传输机制
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <time.h>
+
+// DMA通道状态
+typedef enum {
+    DMA_STATE_IDLE,        // 空闲
+    DMA_STATE_CONFIGURING, // 配置中
+    DMA_STATE_READY,       // 准备就绪
+    DMA_STATE_TRANSFERRING, // 传输中
+    DMA_STATE_COMPLETING,  // 完成中
+    DMA_STATE_ERROR        // 错误状态
+} DMAChannelState;
+
+// DMA传输模式
+typedef enum {
+    DMA_MODE_SINGLE,       // 单次传输
+    DMA_MODE_BLOCK,        // 块传输
+    DMA_MODE_DEMAND,       // 按需传输
+    DMA_MODE_CASCADE       // 级联模式
+} DMATransferMode;
+
+// DMA传输方向
+typedef enum {
+    DMA_DIRECTION_MEMORY_TO_MEMORY,   // 内存到内存
+    DMA_DIRECTION_MEMORY_TO_DEVICE,    // 内存到设备
+    DMA_DIRECTION_DEVICE_TO_MEMORY,    // 设备到内存
+    DMA_DIRECTION_DEVICE_TO_DEVICE     // 设备到设备
+} DMATransferDirection;
+
+// DMA通道配置
+typedef struct {
+    uint32_t source_addr;       // 源地址
+    uint32_t dest_addr;         // 目标地址
+    uint32_t transfer_size;     // 传输大小
+    DMATransferMode mode;       // 传输模式
+    DMATransferDirection direction; // 传输方向
+    uint32_t burst_size;        // 突发大小
+    uint32_t stride;            // 步长
+    bool auto_reload;           // 自动重载
+    bool circular_buffer;       // 环形缓冲区
+    bool interrupt_enabled;     // 中断使能
+    uint32_t priority;          // 优先级
+} DMAChannelConfig;
+
+// DMA通道状态
+typedef struct {
+    DMAChannelState state;      // 通道状态
+    uint32_t current_source;    // 当前源地址
+    uint32_t current_dest;      // 当前目标地址
+    uint32_t bytes_transferred; // 已传输字节数
+    uint32_t bytes_remaining;   // 剩余字节数
+    uint32_t error_code;       // 错误代码
+    uint32_t start_time;        // 开始时间
+    uint32_t last_update;       // 最后更新时间
+    bool transfer_complete;     // 传输完成标志
+    bool transfer_error;        // 传输错误标志
+} DMAChannelStatus;
+
+// DMA控制器配置
+typedef struct {
+    uint32_t num_channels;      // 通道数量
+    uint32_t data_width;        // 数据宽度
+    uint32_t addr_width;        // 地址宽度
+    uint32_t max_burst_size;    // 最大突发大小
+    uint32_t clock_freq;        // 时钟频率
+    bool endian_swap;           // 字节序交换
+    bool parity_check;          // 奇偶校验
+    bool crc_check;             // CRC校验
+} DMAControllerConfig;
+
+// DMA控制器
+typedef struct {
+    DMAControllerConfig config;
+    DMAChannelConfig* channels;      // 通道配置数组
+    DMAChannelStatus* channel_status; // 通道状态数组
+    uint32_t active_channels;        // 活动通道数
+    uint32_t completed_transfers;    // 完成传输数
+    uint32_t failed_transfers;       // 失败传输数
+    bool controller_enabled;         // 控制器使能
+    uint32_t global_priority_mask;    // 全局优先级屏蔽
+} DMAController;
+
+// DMA传输统计
+typedef struct {
+    uint32_t total_transfers;         // 总传输数
+    uint32_t successful_transfers;    // 成功传输数
+    uint32_t failed_transfers;        // 失败传输数
+    uint64_t total_bytes_transferred; // 总传输字节数
+    double avg_throughput;            // 平均吞吐量
+    double avg_latency;               // 平均延迟
+    uint32_t peak_throughput;         // 峰值吞吐量
+    double efficiency;               // 传输效率
+} DMAStatistics;
+
+// DMA中断类型
+typedef enum {
+    DMA_INT_TRANSFER_COMPLETE,       // 传输完成
+    DMA_INT_HALF_COMPLETE,           // 半传输完成
+    DMA_INT_TRANSFER_ERROR,          // 传输错误
+    DMA_INT_FIFO_EMPTY,              // FIFO空
+    DMA_INT_FIFO_FULL,               // FIFO满
+    DMA_INT_BUS_ERROR               // 总线错误
+} DMAInterruptType;
+
+// DMA中断回调函数类型
+typedef void (*DMAInterruptCallback)(uint32_t channel, DMAInterruptType type, void* user_data);
+
+// 初始化DMA控制器
+DMAController* init_dma_controller(uint32_t num_channels, uint32_t data_width) {
+    DMAController* dma = malloc(sizeof(DMAController));
+
+    dma->config.num_channels = num_channels;
+    dma->config.data_width = data_width;
+    dma->config.addr_width = 32;
+    dma->config.max_burst_size = 1024;
+    dma->config.clock_freq = 100000000;  // 100MHz
+    dma->config.endian_swap = false;
+    dma->config.parity_check = false;
+    dma->config.crc_check = false;
+
+    dma->channels = malloc(num_channels * sizeof(DMAChannelConfig));
+    dma->channel_status = malloc(num_channels * sizeof(DMAChannelStatus));
+
+    for (uint32_t i = 0; i < num_channels; i++) {
+        memset(&dma->channels[i], 0, sizeof(DMAChannelConfig));
+        memset(&dma->channel_status[i], 0, sizeof(DMAChannelStatus));
+        dma->channel_status[i].state = DMA_STATE_IDLE;
+    }
+
+    dma->active_channels = 0;
+    dma->completed_transfers = 0;
+    dma->failed_transfers = 0;
+    dma->controller_enabled = true;
+    dma->global_priority_mask = 0;
+
+    return dma;
+}
+
+// 配置DMA通道
+bool configure_dma_channel(DMAController* dma, uint32_t channel,
+                         const DMAChannelConfig* config) {
+    if (channel >= dma->config.num_channels || !dma->controller_enabled) {
+        return false;
+    }
+
+    // 检查通道状态
+    if (dma->channel_status[channel].state != DMA_STATE_IDLE) {
+        return false;
+    }
+
+    // 复制配置
+    memcpy(&dma->channels[channel], config, sizeof(DMAChannelConfig));
+
+    // 设置通道状态
+    dma->channel_status[channel].state = DMA_STATE_CONFIGURING;
+    dma->channel_status[channel].current_source = config->source_addr;
+    dma->channel_status[channel].current_dest = config->dest_addr;
+    dma->channel_status[channel].bytes_transferred = 0;
+    dma->channel_status[channel].bytes_remaining = config->transfer_size;
+    dma->channel_status[channel].error_code = 0;
+    dma->channel_status[channel].transfer_complete = false;
+    dma->channel_status[channel].transfer_error = false;
+
+    return true;
+}
+
+// 启动DMA传输
+bool start_dma_transfer(DMAController* dma, uint32_t channel) {
+    if (channel >= dma->config.num_channels || !dma->controller_enabled) {
+        return false;
+    }
+
+    DMAChannelStatus* status = &dma->channel_status[channel];
+    if (status->state != DMA_STATE_CONFIGURING && status->state != DMA_STATE_READY) {
+        return false;
+    }
+
+    // 检查优先级
+    DMAChannelConfig* config = &dma->channels[channel];
+    if (config->priority <= dma->global_priority_mask) {
+        return false;
+    }
+
+    // 启动传输
+    status->state = DMA_STATE_TRANSFERRING;
+    status->start_time = time(NULL);
+    status->last_update = status->start_time;
+
+    dma->active_channels++;
+
+    return true;
+}
+
+// 停止DMA传输
+bool stop_dma_transfer(DMAController* dma, uint32_t channel) {
+    if (channel >= dma->config.num_channels) {
+        return false;
+    }
+
+    DMAChannelStatus* status = &dma->channel_status[channel];
+    if (status->state != DMA_STATE_TRANSFERRING) {
+        return false;
+    }
+
+    status->state = DMA_STATE_COMPLETING;
+    if (dma->active_channels > 0) {
+        dma->active_channels--;
+    }
+
+    return true;
+}
+
+// 更新DMA传输状态
+bool update_dma_transfer(DMAController* dma, uint32_t channel, uint32_t bytes_transferred) {
+    if (channel >= dma->config.num_channels) {
+        return false;
+    }
+
+    DMAChannelStatus* status = &dma->channel_status[channel];
+    DMAChannelConfig* config = &dma->channels[channel];
+
+    if (status->state != DMA_STATE_TRANSFERRING) {
+        return false;
+    }
+
+    // 更新传输状态
+    status->bytes_transferred += bytes_transferred;
+    status->bytes_remaining -= bytes_transferred;
+    status->last_update = time(NULL);
+
+    // 更新地址
+    switch (config->direction) {
+        case DMA_DIRECTION_MEMORY_TO_MEMORY:
+        case DMA_DIRECTION_MEMORY_TO_DEVICE:
+            status->current_source += bytes_transferred;
+            status->current_dest += bytes_transferred;
+            break;
+        case DMA_DIRECTION_DEVICE_TO_MEMORY:
+            status->current_dest += bytes_transferred;
+            break;
+        case DMA_DIRECTION_DEVICE_TO_DEVICE:
+            // 设备到设备传输，地址可能不变
+            break;
+    }
+
+    // 检查传输是否完成
+    if (status->bytes_remaining == 0) {
+        status->transfer_complete = true;
+        status->state = DMA_STATE_COMPLETING;
+
+        if (dma->active_channels > 0) {
+            dma->active_channels--;
+        }
+        dma->completed_transfers++;
+
+        // 自动重载
+        if (config->auto_reload) {
+            status->bytes_transferred = 0;
+            status->bytes_remaining = config->transfer_size;
+            status->current_source = config->source_addr;
+            status->current_dest = config->dest_addr;
+            status->transfer_complete = false;
+            status->state = DMA_STATE_READY;
+        }
+    }
+
+    return true;
+}
+
+// 获取DMA通道状态
+DMAChannelState get_dma_channel_state(DMAController* dma, uint32_t channel) {
+    if (channel >= dma->config.num_channels) {
+        return DMA_STATE_ERROR;
+    }
+    return dma->channel_status[channel].state;
+}
+
+// 获取DMA传输进度
+uint32_t get_dma_transfer_progress(DMAController* dma, uint32_t channel) {
+    if (channel >= dma->config.num_channels) {
+        return 0;
+    }
+
+    DMAChannelStatus* status = &dma->channel_status[channel];
+    DMAChannelConfig* config = &dma->channels[channel];
+
+    if (config->transfer_size == 0) {
+        return 0;
+    }
+
+    return (status->bytes_transferred * 100) / config->transfer_size;
+}
+
+// 计算DMA传输时间
+uint32_t calculate_dma_transfer_time(DMAController* dma, uint32_t channel) {
+    if (channel >= dma->config.num_channels) {
+        return 0;
+    }
+
+    DMAChannelConfig* config = &dma->channels[channel];
+
+    // 计算基础传输时间
+    double transfer_cycles = (double)config->transfer_size * 8 / dma->config.data_width;
+
+    // 考虑突发传输
+    double burst_efficiency = 1.0;
+    if (config->burst_size > 0) {
+        burst_efficiency = 1.0 - (1.0 / config->burst_size);
+    }
+
+    // 考虑总线效率
+    double bus_efficiency = 0.8;  // 假设总线效率80%
+
+    double total_cycles = transfer_cycles / (burst_efficiency * bus_efficiency);
+
+    return (uint32_t)(total_cycles * 1000000000 / dma->config.clock_freq);  // 纳秒
+}
+
+// 设置全局优先级屏蔽
+void set_dma_priority_mask(DMAController* dma, uint32_t mask) {
+    dma->global_priority_mask = mask;
+}
+
+// 获取DMA控制器状态
+uint32_t get_dma_controller_status(DMAController* dma) {
+    uint32_t status = 0;
+
+    for (uint32_t i = 0; i < dma->config.num_channels; i++) {
+        if (dma->channel_status[i].state != DMA_STATE_IDLE) {
+            status |= (1 << i);
+        }
+    }
+
+    return status;
+}
+
+// 计算DMA统计信息
+void calculate_dma_statistics(DMAController* dma, DMAStatistics* stats) {
+    memset(stats, 0, sizeof(DMAStatistics));
+
+    uint64_t total_bytes = 0;
+    uint32_t successful_transfers = 0;
+
+    for (uint32_t i = 0; i < dma->config.num_channels; i++) {
+        DMAChannelStatus* status = &dma->channel_status[i];
+        DMAChannelConfig* config = &dma->channels[i];
+
+        if (status->transfer_complete) {
+            successful_transfers++;
+            total_bytes += config->transfer_size;
+        }
+    }
+
+    stats->total_transfers = dma->completed_transfers + dma->failed_transfers;
+    stats->successful_transfers = successful_transfers;
+    stats->failed_transfers = dma->failed_transfers;
+    stats->total_bytes_transferred = total_bytes;
+
+    if (successful_transfers > 0) {
+        stats->avg_throughput = (double)total_bytes / successful_transfers;
+    }
+
+    // 计算效率（简化计算）
+    stats->efficiency = (double)successful_transfers / stats->total_transfers;
+}
+
+// 模拟DMA传输
+void simulate_dma_transfers() {
+    printf("DMA传输模拟\n");
+    printf("============\n");
+
+    // 初始化DMA控制器
+    DMAController* dma = init_dma_controller(4, 32);
+
+    // 配置多个DMA通道
+    DMAChannelConfig configs[] = {
+        {
+            .source_addr = 0x10000000,
+            .dest_addr = 0x20000000,
+            .transfer_size = 4096,
+            .mode = DMA_MODE_BLOCK,
+            .direction = DMA_DIRECTION_MEMORY_TO_MEMORY,
+            .burst_size = 128,
+            .stride = 0,
+            .auto_reload = false,
+            .circular_buffer = false,
+            .interrupt_enabled = true,
+            .priority = 3
+        },
+        {
+            .source_addr = 0x30000000,
+            .dest_addr = 0x40000000,
+            .transfer_size = 8192,
+            .mode = DMA_MODE_BLOCK,
+            .direction = DMA_DIRECTION_MEMORY_TO_MEMORY,
+            .burst_size = 256,
+            .stride = 0,
+            .auto_reload = false,
+            .circular_buffer = false,
+            .interrupt_enabled = true,
+            .priority = 2
+        }
+    };
+
+    // 配置并启动传输
+    for (int i = 0; i < 2; i++) {
+        if (configure_dma_channel(dma, i, &configs[i])) {
+            printf("通道 %d 配置成功\n", i);
+            if (start_dma_transfer(dma, i)) {
+                printf("通道 %d 传输启动\n", i);
+            }
+        }
+    }
+
+    // 模拟传输进度
+    printf("\n模拟传输进度：\n");
+    for (int step = 0; step < 10; step++) {
+        printf("步骤 %d: ", step);
+
+        for (int i = 0; i < 2; i++) {
+            if (get_dma_channel_state(dma, i) == DMA_STATE_TRANSFERRING) {
+                // 模拟传输进度
+                uint32_t progress = get_dma_transfer_progress(dma, i);
+                uint32_t bytes_step = configs[i].transfer_size / 10;
+
+                update_dma_transfer(dma, i, bytes_step);
+
+                printf("通道%d: %u%%  ", i, progress);
+            }
+        }
+        printf("\n");
+    }
+
+    // 计算统计信息
+    DMAStatistics stats;
+    calculate_dma_statistics(dma, &stats);
+
+    printf("\nDMA统计信息：\n");
+    printf("总传输数: %u\n", stats.total_transfers);
+    printf("成功传输: %u\n", stats.successful_transfers);
+    printf("失败传输: %u\n", stats.failed_transfers);
+    printf("总传输字节: %llu\n", stats.total_bytes_transferred);
+    printf("平均吞吐量: %.2f bytes/transfer\n", stats.avg_throughput);
+    printf("传输效率: %.1f%%\n", stats.efficiency * 100);
+
+    // 清理资源
+    free(dma->channels);
+    free(dma->channel_status);
+    free(dma);
+}
+
+// DMA应用场景分析
+void analyze_dma_applications() {
+    printf("\nDMA应用场景分析\n");
+    printf("================\n");
+
+    printf("1. 内存拷贝\n");
+    printf("   - 大块内存快速拷贝\n");
+    printf("   - 无CPU参与，提高效率\n");
+    printf("   - 适用于内存密集型应用\n\n");
+
+    printf("2. 外设数据传输\n");
+    printf("   - 网络数据包接收\n");
+    printf("   - 磁盘数据读写\n");
+    printf("   - 音视频数据流\n\n");
+
+    printf("3. 显示控制器\n");
+    printf("   - 帧缓冲区更新\n");
+    printf("   - 图形数据传输\n");
+    printf("   - 实时显示刷新\n\n");
+
+    printf("4. 通信接口\n");
+    printf("   - UART/串口数据\n");
+    printf("   - SPI/I2C数据传输\n");
+    printf("   - USB数据传输\n\n");
+
+    printf("5. AD/DA转换\n");
+    printf("   - 采样数据传输\n");
+    printf("   - 控制信号输出\n");
+    printf("   - 实时数据处理\n");
+}
+
+// DMA优化策略
+void dma_optimization_strategies() {
+    printf("\nDMA优化策略\n");
+    printf("==============\n");
+
+    printf("1. 突发传输优化\n");
+    printf("   - 使用合适的突发大小\n");
+    printf("   - 减少总线仲裁开销\n");
+    printf("   - 提高传输效率\n\n");
+
+    printf("2. 内存访问优化\n");
+    printf("   - 对齐内存访问\n");
+    printf("   - 使用缓存友好模式\n");
+    printf("   - 减少内存访问冲突\n\n");
+
+    printf("3. 通道优先级管理\n");
+    printf("   - 合理设置通道优先级\n");
+    printf("   - 实现服务质量(QoS)\n");
+    printf("   - 避免饥饿问题\n\n");
+
+    printf("4. 缓冲区管理\n");
+    printf("   - 使用环形缓冲区\n");
+    printf("   - 双缓冲技术\n");
+    printf("   - 零拷贝传输\n\n");
+
+    printf("5. 中断优化\n");
+    printf("   - 批量完成中断\n");
+    printf("   - 减少中断频率\n");
+    printf("   - 中断合并处理\n");
+}
+
+// 主函数
+int main() {
+    printf("DMA传输分析器\n");
+    printf("=============\n\n");
+
+    // DMA传输模拟
+    simulate_dma_transfers();
+
+    // DMA应用场景分析
+    analyze_dma_applications();
+
+    // DMA优化策略
+    dma_optimization_strategies();
+
+    // DMA模式比较
+    printf("\nDMA传输模式比较\n");
+    printf("==============\n");
+
+    const char* modes[] = {"单次传输", "块传输", "按需传输", "级联模式"};
+    const char* descriptions[] = {
+        "一次传输一个数据单元",
+        "传输整个数据块",
+        "根据外部请求传输",
+        "多个DMA控制器级联"
+    };
+    const char* applications[] = {
+        "简单外设控制",
+        "内存拷贝、磁盘I/O",
+        "网络包处理",
+        "复杂系统架构"
+    };
+
+    printf("模式\t\t描述\t\t\t典型应用\n");
+    printf("----\t\t----\t\t\t----\n");
+
+    for (int i = 0; i < 4; i++) {
+        printf("%s\t%s\t%s\n", modes[i], descriptions[i], applications[i]);
+    }
+
+    return 0;
+}
+```
+
+### DMA的优势和应用
+
+1. **CPU卸载**：减少CPU负担，提高系统性能
+2. **高吞吐量**：专用的数据传输通道
+3. **低延迟**：直接内存访问，减少中间环节
+4. **多种模式**：支持不同传输需求
+5. **广泛应用**：网络、存储、图形等
+
+## 总结
+
+I/O系统是计算机系统的重要组成部分，负责处理器与外部设备的通信和数据传输。
+
+### 关键概念回顾
+
+1. **I/O层次结构**：从应用到硬件的多层架构
+2. **总线设计**：通信通道、协议和仲裁机制
+3. **中断系统**：异步事件处理、优先级管理
+4. **DMA传输**：直接内存访问、高性能数据传输
+
+### 性能优化策略
+
+- **减少中断开销**：中断合并、中断线程化
+- **优化总线带宽**：使用高速总线、突发传输
+- **提高DMA效率**：合理配置传输参数、内存对齐
+- **负载均衡**：在多通道间分配I/O负载
+
+### 实际应用
+
+1. **存储系统**：硬盘、SSD、光盘等存储设备
+2. **网络系统**：网卡、交换机、路由器
+3. **多媒体系统**：显卡、声卡、视频采集
+4. **嵌入式系统**：传感器、执行器、控制接口
+
+I/O系统的设计需要考虑性能、可靠性、兼容性和成本等多个方面，是计算机系统设计中的关键技术挑战。

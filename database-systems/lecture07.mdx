@@ -1,0 +1,1105 @@
+---
+title: "Lecture 7: 哈希表"
+description: "CMU 15-445 Lecture 7 - 静态哈希、动态哈希、扩展哈希、哈希函数设计"
+---
+
+# Lecture 7: 哈希表
+
+## 哈希表索引概述
+
+### 哈希表在数据库中的应用
+
+哈希表索引是数据库系统中重要的索引结构，主要用于：
+
+1. **等值查询优化**：快速定位指定键值的记录
+2. **主键索引**：作为主键的高效访问路径
+3. **哈希连接**：为连接操作提供快速的哈希表实现
+4. **内存索引**：在内存数据库中提供O(1)的访问时间
+
+### 哈希表的基本组成
+```
+哈希表索引：
+├── 哈希函数：将键映射到桶地址
+├── 桶数组：存储实际的数据指针
+├── 溢出处理：处理哈希冲突
+└── 目录结构：支持动态扩展（动态哈希）
+```
+
+## 静态哈希实现
+
+### 基本静态哈希
+
+#### 静态哈希结构
+```cpp
+class StaticHashTable {
+private:
+    struct Bucket {
+        vector<pair<Key, Value>> entries;
+        size_t capacity;
+        bool is_overflow;
+
+        Bucket(size_t cap) : capacity(cap), is_overflow(false) {}
+
+        bool insert(const Key& key, const Value& value) {
+            // 检查键是否已存在
+            for (auto& entry : entries) {
+                if (entry.first == key) {
+                    entry.second = value;  // 更新值
+                    return true;
+                }
+            }
+
+            // 检查是否有空间
+            if (entries.size() < capacity) {
+                entries.emplace_back(key, value);
+                return true;
+            }
+
+            return false;  // 桶已满
+        }
+
+        bool find(const Key& key, Value* value) const {
+            for (const auto& entry : entries) {
+                if (entry.first == key) {
+                    *value = entry.second;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool remove(const Key& key) {
+            for (auto it = entries.begin(); it != entries.end(); ++it) {
+                if (it->first == key) {
+                    entries.erase(it);
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    vector<unique_ptr<Bucket>> buckets;
+    size_t bucket_count;
+    HashFunction hash_function;
+    size_t total_entries;
+
+public:
+    StaticHashTable(size_t initial_buckets = 16)
+        : bucket_count(initial_buckets), total_entries(0) {
+        for (size_t i = 0; i < bucket_count; i++) {
+            buckets.push_back(make_unique<Bucket>(4));  // 每个桶初始容量为4
+        }
+    }
+
+    bool insert(const Key& key, const Value& value) {
+        size_t hash = hash_function(key);
+        size_t bucket_index = hash % bucket_count;
+
+        // 尝试插入到主桶
+        if (buckets[bucket_index]->insert(key, value)) {
+            total_entries++;
+            return true;
+        }
+
+        // 主桶已满，尝试插入到溢出桶
+        return handle_overflow(bucket_index, key, value);
+    }
+
+    bool find(const Key& key, Value* value) const {
+        size_t hash = hash_function(key);
+        size_t bucket_index = hash % bucket_count;
+
+        // 在主桶中查找
+        if (buckets[bucket_index]->find(key, value)) {
+            return true;
+        }
+
+        // 在溢出桶中查找
+        return find_in_overflow(bucket_index, key, value);
+    }
+
+    bool remove(const Key& key) {
+        size_t hash = hash_function(key);
+        size_t bucket_index = hash % bucket_count;
+
+        // 从主桶中删除
+        if (buckets[bucket_index]->remove(key)) {
+            total_entries--;
+            return true;
+        }
+
+        // 从溢出桶中删除
+        if (remove_from_overflow(bucket_index, key)) {
+            total_entries--;
+            return true;
+        }
+
+        return false;
+    }
+
+    double get_load_factor() const {
+        return static_cast<double>(total_entries) / (bucket_count * buckets[0]->capacity);
+    }
+
+    size_t get_bucket_count() const { return bucket_count; }
+    size_t get_total_entries() const { return total_entries; }
+
+private:
+    bool handle_overflow(size_t bucket_index, const Key& key, const Value& value) {
+        // 查找或创建溢出桶
+        Bucket* overflow_bucket = find_overflow_bucket(bucket_index);
+        if (overflow_bucket && overflow_bucket->insert(key, value)) {
+            total_entries++;
+            return true;
+        }
+
+        // 溢出桶也已满，需要重新哈希
+        if (get_load_factor() > 0.75) {
+            rehash();
+            return insert(key, value);  // 重新尝试插入
+        }
+
+        return false;  // 插入失败
+    }
+
+    Bucket* find_overflow_bucket(size_t bucket_index) {
+        Bucket* current = buckets[bucket_index].get();
+
+        // 遍历溢出链
+        while (current->is_overflow && current->entries.back().second.type == OverflowMarker) {
+            size_t next_bucket_index = current->entries.back().second.overflow_bucket;
+            current = buckets[next_bucket_index].get();
+        }
+
+        // 检查是否需要创建新的溢出桶
+        if (current->entries.size() >= current->capacity) {
+            size_t new_bucket_index = buckets.size();
+            buckets.push_back(make_unique<Bucket>(4));
+            buckets[new_bucket_index]->is_overflow = true;
+
+            // 在当前桶的最后添加溢出指针
+            Value overflow_marker;
+            overflow_marker.type = OverflowMarker;
+            overflow_marker.overflow_bucket = new_bucket_index;
+            current->entries.emplace_back(Key(), overflow_marker);
+
+            return buckets[new_bucket_index].get();
+        }
+
+        return current;
+    }
+
+    bool find_in_overflow(size_t bucket_index, const Key& key, Value* value) const {
+        const Bucket* current = buckets[bucket_index].get();
+
+        while (current) {
+            if (current->find(key, value)) {
+                return true;
+            }
+
+            // 检查是否有溢出桶
+            if (!current->is_overflow || current->entries.empty() ||
+                current->entries.back().second.type != OverflowMarker) {
+                break;
+            }
+
+            size_t next_bucket_index = current->entries.back().second.overflow_bucket;
+            current = buckets[next_bucket_index].get();
+        }
+
+        return false;
+    }
+
+    bool remove_from_overflow(size_t bucket_index, const Key& key) {
+        Bucket* current = buckets[bucket_index].get();
+
+        while (current) {
+            if (current->remove(key)) {
+                return true;
+            }
+
+            // 检查是否有溢出桶
+            if (!current->is_overflow || current->entries.empty() ||
+                current->entries.back().second.type != OverflowMarker) {
+                break;
+            }
+
+            size_t next_bucket_index = current->entries.back().second.overflow_bucket;
+            current = buckets[next_bucket_index].get();
+        }
+
+        return false;
+    }
+
+    void rehash() {
+        size_t new_bucket_count = bucket_count * 2;
+        vector<unique_ptr<Bucket>> new_buckets;
+
+        // 创建新的桶数组
+        for (size_t i = 0; i < new_bucket_count; i++) {
+            new_buckets.push_back(make_unique<Bucket>(4));
+        }
+
+        // 重新插入所有条目
+        size_t old_bucket_count = bucket_count;
+        bucket_count = new_bucket_count;
+
+        for (size_t i = 0; i < old_bucket_count; i++) {
+            Bucket* old_bucket = buckets[i].get();
+            for (const auto& entry : old_bucket->entries) {
+                if (entry.second.type != OverflowMarker) {
+                    size_t new_hash = hash_function(entry.first);
+                    size_t new_bucket_index = new_hash % new_bucket_count;
+                    new_buckets[new_bucket_index]->insert(entry.first, entry.second);
+                }
+            }
+        }
+
+        buckets = move(new_buckets);
+    }
+};
+```
+
+### 线性探测哈希
+
+#### 线性探测实现
+```cpp
+class LinearProbingHashTable {
+private:
+    struct Entry {
+        Key key;
+        Value value;
+        bool is_occupied;
+        bool is_deleted;
+
+        Entry() : is_occupied(false), is_deleted(false) {}
+    };
+
+    vector<Entry> entries;
+    size_t capacity;
+    size_t size;
+    HashFunction hash_function;
+
+public:
+    LinearProbingHashTable(size_t initial_capacity = 16)
+        : capacity(initial_capacity), size(0) {
+        entries.resize(capacity);
+    }
+
+    bool insert(const Key& key, const Value& value) {
+        if (get_load_factor() > 0.7) {
+            resize();
+        }
+
+        size_t index = find_slot(key);
+
+        if (index == capacity) {
+            return false;  // 表已满
+        }
+
+        entries[index].key = key;
+        entries[index].value = value;
+        entries[index].is_occupied = true;
+        entries[index].is_deleted = false;
+        size++;
+
+        return true;
+    }
+
+    bool find(const Key& key, Value* value) const {
+        size_t index = find_occupied_slot(key);
+        if (index != capacity) {
+            *value = entries[index].value;
+            return true;
+        }
+        return false;
+    }
+
+    bool remove(const Key& key) {
+        size_t index = find_occupied_slot(key);
+        if (index != capacity) {
+            entries[index].is_deleted = true;
+            size--;
+            return true;
+        }
+        return false;
+    }
+
+    double get_load_factor() const {
+        return static_cast<double>(size) / capacity;
+    }
+
+    size_t get_size() const { return size; }
+    size_t get_capacity() const { return capacity; }
+
+private:
+    size_t find_slot(const Key& key) {
+        size_t hash = hash_function(key);
+        size_t index = hash % capacity;
+
+        // 线性探测
+        for (size_t i = 0; i < capacity; i++) {
+            size_t current_index = (index + i) % capacity;
+
+            if (!entries[current_index].is_occupied || entries[current_index].is_deleted) {
+                return current_index;  // 找到空槽或已删除的槽
+            }
+
+            if (entries[current_index].key == key && !entries[current_index].is_deleted) {
+                return current_index;  // 键已存在
+            }
+        }
+
+        return capacity;  // 表已满
+    }
+
+    size_t find_occupied_slot(const Key& key) const {
+        size_t hash = hash_function(key);
+        size_t index = hash % capacity;
+
+        for (size_t i = 0; i < capacity; i++) {
+            size_t current_index = (index + i) % capacity;
+
+            if (!entries[current_index].is_occupied) {
+                return capacity;  // 没有找到
+            }
+
+            if (entries[current_index].key == key && !entries[current_index].is_deleted) {
+                return current_index;  // 找到
+            }
+        }
+
+        return capacity;  // 没有找到
+    }
+
+    void resize() {
+        size_t new_capacity = capacity * 2;
+        vector<Entry> new_entries(new_capacity);
+
+        // 重新插入所有有效条目
+        for (const auto& entry : entries) {
+            if (entry.is_occupied && !entry.is_deleted) {
+                size_t new_hash = hash_function(entry.key);
+                size_t new_index = new_hash % new_capacity;
+
+                // 在新表中查找合适的槽位
+                for (size_t i = 0; i < new_capacity; i++) {
+                    size_t current_index = (new_index + i) % new_capacity;
+                    if (!new_entries[current_index].is_occupied) {
+                        new_entries[current_index] = entry;
+                        break;
+                    }
+                }
+            }
+        }
+
+        entries = move(new_entries);
+        capacity = new_capacity;
+    }
+};
+```
+
+## 动态哈希实现
+
+### 扩展哈希 (Extendible Hashing)
+
+#### 扩展哈希结构
+```cpp
+class ExtendibleHashTable {
+private:
+    struct Bucket {
+        vector<pair<Key, Value>> entries;
+        size_t local_depth;
+        size_t capacity;
+
+        Bucket(size_t depth, size_t cap) : local_depth(depth), capacity(cap) {}
+
+        bool is_full() const { return entries.size() >= capacity; }
+        bool insert(const Key& key, const Value& value);
+        bool find(const Key& key, Value* value) const;
+        bool remove(const Key& key);
+    };
+
+    vector<unique_ptr<Bucket>> directory;
+    size_t global_depth;
+    size_t bucket_capacity;
+    HashFunction hash_function;
+
+public:
+    ExtendibleHashTable(size_t initial_depth = 2, size_t bucket_cap = 4)
+        : global_depth(initial_depth), bucket_capacity(bucket_cap) {
+        size_t dir_size = 1 << global_depth;
+        directory.resize(dir_size);
+        for (auto& bucket_ptr : directory) {
+            bucket_ptr = make_unique<Bucket>(global_depth, bucket_capacity);
+        }
+    }
+
+    bool insert(const Key& key, const Value& value) {
+        uint32_t hash = hash_function(key);
+        size_t dir_index = get_directory_index(hash);
+
+        // 尝试插入到桶中
+        if (directory[dir_index]->insert(key, value)) {
+            return true;
+        }
+
+        // 桶已满，需要分裂
+        return split_bucket(dir_index, key, value);
+    }
+
+    bool find(const Key& key, Value* value) const {
+        uint32_t hash = hash_function(key);
+        size_t dir_index = get_directory_index(hash);
+        return directory[dir_index]->find(key, value);
+    }
+
+    bool remove(const Key& key) {
+        uint32_t hash = hash_function(key);
+        size_t dir_index = get_directory_index(hash);
+        return directory[dir_index]->remove(key);
+    }
+
+    size_t get_global_depth() const { return global_depth; }
+    size_t get_directory_size() const { return directory.size(); }
+    size_t get_bucket_count() const {
+        unordered_set<Bucket*> unique_buckets;
+        for (const auto& bucket_ptr : directory) {
+            unique_buckets.insert(bucket_ptr.get());
+        }
+        return unique_buckets.size();
+    }
+
+private:
+    size_t get_directory_index(uint32_t hash) const {
+        // 使用全局深度确定目录索引
+        uint32_t mask = (1 << global_depth) - 1;
+        return hash & mask;
+    }
+
+    bool split_bucket(size_t dir_index, const Key& key, const Value& value) {
+        Bucket* bucket = directory[dir_index].get();
+
+        // 检查是否可以分裂
+        if (bucket->local_depth == global_depth) {
+            // 需要扩展目录
+            if (!expand_directory()) {
+                return false;  // 无法扩展，插入失败
+            }
+            return split_bucket(dir_index, key, value);  // 重新尝试分裂
+        }
+
+        // 创建新桶
+        auto new_bucket = make_unique<Bucket>(bucket->local_depth + 1, bucket_capacity);
+        bucket->local_depth++;
+
+        // 重新分配条目
+        vector<pair<Key, Value>> old_entries = move(bucket->entries);
+        bucket->entries.clear();
+
+        for (const auto& entry : old_entries) {
+            uint32_t entry_hash = hash_function(entry.first);
+            size_t target_dir = get_target_directory(entry_hash, bucket->local_depth);
+
+            if (should_go_to_new_bucket(entry_hash, bucket->local_depth)) {
+                new_bucket->entries.push_back(entry);
+            } else {
+                bucket->entries.push_back(entry);
+            }
+        }
+
+        // 更新目录指针
+        update_directory_pointers(bucket, new_bucket.get(), bucket->local_depth);
+
+        // 尝试插入新条目
+        uint32_t new_hash = hash_function(key);
+        size_t target_dir = get_target_directory(new_hash, bucket->local_depth);
+
+        if (should_go_to_new_bucket(new_hash, bucket->local_depth)) {
+            return new_bucket->insert(key, value);
+        } else {
+            return bucket->insert(key, value);
+        }
+    }
+
+    bool expand_directory() {
+        size_t new_size = directory.size() * 2;
+        vector<unique_ptr<Bucket>> new_directory(new_size);
+
+        // 复制现有指针
+        for (size_t i = 0; i < directory.size(); i++) {
+            new_directory[i] = move(directory[i]);
+            new_directory[i + directory.size()] = new_directory[i]->get();  // 共享桶
+        }
+
+        directory = move(new_directory);
+        global_depth++;
+        return true;
+    }
+
+    size_t get_target_directory(uint32_t hash, size_t local_depth) const {
+        uint32_t mask = (1 << local_depth) - 1;
+        return hash & mask;
+    }
+
+    bool should_go_to_new_bucket(uint32_t hash, size_t local_depth) const {
+        // 检查第local_depth位是否为1
+        return (hash >> (local_depth - 1)) & 1;
+    }
+
+    void update_directory_pointers(Bucket* old_bucket, Bucket* new_bucket, size_t depth) {
+        uint32_t mask = (1 << depth) - 1;
+        uint32_t new_bit = 1 << (depth - 1);
+
+        for (size_t i = 0; i < directory.size(); i++) {
+            if ((i & mask) == (i & (mask ^ new_bit))) {
+                // 这些目录项应该指向新桶
+                if (directory[i].get() == old_bucket && (i & new_bit)) {
+                    directory[i].reset(new_bucket);
+                }
+            }
+        }
+    }
+};
+```
+
+### 线性哈希 (Linear Hashing)
+
+#### 线性哈希实现
+```cpp
+class LinearHashTable {
+private:
+    struct Bucket {
+        vector<pair<Key, Value>> entries;
+        size_t capacity;
+        unique_ptr<Bucket> overflow;  // 溢出桶
+
+        Bucket(size_t cap) : capacity(cap) {}
+
+        bool insert(const Key& key, const Value& value) {
+            // 检查键是否已存在
+            for (auto& entry : entries) {
+                if (entry.first == key) {
+                    entry.second = value;
+                    return true;
+                }
+            }
+
+            if (entries.size() < capacity) {
+                entries.emplace_back(key, value);
+                return true;
+            }
+
+            // 桶已满，检查溢出桶
+            if (!overflow) {
+                overflow = make_unique<Bucket>(capacity);
+            }
+
+            return overflow->insert(key, value);
+        }
+
+        bool find(const Key& key, Value* value) const {
+            for (const auto& entry : entries) {
+                if (entry.first == key) {
+                    *value = entry.second;
+                    return true;
+                }
+            }
+
+            if (overflow) {
+                return overflow->find(key, value);
+            }
+
+            return false;
+        }
+
+        bool remove(const Key& key) {
+            for (auto it = entries.begin(); it != entries.end(); ++it) {
+                if (it->first == key) {
+                    entries.erase(it);
+                    return true;
+                }
+            }
+
+            if (overflow) {
+                return overflow->remove(key);
+            }
+
+            return false;
+        }
+    };
+
+    vector<unique_ptr<Bucket>> buckets;
+    size_t level;          // 当前分裂级别
+    size_t next;           // 下一个要分裂的桶
+    size_t initial_size;   // 初始大小
+    HashFunction hash_function;
+
+public:
+    LinearHashTable(size_t initial_buckets = 16)
+        : level(0), next(0), initial_size(initial_buckets) {
+        for (size_t i = 0; i < initial_buckets; i++) {
+            buckets.push_back(make_unique<Bucket>(4));
+        }
+    }
+
+    bool insert(const Key& key, const Value& value) {
+        size_t bucket_index = hash(key);
+
+        // 尝试插入
+        if (insert_into_bucket(bucket_index, key, value)) {
+            // 检查是否需要分裂
+            if (should_split()) {
+                split();
+            }
+            return true;
+        }
+
+        return false;  // 插入失败
+    }
+
+    bool find(const Key& key, Value* value) const {
+        size_t bucket_index = hash(key);
+        const Bucket* bucket = buckets[bucket_index].get();
+
+        return bucket->find(key, value);
+    }
+
+    bool remove(const Key& key) {
+        size_t bucket_index = hash(key);
+        return remove_from_bucket(bucket_index, key);
+    }
+
+    size_t get_level() const { return level; }
+    size_t get_next_split() const { return next; }
+    size_t get_bucket_count() const { return buckets.size(); }
+
+private:
+    size_t hash(const Key& key) const {
+        uint32_t h = hash_function(key);
+        size_t bucket_count = initial_size * (1 << level);
+
+        // 如果h >= next，使用当前级别的哈希
+        if (h < bucket_count) {
+            return h;
+        }
+
+        // 否则使用上一级别的哈希
+        size_t prev_bucket_count = initial_size * (1 << (level - 1));
+        return h % prev_bucket_count;
+    }
+
+    bool insert_into_bucket(size_t bucket_index, const Key& key, const Value& value) {
+        Bucket* bucket = buckets[bucket_index].get();
+
+        // 尝试插入到主桶
+        if (bucket->insert(key, value)) {
+            return true;
+        }
+
+        // 检查是否可以分裂来缓解溢出
+        if (bucket_index == next) {
+            return false;  // 等待分裂
+        }
+
+        return false;  // 插入失败
+    }
+
+    bool remove_from_bucket(size_t bucket_index, const Key& key) {
+        Bucket* bucket = buckets[bucket_index].get();
+        return bucket->remove(key);
+    }
+
+    bool should_split() const {
+        size_t total_buckets = buckets.size();
+        size_t total_entries = 0;
+
+        for (const auto& bucket : buckets) {
+            total_entries += count_entries_in_bucket(bucket.get());
+        }
+
+        double load_factor = static_cast<double>(total_entries) / (total_buckets * 4);  // 假设桶容量为4
+        return load_factor > 0.75;
+    }
+
+    void split() {
+        if (next >= initial_size * (1 << level)) {
+            // 进入下一级别
+            level++;
+            next = 0;
+        }
+
+        // 分裂桶next
+        Bucket* old_bucket = buckets[next].get();
+        auto new_bucket1 = make_unique<Bucket>(4);
+        auto new_bucket2 = make_unique<Bucket>(4);
+
+        // 重新分配条目
+        redistribute_entries(old_bucket, new_bucket1.get(), new_bucket2.get());
+
+        // 更新桶指针
+        buckets[next] = move(new_bucket1);
+        buckets.push_back(move(new_bucket2));
+
+        next++;
+    }
+
+    void redistribute_entries(Bucket* old_bucket, Bucket* new_bucket1, Bucket* new_bucket2) {
+        vector<pair<Key, Value>> all_entries = collect_all_entries(old_bucket);
+
+        for (const auto& entry : all_entries) {
+            size_t bucket_index = hash(entry.first);
+
+            if (bucket_index < buckets.size()) {
+                new_bucket1->insert(entry.first, entry.second);
+            } else {
+                new_bucket2->insert(entry.first, entry.second);
+            }
+        }
+    }
+
+    vector<pair<Key, Value>> collect_all_entries(Bucket* bucket) {
+        vector<pair<Key, Value>> entries;
+
+        // 收集主桶条目
+        entries.insert(entries.end(), bucket->entries.begin(), bucket->entries.end());
+
+        // 收集溢出桶条目
+        Bucket* current = bucket->overflow.get();
+        while (current) {
+            entries.insert(entries.end(), current->entries.begin(), current->entries.end());
+            current = current->overflow.get();
+        }
+
+        return entries;
+    }
+
+    size_t count_entries_in_bucket(Bucket* bucket) const {
+        size_t count = bucket->entries.size();
+        Bucket* current = bucket->overflow.get();
+
+        while (current) {
+            count += current->entries.size();
+            current = current->overflow.get();
+        }
+
+        return count;
+    }
+};
+```
+
+## 哈希函数设计
+
+### 通用哈希函数
+
+#### 多项式滚动哈希
+```cpp
+class PolynomialRollingHash {
+private:
+    const uint64_t prime = 31;
+    const uint64_t modulus = (1ULL << 32) - 1;  // 2^32 - 1
+
+public:
+    uint32_t hash(const string& key) const {
+        uint64_t hash_value = 0;
+
+        for (char c : key) {
+            hash_value = (hash_value * prime + c) % modulus;
+        }
+
+        return static_cast<uint32_t>(hash_value);
+    }
+
+    uint32_t hash_integers(const vector<int>& values) const {
+        uint64_t hash_value = 0;
+
+        for (int val : values) {
+            hash_value = (hash_value * prime + val) % modulus;
+        }
+
+        return static_cast<uint32_t>(hash_value);
+    }
+};
+```
+
+### 一致性哈希
+
+#### 一致性哈希环
+```cpp
+class ConsistentHashRing {
+private:
+    struct VirtualNode {
+        string node_id;
+        size_t physical_node_index;
+        uint32_t hash;
+    };
+
+    vector<VirtualNode> ring;
+    size_t virtual_nodes_per_physical;
+    HashFunction hash_function;
+
+public:
+    ConsistentHashRing(size_t virtual_replicas = 3)
+        : virtual_nodes_per_physical(virtual_replicas) {}
+
+    void add_node(const string& node_id) {
+        size_t physical_index = get_physical_node_count();
+
+        for (size_t i = 0; i < virtual_nodes_per_physical; i++) {
+            string virtual_node_id = node_id + "-v" + to_string(i);
+            uint32_t hash = hash_function(virtual_node_id);
+
+            VirtualNode vnode;
+            vnode.node_id = virtual_node_id;
+            vnode.physical_node_index = physical_index;
+            vnode.hash = hash;
+
+            ring.push_back(vnode);
+        }
+
+        // 保持环的有序性
+        sort_ring();
+    }
+
+    void remove_node(const string& node_id) {
+        // 移除所有虚拟节点
+        auto it = remove_if(ring.begin(), ring.end(),
+            [&node_id](const VirtualNode& vnode) {
+                return vnode.node_id.find(node_id) == 0 &&
+                       vnode.node_id.find("-v") != string::npos;
+            });
+
+        ring.erase(it, ring.end());
+    }
+
+    size_t get_node(const Key& key) const {
+        if (ring.empty()) {
+            throw runtime_error("No nodes available");
+        }
+
+        uint32_t key_hash = hash_function(to_string(key));
+        auto it = lower_bound(ring.begin(), ring.end(), key_hash,
+            [](const VirtualNode& vnode, uint32_t hash) {
+                return vnode.hash < hash;
+            });
+
+        if (it == ring.end()) {
+            it = ring.begin();  // 环回
+        }
+
+        return it->physical_node_index;
+    }
+
+    vector<size_t> get_replication_nodes(const Key& key, size_t replication_factor) const {
+        vector<size_t> nodes;
+        if (ring.empty() || replication_factor == 0) {
+            return nodes;
+        }
+
+        uint32_t key_hash = hash_function(to_string(key));
+        auto start_it = lower_bound(ring.begin(), ring.end(), key_hash,
+            [](const VirtualNode& vnode, uint32_t hash) {
+                return vnode.hash < hash;
+            });
+
+        if (start_it == ring.end()) {
+            start_it = ring.begin();
+        }
+
+        unordered_set<size_t> added_physical_nodes;
+        auto current_it = start_it;
+
+        while (nodes.size() < replication_factor && added_physical_nodes.size() < ring.size()) {
+            size_t physical_index = current_it->physical_node_index;
+
+            if (added_physical_nodes.find(physical_index) == added_physical_nodes.end()) {
+                nodes.push_back(physical_index);
+                added_physical_nodes.insert(physical_index);
+            }
+
+            ++current_it;
+            if (current_it == ring.end()) {
+                current_it = ring.begin();
+            }
+        }
+
+        return nodes;
+    }
+
+private:
+    void sort_ring() {
+        sort(ring.begin(), ring.end(),
+            [](const VirtualNode& a, const VirtualNode& b) {
+                return a.hash < b.hash;
+            });
+    }
+
+    size_t get_physical_node_count() const {
+        unordered_set<string> physical_nodes;
+        for (const auto& vnode : ring) {
+            string physical_id = vnode.node_id.substr(0, vnode.node_id.find("-v"));
+            physical_nodes.insert(physical_id);
+        }
+        return physical_nodes.size();
+    }
+};
+```
+
+## 哈希表性能分析
+
+### 性能基准测试
+
+#### 哈希表性能测试
+```cpp
+class HashTableBenchmark {
+public:
+    struct BenchmarkResult {
+        string hash_table_type;
+        size_t key_count;
+        double insert_time_ms;
+        double lookup_time_ms;
+        double delete_time_ms;
+        double memory_usage_mb;
+        size_t collision_count;
+        size_t bucket_count;
+    };
+
+    vector<BenchmarkResult> benchmark_hash_tables(
+        const vector<unique_ptr<HashTableInterface>>& hash_tables,
+        const vector<pair<Key, Value>>& test_data) {
+
+        vector<BenchmarkResult> results;
+
+        for (const auto& hash_table : hash_tables) {
+            BenchmarkResult result;
+            result.hash_table_type = hash_table->get_type();
+            result.key_count = test_data.size();
+
+            // 插入测试
+            auto start = high_resolution_clock::now();
+            for (const auto& entry : test_data) {
+                hash_table->insert(entry.first, entry.second);
+            }
+            auto end = high_resolution_clock::now();
+            result.insert_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+            // 查找测试
+            start = high_resolution_clock::now();
+            for (const auto& entry : test_data) {
+                Value value;
+                hash_table->find(entry.first, &value);
+            }
+            end = high_resolution_clock::now();
+            result.lookup_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+            // 删除测试
+            start = high_resolution_clock::now();
+            for (const auto& entry : test_data) {
+                hash_table->remove(entry.first);
+            }
+            end = high_resolution_clock::now();
+            result.delete_time_ms = duration_cast<microseconds>(end - start).count() / 1000.0;
+
+            // 收集统计信息
+            result.memory_usage_mb = hash_table->get_memory_usage() / (1024.0 * 1024.0);
+            result.collision_count = hash_table->get_collision_count();
+            result.bucket_count = hash_table->get_bucket_count();
+
+            results.push_back(result);
+        }
+
+        return results;
+    }
+
+    vector<pair<Key, Value>> generate_test_data(
+        size_t count,
+        DataDistribution distribution = DataDistribution::RANDOM) {
+
+        vector<pair<Key, Value>> data;
+        data.reserve(count);
+
+        random_device rd;
+        mt19937 gen(rd());
+
+        switch (distribution) {
+            case DataDistribution::RANDOM: {
+                uniform_int_distribution<Key> key_dist(1, count * 10);
+                for (size_t i = 0; i < count; i++) {
+                    Key key = key_dist(gen);
+                    Value value = generate_random_value();
+                    data.emplace_back(key, value);
+                }
+                break;
+            }
+            case DataDistribution::SEQUENTIAL: {
+                for (size_t i = 0; i < count; i++) {
+                    Key key = i + 1;
+                    Value value = generate_random_value();
+                    data.emplace_back(key, value);
+                }
+                break;
+            }
+            case DataDistribution::SKEWED: {
+                // 帕累托分布（80/20规则）
+                geometric_distribution<size_t> geo_dist(0.2);
+                for (size_t i = 0; i < count; i++) {
+                    Key key = geo_dist(gen) % (count / 4) + 1;  // 80%的键集中在前20%的范围
+                    Value value = generate_random_value();
+                    data.emplace_back(key, value);
+                }
+                break;
+            }
+        }
+
+        return data;
+    }
+
+private:
+    Value generate_random_value() {
+        static random_device rd;
+        static mt19937 gen(rd());
+        static uniform_int_distribution<int> dist(1, 1000000);
+
+        return Value(dist(gen));
+    }
+};
+```
+
+## 实践建议
+
+### 哈希表选择策略
+1. **静态哈希**：适用于数据量相对稳定的场景
+2. **扩展哈希**：适用于需要频繁插入且对查询性能要求高的场景
+3. **线性哈希**：适用于大量数据插入且需要平衡性能的场景
+4. **一致性哈希**：适用于分布式系统的键分配
+
+### 性能优化技巧
+1. **哈希函数选择**：选择适合数据分布的哈希函数
+2. **桶容量设置**：根据数据特征调整桶的容量
+3. **负载因子控制**：及时进行重新哈希或分裂
+4. **内存局部性**：优化缓存友好的数据结构设计
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持范围查询的哈希表索引
+2. 设计并实现一个基于Cuckoo哈希的并发哈希表
+3. 实现一致性哈希算法，支持节点的动态添加和删除
+
+### 思考题
+1. 分析不同哈希冲突解决策略的性能特征
+2. 讨论哈希表在数据库中的应用场景和限制
+3. 如何设计一个支持高效范围查询的哈希表变体？
+
+## 下节预告
+
+下一讲将介绍**树索引**，包括：
+- B+树索引结构
+- B+树的插入、删除和查找操作
+- B+树的优化技术
+- 树索引的性能分析
+
+---
+
+**重要概念**：哈希表为等值查询提供了O(1)的时间复杂度，是数据库索引系统的重要组成部分！

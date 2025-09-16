@@ -1,0 +1,322 @@
+---
+title: "学习环境准备"
+description: "手把手教你搭建CS学习环境"
+---
+
+## 软件安装方式
+
+在日常使用中，我们安装软件的方式有很多种：
+
+**手机应用安装**：
+- 在应用商店搜索App
+- 点击"安装"按钮
+- 等待安装完成
+
+**电脑软件安装**：
+- **可视化安装**：下载安装包 → 双击运行 → 点击下一步 → 完成
+- **命令行安装**：输入安装命令 → 自动完成
+
+### 包管理器介绍
+
+包管理器是用于自动化安装、配置、更新和卸载软件包的工具，能大大简化软件管理过程，让软件安装变得像安装手机App一样简单。
+
+### 包管理器分类
+
+**系统级包管理器**（管理操作系统软件）：
+- **Windows**: Winget、Chocolatey
+- **macOS**: Homebrew、MacPorts
+- **Linux**: apt (Ubuntu/Debian)、yum (CentOS)、pacman (Arch)
+
+### 各系统自带包管理器使用
+
+<Tabs>
+  <Tab title="Windows" icon="https://upload.wikimedia.org/wikipedia/commons/5/5f/Windows_logo_-_2012.svg">
+    <Note>💡 Windows 10/11系统自带Winget，如果没有请<a href="https://apps.microsoft.com/detail/9NBLGGH4NNS1" target="_blank">点击下载</a></Note>
+    <h5>Windows - Winget</h5>
+    <p><strong>基本命令：</strong></p>
+    ```bash
+    # 搜索软件
+    winget search 软件名
+
+    # 安装软件
+    winget install 软件名
+
+    # 更新软件
+    winget upgrade
+    ```
+
+    <p><strong>指定安装目录：</strong></p>
+    ```bash
+    # 查看安装选项
+    winget show 软件名
+
+    # 指定安装目录（部分软件支持）
+    winget install 软件名 --location "D:\MyApps"
+
+    # 或者使用交互式安装
+    winget install 软件名 --interactive
+    ```
+
+    <p><strong>配置中国镜像：</strong></p>
+    ```bash
+    winget source remove winget
+    winget source add winget https://mirrors.tuna.tsinghua.edu.cn/winget-source/
+    ```
+
+    <p><strong>环境变量配置：</strong></p>
+    ```bash
+    # 设置软件安装路径环境变量
+    setx ALLUSERSPROFILE "D:\Program Files"
+    setx PROGRAMFILES "D:\Program Files"
+    ```
+  </Tab>
+
+  <Tab title="macOS" icon="https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg">
+    <Note>💡 macOS系统推荐使用Homebrew，如果没有请<a href="https://brew.sh" target="_blank">点击下载</a></Note>
+    <h4>macOS - Homebrew</h4>
+    <p><strong>安装Homebrew（如果没有）：</strong></p>
+    ```bash
+    # 安装到指定目录
+    sudo mkdir -p /opt/homebrew
+    sudo chown -R $(whoami) /opt/homebrew
+    curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C /opt/homebrew
+
+    # 添加到PATH
+    echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zshrc
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    ```
+
+    <p><strong>基本命令：</strong></p>
+    ```bash
+    # 搜索软件
+    brew search 软件名
+
+    # 安装软件
+    brew install 软件名
+
+    # 更新软件
+    brew upgrade
+    ```
+
+    <p><strong>指定安装目录：</strong></p>
+    ```bash
+    # 查看当前安装位置
+    brew --prefix
+
+    # 安装cask软件到指定位置
+    brew install --cask --appdir="/Applications" 软件名
+
+    # 查看软件安装位置
+    brew list 软件名
+    brew info 软件名
+    ```
+
+    <p><strong>配置中国镜像：</strong></p>
+    ```bash
+    brew git -C "$(brew --repo)" remote set-url origin https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/brew.git
+    brew git -C "$(brew --repo homebrew/core)" remote set-url origin https://mirrors.tuna.tsinghua.edu.cn/git/homebrew/homebrew-core.git
+    ```
+
+    <p><strong>自定义安装路径：</strong></p>
+    ```bash
+    # 创建自定义安装目录
+    mkdir -p ~/mybrew
+    ln -s ~/mybrew ~/.brew
+    ```
+  </Tab>
+
+  <Tab title="Linux" icon="https://www.kernel.org/theme/images/logos/tux.png">
+    <Note>💡 Ubuntu/Debian系统自带apt，如果没有请运行 <code>sudo apt update && sudo apt install apt</code></Note>
+    <h4>Linux - apt (Ubuntu/Debian)</h4>
+    <p><strong>基本命令：</strong></p>
+    ```bash
+    # 更新软件包列表
+    sudo apt update
+
+    # 搜索软件
+    apt search 软件名
+
+    # 安装软件
+    sudo apt install 软件名
+
+    # 更新系统
+    sudo apt upgrade
+    ```
+
+    <p><strong>指定安装目录：</strong></p>
+    ```bash
+    # 查看软件安装位置
+    dpkg -L 软件名
+
+    # 查看软件信息
+    apt show 软件名
+
+    # 重新配置软件安装目录
+    sudo dpkg-reconfigure 软件名
+    ```
+
+    <p><strong>配置中国镜像：</strong></p>
+    ```bash
+    # 备份源文件
+    sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
+
+    # 替换为清华源
+    sudo sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
+    ```
+
+    <p><strong>自定义软件目录：</strong></p>
+    ```bash
+    # 创建自定义软件目录
+    mkdir -p ~/myapps/bin
+
+    # 添加到PATH
+    echo 'export PATH="$HOME/myapps/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+
+    # 创建软链接
+    ln -s /usr/bin/软件名 ~/myapps/bin/软件名
+    ```
+
+    <p><strong>使用stow管理软件：</strong></p>
+    ```bash
+    # 安装stow
+    sudo apt install stow
+
+    # 创建软件目录结构
+    mkdir -p ~/local/stow
+    cd ~/local/stow
+
+    # 使用stow管理软链接
+    stow 软件名
+    ```
+  </Tab>
+</Tabs>
+
+### 具体软件安装
+
+<Tabs>
+  <Tab title="Windows" icon="https://upload.wikimedia.org/wikipedia/commons/5/5f/Windows_logo_-_2012.svg">
+    <p><strong>使用Winget一键安装：</strong></p>
+    ```bash
+    # 安装Git
+    winget install Git.Git
+
+    # 安装Node.js
+    winget install OpenJS.Node.js.LTS
+
+    # 安装VS Code
+    winget install Microsoft.VisualStudioCode
+
+    # 安装Python
+    winget install Python.Python.3.11
+    ```
+
+    <Note>💡 如果包管理器安装失败，可以直接访问官网下载安装包</Note>
+
+    <h4>软件下载</h4>
+    <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px", marginTop: "20px"}}>
+      <Card title="Git" icon="git" href="https://git-scm.com/download/win">
+        Git版本控制系统
+      </Card>
+      <Card title="Node.js" icon="node" href="https://nodejs.org/en/download">
+        JavaScript运行环境
+      </Card>
+      <Card title="VS Code" icon="code" href="https://code.visualstudio.com/download">
+        代码编辑器
+      </Card>
+      <Card title="Python" icon="python" href="https://www.python.org/downloads">
+        Python编程语言
+      </Card>
+    </div>
+  </Tab>
+
+  <Tab title="macOS" icon="https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg">
+    <p><strong>使用Homebrew一键安装：</strong></p>
+    ```bash
+    # 安装Git
+    brew install git
+
+    # 安装Node.js
+    brew install node
+
+    # 安装VS Code
+    brew install --cask visual-studio-code
+
+    # 安装Python
+    brew install python
+    ```
+
+    <Note>💡 如果包管理器安装失败，可以直接访问官网下载安装包</Note>
+
+    <h4>软件下载</h4>
+    <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px", marginTop: "20px"}}>
+      <Card title="Git" icon="git" href="https://git-scm.com/download/mac">
+        Git版本控制系统
+      </Card>
+      <Card title="Node.js" icon="node" href="https://nodejs.org/en/download">
+        JavaScript运行环境
+      </Card>
+      <Card title="VS Code" icon="code" href="https://code.visualstudio.com/download">
+        代码编辑器
+      </Card>
+      <Card title="Python" icon="python" href="https://www.python.org/downloads">
+        Python编程语言
+      </Card>
+    </div>
+  </Tab>
+
+  <Tab title="Linux" icon="https://www.kernel.org/theme/images/logos/tux.png">
+    <p><strong>使用apt安装：</strong></p>
+    ```bash
+    # 安装Git
+    sudo apt install git
+
+    # 安装Node.js
+    sudo apt install nodejs npm
+
+    # 安装VS Code
+    # 添加微软源
+    wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > packages.microsoft.gpg
+    sudo install -o root -g root -m 644 packages.microsoft.gpg /etc/apt/trusted.gpg.d/
+    sudo sh -c 'echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/trusted.gpg.d/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main" > /etc/apt/sources.list.d/vscode.list'
+    sudo apt update
+    sudo apt install code
+
+    # 安装Python
+    sudo apt install python3 python3-pip
+    ```
+
+    <Note>💡 如果包管理器安装失败，可以直接访问官网下载安装包</Note>
+
+    <h4>软件下载</h4>
+    <div style={{display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "16px", marginTop: "20px"}}>
+      <Card title="Git" icon="git" href="https://git-scm.com/download/linux">
+        Git版本控制系统
+      </Card>
+      <Card title="Node.js" icon="node" href="https://nodejs.org/en/download">
+        JavaScript运行环境
+      </Card>
+      <Card title="VS Code" icon="code" href="https://code.visualstudio.com/download">
+        代码编辑器
+      </Card>
+      <Card title="Python" icon="python" href="https://www.python.org/downloads">
+        Python编程语言
+      </Card>
+    </div>
+  </Tab>
+</Tabs>
+
+## 常见问题
+
+如果安装失败，请检查：
+1. 网络连接是否正常
+2. 是否使用管理员权限安装
+3. 杀毒软件是否阻止安装
+
+## 下一步
+
+<Card title="学习路径" icon="play" href="/choose-path">
+  选择你的学习路径
+</Card>
+
+记住：每个程序员都是从这一步开始的，你已经走在正确的路上了！

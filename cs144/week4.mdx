@@ -1,0 +1,600 @@
+---
+title: "Week 4：分组交换I"
+description: "CS144 Week 4 - 分组交换原理、路由器、交换机、转发"
+---
+
+# Week 4：分组交换I
+
+## 课程概述
+
+Week 4 introduces packet switching fundamentals, including routers, switches, and the forwarding process.
+
+## 分组交换基础
+
+### 什么是分组交换？
+
+分组交换（Packet Switching）是一种将数据分割成较小的数据包（packets），然后在网络中独立传输每个包的通信方式。
+
+#### 与电路交换的对比
+
+| 特性 | 分组交换 | 电路交换 |
+|------|----------|----------|
+| 资源分配 | 按需分配 | 预先分配 |
+| 带宽利用 | 高效利用 | 固定分配 |
+| 延迟 | 变化延迟 | 固定延迟 |
+| 可靠性 | 高（可重路由） | 低（单点故障） |
+| 适用场景 | 数据通信 | 语音通信 |
+
+### 分组交换的优势
+
+1. **资源共享**：多个用户共享网络资源
+2. **弹性**：网络拥塞时自动调整
+3. **可靠性**：数据包可以重新路由
+4. **成本效益**：基础设施利用率高
+
+## 网络设备
+
+### 路由器 (Router)
+
+路由器是网络层的设备，负责在不同网络之间转发数据包。
+
+#### 路由器的基本功能
+1. **路径选择**：根据路由表选择最佳路径
+2. **数据包转发**：将数据包转发到下一跳
+3. **网络隔离**：隔离广播域
+4. **协议转换**：支持不同网络协议
+
+#### 路由器工作原理
+
+```cpp
+class Router {
+private:
+    std::map<IPPrefix, Interface> routing_table;
+    std::vector<Interface> interfaces;
+    ARPTable arp_table;
+
+public:
+    void forward_packet(const Packet& packet) {
+        // 查找路由表
+        auto next_hop = lookup_route(packet.destination_ip);
+
+        if (next_hop) {
+            // 查找MAC地址
+            auto mac_addr = arp_table.lookup(next_hop->ip);
+
+            if (mac_addr) {
+                // 转发数据包
+                send_to_interface(packet, next_hop->interface, mac_addr);
+            } else {
+                // 发送ARP请求
+                send_arp_request(next_hop->ip);
+            }
+        } else {
+            // 没有路由，丢弃数据包
+            drop_packet(packet);
+        }
+    }
+
+private:
+    std::optional<RouteEntry> lookup_route(const IPAddress& dest) {
+        // 最长前缀匹配
+        RouteEntry best_match;
+        bool found = false;
+
+        for (const auto& [prefix, interface] : routing_table) {
+            if (prefix.matches(dest)) {
+                if (!found || prefix.length > best_match.prefix.length) {
+                    best_match = {prefix, interface};
+                    found = true;
+                }
+            }
+        }
+
+        return found ? std::optional<RouteEntry>(best_match) : std::nullopt;
+    }
+};
+```
+
+### 交换机 (Switch)
+
+交换机是数据链路层的设备，负责在局域网内转发数据帧。
+
+#### 交换机的基本功能
+1. **MAC地址学习**：学习端口与MAC地址的对应关系
+2. **数据帧转发**：根据MAC地址表转发数据帧
+3. **广播隔离**：隔离冲突域
+4. **流量过滤**：只转发必要的数据帧
+
+#### 交换机工作原理
+
+```cpp
+class Switch {
+private:
+    std::map<MACAddress, Port> mac_table;
+    std::vector<Port> ports;
+    AgingTimer aging_timer;
+
+public:
+    void receive_frame(const EthernetFrame& frame, Port incoming_port) {
+        // 学习MAC地址
+        mac_table[frame.source_mac] = incoming_port;
+
+        // 查找目标端口
+        auto it = mac_table.find(frame.destination_mac);
+
+        if (it != mac_table.end()) {
+            // 找到目标端口
+            if (it->second != incoming_port) {
+                // 转发到目标端口
+                send_to_port(frame, it->second);
+            }
+            // 如果是同一端口，丢弃（避免环路）
+        } else {
+            // 未知MAC地址，广播到所有端口（除了入端口）
+            broadcast_frame(frame, incoming_port);
+        }
+    }
+
+    void update_mac_table() {
+        // 定期清理过期的MAC地址条目
+        aging_timer.expire_old_entries();
+    }
+};
+```
+
+## IP协议与路由
+
+### IP数据报结构
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|Version|  IHL  |Type of Service|          Total Length         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Identification        |Flags|      Fragment Offset    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Time to Live |    Protocol   |         Header Checksum       |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       Source Address                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Destination Address                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Options                    |    Padding    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                             Data                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+### IP地址与子网
+
+#### IP地址分类
+- **A类**：1.0.0.0 - 126.255.255.255
+- **B类**：128.0.0.0 - 191.255.255.255
+- **C类**：192.0.0.0 - 223.255.255.255
+- **D类**：224.0.0.0 - 239.255.255.255（组播）
+- **E类**：240.0.0.0 - 255.255.255.255（保留）
+
+#### 子网划分
+
+```cpp
+class IPAddress {
+private:
+    uint32_t address;
+
+public:
+    IPAddress(uint32_t addr) : address(addr) {}
+
+    IPAddress(const std::string& str_addr) {
+        // 解析字符串形式的IP地址
+        std::istringstream iss(str_addr);
+        std::string token;
+        uint32_t result = 0;
+
+        for (int i = 0; i < 4; i++) {
+            std::getline(iss, token, '.');
+            result = (result << 8) + std::stoi(token);
+        }
+        address = result;
+    }
+
+    std::string to_string() const {
+        return std::to_string((address >> 24) & 0xFF) + "." +
+               std::to_string((address >> 16) & 0xFF) + "." +
+               std::to_string((address >> 8) & 0xFF) + "." +
+               std::to_string(address & 0xFF);
+    }
+
+    bool in_subnet(const IPAddress& network, uint8_t prefix_length) const {
+        uint32_t mask = prefix_length == 0 ? 0 : ~(0xFFFFFFFF >> prefix_length);
+        return (address & mask) == (network.address & mask);
+    }
+};
+```
+
+### 路由表
+
+#### 静态路由
+
+```cpp
+struct RouteEntry {
+    IPPrefix destination;
+    IPAddress next_hop;
+    Interface interface;
+    uint32_t metric;
+    bool is_direct;
+};
+
+class RoutingTable {
+private:
+    std::vector<RouteEntry> routes;
+
+public:
+    void add_route(const IPPrefix& dest, const IPAddress& next_hop,
+                   const Interface& interface, uint32_t metric = 1) {
+        routes.push_back({dest, next_hop, interface, metric, false});
+    }
+
+    void add_direct_route(const IPPrefix& network, const Interface& interface) {
+        routes.push_back({network, IPAddress(0), interface, 0, true});
+    }
+
+    RouteEntry* lookup_route(const IPAddress& destination) {
+        RouteEntry* best_match = nullptr;
+        uint8_t longest_prefix = 0;
+
+        for (auto& route : routes) {
+            if (route.destination.matches(destination)) {
+                if (route.destination.prefix_length > longest_prefix) {
+                    best_match = &route;
+                    longest_prefix = route.destination.prefix_length;
+                }
+            }
+        }
+
+        return best_match;
+    }
+};
+```
+
+## ARP协议
+
+### ARP工作原理
+
+地址解析协议（ARP）用于将IP地址映射到MAC地址。
+
+#### ARP缓存表
+
+```cpp
+class ARPTable {
+private:
+    struct ARPEntry {
+        MACAddress mac;
+        std::chrono::steady_clock::time_point last_updated;
+        bool is_static;
+    };
+
+    std::map<IPAddress, ARPEntry> arp_cache;
+    std::chrono::seconds timeout;
+
+public:
+    std::optional<MACAddress> lookup(const IPAddress& ip) {
+        auto it = arp_cache.find(ip);
+        if (it != arp_cache.end()) {
+            if (!it->second.is_static &&
+                std::chrono::steady_clock::now() - it->second.last_updated > timeout) {
+                arp_cache.erase(it);
+                return std::nullopt;
+            }
+            return it->second.mac;
+        }
+        return std::nullopt;
+    }
+
+    void update(const IPAddress& ip, const MACAddress& mac, bool is_static = false) {
+        arp_cache[ip] = {mac, std::chrono::steady_clock::now(), is_static};
+    }
+
+    void send_arp_request(const IPAddress& target_ip) {
+        ARPFrame arp_frame;
+        arp_frame.operation = ARP_REQUEST;
+        arp_frame.sender_ip = get_local_ip();
+        arp_frame.target_ip = target_ip;
+        arp_frame.sender_mac = get_local_mac();
+        arp_frame.target_mac = MACAddress::broadcast();
+
+        broadcast_frame(arp_frame);
+    }
+};
+```
+
+### ARP过程
+
+1. **发送ARP请求**：当需要发送数据包但不知道目标MAC地址时
+2. **接收ARP响应**：目标设备回复其MAC地址
+3. **更新ARP缓存**：将IP-MAC映射关系存入缓存
+4. **发送数据包**：使用获取的MAC地址发送数据
+
+## ICMP协议
+
+### ICMP的作用
+
+互联网控制报文协议（ICMP）用于报告网络错误和诊断问题。
+
+#### ICMP消息类型
+
+```cpp
+enum ICMPType {
+    ICMP_ECHO_REPLY = 0,
+    ICMP_DEST_UNREACHABLE = 3,
+    ICMP_SOURCE_QUENCH = 4,
+    ICMP_REDIRECT = 5,
+    ICMP_ECHO_REQUEST = 8,
+    ICMP_TIME_EXCEEDED = 11,
+    ICMP_PARAMETER_PROBLEM = 12,
+    ICMP_TIMESTAMP_REQUEST = 13,
+    ICMP_TIMESTAMP_REPLY = 14
+};
+
+class ICMPHandler {
+public:
+    void handle_icmp_packet(const ICMPPacket& packet) {
+        switch (packet.type) {
+            case ICMP_ECHO_REQUEST:
+                send_echo_reply(packet);
+                break;
+            case ICMP_DEST_UNREACHABLE:
+                handle_dest_unreachable(packet);
+                break;
+            case ICMP_TIME_EXCEEDED:
+                handle_time_exceeded(packet);
+                break;
+        }
+    }
+
+private:
+    void send_echo_reply(const ICMPPacket& request) {
+        ICMPPacket reply;
+        reply.type = ICMP_ECHO_REPLY;
+        reply.code = 0;
+        reply.identifier = request.identifier;
+        reply.sequence = request.sequence;
+        reply.data = request.data;
+
+        send_packet(reply);
+    }
+};
+```
+
+## 实验项目：Checkpoint 4
+
+### 目标
+- 实现基本的路由器功能
+- 实现数据包转发
+- 实现ARP协议
+- 实现ICMP协议
+
+### 实现步骤
+
+#### 1. 实现IP数据包处理
+
+```cpp
+class IPHandler {
+private:
+    RoutingTable routing_table;
+    ARPTable arp_table;
+    ICMPHandler icmp_handler;
+
+public:
+    void handle_ip_packet(const IPPacket& packet) {
+        // 检查TTL
+        if (packet.ttl <= 1) {
+            send_icmp_time_exceeded(packet);
+            return;
+        }
+
+        // 减少TTL
+        packet.ttl--;
+
+        // 检查校验和
+        if (!packet.verify_checksum()) {
+            drop_packet(packet);
+            return;
+        }
+
+        // 路由决策
+        auto route = routing_table.lookup_route(packet.destination);
+        if (!route) {
+            send_icmp_dest_unreachable(packet);
+            return;
+        }
+
+        // 转发数据包
+        forward_packet(packet, *route);
+    }
+};
+```
+
+#### 2. 实现路由器转发
+
+```cpp
+class RouterForwarder {
+private:
+    std::vector<NetworkInterface> interfaces;
+
+public:
+    void forward_packet(const IPPacket& packet, const RouteEntry& route) {
+        if (route.is_direct) {
+            // 直连网络
+            send_to_local_network(packet, route.interface);
+        } else {
+            // 需要转发到下一跳
+            send_to_next_hop(packet, route.next_hop, route.interface);
+        }
+    }
+
+private:
+    void send_to_next_hop(const IPPacket& packet, const IPAddress& next_hop,
+                         NetworkInterface& interface) {
+        auto mac_addr = arp_table.lookup(next_hop);
+        if (mac_addr) {
+            // 已知MAC地址，直接发送
+            EthernetFrame frame;
+            frame.destination_mac = *mac_addr;
+            frame.source_mac = interface.get_mac();
+            frame.type = ETHERTYPE_IP;
+            frame.payload = packet.serialize();
+
+            interface.send_frame(frame);
+        } else {
+            // 未知MAC地址，发送ARP请求
+            arp_table.send_arp_request(next_hop);
+            // 将数据包加入等待队列
+            packet_queue.push_back({packet, next_hop, interface});
+        }
+    }
+};
+```
+
+#### 3. 实现完整的路由器
+
+```cpp
+class SimpleRouter {
+private:
+    NetworkInterfaceManager interface_manager;
+    IPHandler ip_handler;
+    ARPHandler arp_handler;
+    std::deque<PendingPacket> packet_queue;
+
+public:
+    void run() {
+        while (true) {
+            // 接收数据包
+            auto frame = interface_manager.receive_frame();
+
+            // 处理不同类型的数据包
+            switch (frame.type) {
+                case ETHERTYPE_IP:
+                    handle_ip_packet(frame);
+                    break;
+                case ETHERTYPE_ARP:
+                    handle_arp_packet(frame);
+                    break;
+            }
+
+            // 处理等待队列
+            process_pending_packets();
+
+            // 定期清理ARP缓存
+            if (arp_cleanup_needed()) {
+                arp_table.cleanup_old_entries();
+            }
+        }
+    }
+
+private:
+    void handle_ip_packet(const EthernetFrame& frame) {
+        IPPacket packet(frame.payload);
+
+        // 检查是否发送给本路由器
+        if (packet.destination == get_local_ip()) {
+            // 发送给本机的数据包
+            ip_handler.handle_local_packet(packet);
+        } else {
+            // 需要转发的数据包
+            ip_handler.forward_packet(packet);
+        }
+    }
+
+    void handle_arp_packet(const EthernetFrame& frame) {
+        ARPPacket arp(frame.payload);
+        arp_handler.handle_arp_packet(arp);
+    }
+};
+```
+
+## 调试和测试
+
+### 网络拓扑测试
+
+```cpp
+void test_network_topology() {
+    // 创建网络拓扑
+    SimpleRouter router1, router2, router3;
+    NetworkLink link1, link2, link3;
+
+    // 连接路由器
+    link1.connect(router1.get_interface(0), router2.get_interface(0));
+    link2.connect(router2.get_interface(1), router3.get_interface(0));
+
+    // 配置路由表
+    router1.add_route(IPPrefix("192.168.2.0/24"), IPAddress("192.168.1.2"), 0);
+    router2.add_route(IPPrefix("192.168.3.0/24"), IPAddress("192.168.2.2"), 1);
+    router3.add_route(IPPrefix("192.168.1.0/24"), IPAddress("192.168.2.1"), 0);
+
+    // 测试数据包转发
+    IPPacket test_packet;
+    test_packet.source = IPAddress("192.168.1.100");
+    test_packet.destination = IPAddress("192.168.3.100");
+    test_packet.payload = "Test data";
+
+    router1.handle_ip_packet(test_packet);
+
+    // 验证数据包到达目的地
+    assert(router3.received_packets() > 0);
+}
+```
+
+### 性能测试
+
+```cpp
+class RouterPerformance {
+private:
+    uint64_t packets_forwarded;
+    uint64_t packets_dropped;
+    std::chrono::steady_clock::time_point start_time;
+
+public:
+    void record_forward() {
+        packets_forwarded++;
+    }
+
+    void record_drop() {
+        packets_dropped++;
+    }
+
+    double get_throughput() {
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        return packets_forwarded / std::chrono::duration<double>(elapsed).count();
+    }
+
+    double get_drop_rate() {
+        uint64_t total = packets_forwarded + packets_dropped;
+        return total > 0 ? (double)packets_dropped / total : 0.0;
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 解释分组交换和电路交换的区别
+2. 什么是ARP协议？它如何工作？
+3. 路由器和交换机有什么区别？
+
+### 实践练习
+1. 实现简单的路由器
+2. 实现ARP协议
+3. 测试不同网络拓扑下的数据包转发
+
+### 挑战项目
+1. 实现动态路由协议（如RIP）
+2. 添加对IPv6的支持
+3. 实现网络地址转换（NAT）
+
+## 下周预告
+
+Week 5将深入探讨拥塞控制的原理和实现。
+
+---
+*继续学习：[Week 5：拥塞控制](./week5)*

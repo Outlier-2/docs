@@ -1,0 +1,3052 @@
+---
+sidebar_position: 15
+title: 第15讲 - 文件系统
+description: 虚拟文件系统、文件系统实现、日志文件系统和分布式文件系统
+---
+
+# 第15讲 - 文件系统
+
+## 课程概述
+
+本讲深入探讨操作系统中的文件系统，包括虚拟文件系统（VFS）、文件系统实现、日志文件系统和分布式文件系统。通过理解文件系统的层次结构和实现机制，学习如何设计高效、可靠的存储系统。
+
+## 学习目标
+
+- 理解虚拟文件系统的概念和实现
+- 掌握文件系统的数据结构和算法
+- 学习日志文件系统的原理和实现
+- 了解分布式文件系统的设计挑战
+- 掌握文件系统性能优化技术
+
+## 主要内容
+
+### 1. 虚拟文件系统（VFS）
+
+#### 1.1 VFS架构和对象模型
+
+```c
+#include <linux/fs.h>
+#include <linux/dcache.h>
+#include <linux/namei.h>
+
+// VFS超级块对象
+typedef struct vfs_super_block {
+    struct list_head s_list;           // 超级块链表
+    dev_t s_dev;                      // 设备标识
+    unsigned long s_blocksize;         // 块大小
+    unsigned long s_old_blocksize;     // 旧块大小
+    unsigned char s_blocksize_bits;    // 块大小位数
+    unsigned char s_dirt;              // 脏标志
+    unsigned long long s_maxbytes;     // 最大文件大小
+    struct file_system_type *s_type;   // 文件系统类型
+    const struct super_operations *s_op; // 超级块操作
+    unsigned long s_magic;             // 文件系统魔数
+    struct dentry *s_root;            // 根目录项
+    struct list_head s_inodes;        // inode链表
+    struct list_head s_files;          // 文件链表
+    struct list_head s_dentry_lru;     // dentry LRU链表
+    struct rw_semaphore s_umount;      // 卸载信号量
+    struct mutex s_lock;               // 超级块锁
+    int s_count;                       // 引用计数
+    atomic_t s_active;                 // 活动计数
+    void *s_fs_info;                   // 文件系统私有数据
+} vfs_super_block;
+
+// VFS inode对象
+typedef struct vfs_inode {
+    struct hlist_node i_hash;         // inode哈希表
+    struct list_head i_list;          // inode链表
+    struct list_head i_sb_list;       // 超级块链表
+    struct list_head i_dentry;        // dentry链表
+    unsigned long i_ino;              // inode号
+    atomic_t i_count;                 // 引用计数
+    unsigned int i_nlink;             // 硬链接数
+    uid_t i_uid;                      // 用户ID
+    gid_t i_gid;                      // 组ID
+    dev_t i_rdev;                     // 设备号
+    u64 i_version;                    // 版本号
+    loff_t i_size;                    // 文件大小
+    unsigned long i_blocks;           // 块数
+    struct timespec i_atime;          // 访问时间
+    struct timespec i_mtime;          // 修改时间
+    struct timespec i_ctime;          // 创建时间
+    unsigned short i_bytes;           // 字节数
+    umode_t i_mode;                   // 文件模式
+    spinlock_t i_lock;                // inode锁
+    struct mutex i_mutex;             // inode互斥锁
+    struct rw_semaphore i_alloc_sem;  // inode分配信号量
+    const struct inode_operations *i_op; // inode操作
+    const struct file_operations *i_fop; // 文件操作
+    struct super_block *i_sb;         // 超级块
+    struct file_lock *i_flock;        // 文件锁
+    struct address_space *i_mapping;  // 地址空间
+    void *i_private;                  // 私有数据
+} vfs_inode;
+
+// VFS dentry对象
+typedef struct vfs_dentry {
+    atomic_t d_count;                  // 引用计数
+    spinlock_t d_lock;                // dentry锁
+    struct inode *d_inode;            // 关联的inode
+    struct super_block *d_sb;         // 超级块
+    unsigned int d_flags;             // 标志
+    struct qstr d_name;               // 名称
+    struct hlist_node d_hash;         // 哈希表
+    struct dentry *d_parent;          // 父目录
+    struct list_head d_child;         // 子目录链表
+    struct list_head d_subdirs;       // 子目录链表
+    struct list_head d_lru;           // LRU链表
+    struct rcu_head d_rcu;            // RCU头
+    struct dentry_operations *d_op;    // dentry操作
+    unsigned char d_iname[DNAME_INLINE_LEN]; // 内联名称
+} vfs_dentry;
+
+// VFS文件对象
+typedef struct vfs_file {
+    struct file *f_file;              // 文件结构
+    struct path f_path;               // 文件路径
+    const struct file_operations *f_op; // 文件操作
+    atomic_t f_count;                 // 引用计数
+    unsigned int f_flags;             // 文件标志
+    mode_t f_mode;                    // 文件模式
+    loff_t f_pos;                     // 文件位置
+    struct fown_struct f_owner;       // 文件所有者
+    struct cred *f_cred;              // 凭证
+    struct file_ra_state f_ra;        // 预读取状态
+    u64 f_version;                    // 文件版本
+    void *private_data;               // 私有数据
+} vfs_file;
+
+// 超级块操作
+struct super_operations {
+    struct inode *(*alloc_inode)(struct super_block *sb);
+    void (*destroy_inode)(struct inode *);
+    void (*dirty_inode)(struct inode *);
+    int (*write_inode)(struct inode *, struct writeback_control *wbc);
+    int (*drop_inode)(struct inode *);
+    void (*evict_inode)(struct inode *);
+    void (*put_super)(struct super_block *);
+    int (*sync_fs)(struct super_block *sb, int wait);
+    int (*freeze_fs)(struct super_block *);
+    int (*unfreeze_fs)(struct super_block *);
+    int (*statfs)(struct dentry *, struct kstatfs *);
+    int (*remount_fs)(struct super_block *, int *, char *);
+    void (*umount_begin)(struct super_block *);
+    int (*show_options)(struct seq_file *, struct dentry *);
+    int (*show_devname)(struct seq_file *, struct dentry *);
+    int (*show_path)(struct seq_file *, struct dentry *);
+    int (*show_stats)(struct seq_file *, struct dentry *);
+};
+
+// inode操作
+struct inode_operations {
+    struct dentry *(*lookup)(struct inode *, struct dentry *, unsigned int);
+    int (*create)(struct inode *, struct dentry *, umode_t, bool);
+    int (*link)(struct dentry *, struct inode *, struct dentry *);
+    int (*unlink)(struct inode *, struct dentry *);
+    int (*symlink)(struct inode *, struct dentry *, const char *);
+    int (*mkdir)(struct inode *, struct dentry *, umode_t);
+    int (*rmdir)(struct inode *, struct dentry *);
+    int (*mknod)(struct inode *, struct dentry *, umode_t, dev_t);
+    int (*rename)(struct inode *, struct dentry *, struct inode *, struct dentry *);
+    int (*readlink)(struct dentry *, char __user *, int);
+    const char *(*follow_link)(struct dentry *, void **);
+    void (*put_link)(struct dentry *, void *);
+    int (*permission)(struct inode *, int);
+    int (*get_acl)(struct inode *, int);
+    int (*setattr)(struct dentry *, struct iattr *);
+    int (*getattr)(struct vfsmount *, struct dentry *, struct kstat *);
+    int (*setxattr)(struct dentry *, const char *, const void *, size_t, int);
+    ssize_t (*getxattr)(struct dentry *, const char *, void *, size_t);
+    ssize_t (*listxattr)(struct dentry *, char *, size_t);
+    int (*removexattr)(struct dentry *, const char *);
+    void (*update_time)(struct inode *, struct timespec *, int);
+    int (*atomic_open)(struct inode *, struct dentry *, struct file *, unsigned, umode_t);
+    int (*tmpfile)(struct inode *, struct dentry *, umode_t);
+    int (*set_acl)(struct inode *, struct posix_acl *, int);
+};
+
+// 文件操作
+struct file_operations {
+    struct module *owner;
+    loff_t (*llseek) (struct file *, loff_t, int);
+    ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+    ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+    ssize_t (*read_iter) (struct kiocb *, struct iov_iter *);
+    ssize_t (*write_iter) (struct kiocb *, struct iov_iter *);
+    int (*iterate) (struct file *, struct dir_context *);
+    unsigned int (*poll) (struct file *, struct poll_table_struct *);
+    long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+    long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
+    int (*mmap) (struct file *, struct vm_area_struct *);
+    int (*open) (struct inode *, struct file *);
+    int (*flush) (struct file *, fl_owner_t id);
+    int (*release) (struct inode *, struct file *);
+    int (*fsync) (struct file *, loff_t, loff_t, int datasync);
+    int (*aio_fsync) (struct kiocb *, int datasync);
+    int (*fasync) (int, struct file *, int);
+    int (*lock) (struct file *, int, struct file_lock *);
+    ssize_t (*sendpage) (struct file *, struct page *, int, size_t, loff_t *, int);
+    unsigned long (*get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+    int (*check_flags)(int);
+    int (*flock) (struct file *, int, struct file_lock *);
+    ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
+    ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
+    int (*setlease)(struct file *, long, struct file_lock **);
+    long (*fallocate)(struct file *file, int mode, loff_t offset, loff_t len);
+    int (*show_fdinfo)(struct seq_file *m, struct file *f);
+};
+
+// dentry操作
+struct dentry_operations {
+    int (*d_revalidate)(struct dentry *, unsigned int);
+    int (*d_weak_revalidate)(struct dentry *, unsigned int);
+    int (*d_hash)(const struct dentry *, struct qstr *);
+    int (*d_compare)(const struct dentry *, unsigned int, const char *, const struct qstr *);
+    int (*d_delete)(const struct dentry *);
+    int (*d_init)(struct dentry *);
+    void (*d_release)(struct dentry *);
+    void (*d_iput)(struct dentry *, struct inode *);
+    char *(*d_dname)(struct dentry *, char *, int);
+    struct vfsmount *(*d_automount)(struct path *);
+    int (*d_manage)(struct dentry *, bool);
+};
+```
+
+#### 1.2 VFS路径解析
+
+```c
+#include <linux/fs.h>
+#include <linux/namei.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+
+// 路径名结构
+typedef struct path_name {
+    char* name;                      // 路径名
+    int len;                         // 长度
+    int depth;                       // 深度
+    struct path_name* next;          // 下一个路径名
+} path_name;
+
+// 路径解析上下文
+typedef struct nameidata {
+    struct path path;                // 当前路径
+    struct qstr last;                // 最后一个名称
+    struct path root;                // 根路径
+    struct inode *inode;             // 当前inode
+    unsigned int flags;              // 标志
+    unsigned int seq;                // 序列号
+    int last_type;                   // 最后类型
+    unsigned depth;                  // 深度
+    char *saved_names[MAX_NESTED_LINKS + 1]; // 保存的名称
+} nameidata;
+
+// 路径解析状态
+typedef enum {
+    PATH_OK,                        // 路径解析成功
+    PATH_NOT_FOUND,                 // 路径未找到
+    PATH_ACCESS_DENIED,             // 访问被拒绝
+    PATH_INVALID,                   // 无效路径
+    PATH_TOO_LONG                   // 路径过长
+} path_resolution_status;
+
+// 分割路径名
+path_name* split_path(const char* pathname) {
+    path_name* head = NULL;
+    path_name* current = NULL;
+    path_name* prev = NULL;
+    char* copy = kstrdup(pathname, GFP_KERNEL);
+    char* token;
+    char* rest = copy;
+    int depth = 0;
+
+    if (!copy) {
+        return NULL;
+    }
+
+    // 跳过开头的斜杠
+    while (*rest == '/') {
+        rest++;
+    }
+
+    // 分割路径
+    while ((token = strsep(&rest, "/")) != NULL) {
+        if (strlen(token) == 0) {
+            continue;
+        }
+
+        // 创建路径名节点
+        current = kmalloc(sizeof(path_name), GFP_KERNEL);
+        if (!current) {
+            // 内存分配失败，清理已分配的内存
+            while (head) {
+                path_name* temp = head;
+                head = head->next;
+                kfree(temp->name);
+                kfree(temp);
+            }
+            kfree(copy);
+            return NULL;
+        }
+
+        // 设置路径名信息
+        current->name = kstrdup(token, GFP_KERNEL);
+        current->len = strlen(token);
+        current->depth = depth++;
+        current->next = NULL;
+
+        if (!head) {
+            head = current;
+        } else if (prev) {
+            prev->next = current;
+        }
+        prev = current;
+    }
+
+    kfree(copy);
+    return head;
+}
+
+// 释放路径名链表
+void free_path(path_name* path) {
+    while (path) {
+        path_name* temp = path;
+        path = path->next;
+        kfree(temp->name);
+        kfree(temp);
+    }
+}
+
+// 解析单个路径名
+struct dentry* resolve_single_path(struct dentry* parent, const char* name,
+                                   int lookup_flags) {
+    struct dentry* dentry;
+    struct qstr qname;
+    int err;
+
+    // 创建查询字符串
+    qname.name = name;
+    qname.len = strlen(name);
+    qname.hash = full_name_hash(name, qname.len);
+
+    // 在目录中查找
+    dentry = d_lookup(parent, &qname);
+    if (dentry) {
+        // 找到缓存的dentry
+        return dentry;
+    }
+
+    // 创建新的dentry
+    dentry = d_alloc(parent, &qname);
+    if (!dentry) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    // 执行实际查找
+    err = parent->d_inode->i_op->lookup(parent->d_inode, dentry, lookup_flags);
+    if (err) {
+        dput(dentry);
+        return ERR_PTR(err);
+    }
+
+    return dentry;
+}
+
+// 解析完整路径
+path_resolution_status resolve_full_path(const char* pathname,
+                                       struct path* result_path,
+                                       int lookup_flags) {
+    path_name* path_parts;
+    path_name* current_part;
+    struct dentry* current_dentry;
+    struct vfsmount* current_mnt;
+    struct path current_path;
+    int err;
+
+    printk(KERN_INFO "解析路径: %s\n", pathname);
+
+    // 分割路径名
+    path_parts = split_path(pathname);
+    if (!path_parts) {
+        return PATH_INVALID;
+    }
+
+    // 从根目录开始
+    current_path = current->fs->root;
+    path_get(&current_path);
+
+    // 逐个解析路径名
+    current_part = path_parts;
+    while (current_part) {
+        struct dentry* next_dentry;
+
+        // 解析当前路径名
+        next_dentry = resolve_single_path(current_path.dentry,
+                                         current_part->name,
+                                         lookup_flags);
+        if (IS_ERR(next_dentry)) {
+            err = PTR_ERR(next_dentry);
+            path_put(&current_path);
+            free_path(path_parts);
+            return (err == -ENOENT) ? PATH_NOT_FOUND : PATH_ACCESS_DENIED;
+        }
+
+        // 检查是否为目录
+        if (current_part->next) {
+            if (!S_ISDIR(next_dentry->d_inode->i_mode)) {
+                dput(next_dentry);
+                path_put(&current_path);
+                free_path(path_parts);
+                return PATH_NOT_FOUND;
+            }
+        }
+
+        // 移动到下一个路径
+        dput(current_path.dentry);
+        current_path.dentry = next_dentry;
+
+        current_part = current_part->next;
+    }
+
+    // 返回结果
+    *result_path = current_path;
+    free_path(path_parts);
+    return PATH_OK;
+}
+
+// 相对路径解析
+path_resolution_status resolve_relative_path(const char* pathname,
+                                             struct path* base_path,
+                                             struct path* result_path,
+                                             int lookup_flags) {
+    struct path current_path;
+    path_resolution_status status;
+
+    printk(KERN_INFO "解析相对路径: %s\n", pathname);
+
+    // 复制基础路径
+    current_path = *base_path;
+    path_get(&current_path);
+
+    // 解析路径
+    status = resolve_full_path(pathname, &current_path, lookup_flags);
+    if (status == PATH_OK) {
+        *result_path = current_path;
+    } else {
+        path_put(&current_path);
+    }
+
+    return status;
+}
+
+// 路径缓存管理
+typedef struct path_cache {
+    struct hlist_head* buckets;      // 哈希桶
+    int num_buckets;                 // 桶数量
+    spinlock_t lock;                 // 缓存锁
+    atomic_t entries;                // 缓存条目数
+    atomic_t hits;                   // 缓存命中数
+    atomic_t misses;                 // 缓存未命中数
+} path_cache;
+
+// 路径缓存条目
+typedef struct path_cache_entry {
+    struct hlist_node hash_node;     // 哈希节点
+    char* path;                      // 路径名
+    struct dentry* dentry;           // dentry
+    struct vfsmount* mnt;            // 挂载点
+    unsigned long last_access;       // 最后访问时间
+    atomic_t ref_count;              // 引用计数
+} path_cache_entry;
+
+// 初始化路径缓存
+int init_path_cache(path_cache* cache, int num_buckets) {
+    int i;
+
+    printk(KERN_INFO "初始化路径缓存\n");
+
+    cache->buckets = kmalloc_array(num_buckets, sizeof(struct hlist_head),
+                                  GFP_KERNEL);
+    if (!cache->buckets) {
+        return -ENOMEM;
+    }
+
+    // 初始化哈希桶
+    for (i = 0; i < num_buckets; i++) {
+        INIT_HLIST_HEAD(&cache->buckets[i]);
+    }
+
+    spin_lock_init(&cache->lock);
+    atomic_set(&cache->entries, 0);
+    atomic_set(&cache->hits, 0);
+    atomic_set(&cache->misses, 0);
+    cache->num_buckets = num_buckets;
+
+    return 0;
+}
+
+// 路径哈希函数
+static inline unsigned int path_hash(const char* path, int num_buckets) {
+    unsigned int hash = 0;
+    while (*path) {
+        hash = (hash << 5) + *path++;
+    }
+    return hash % num_buckets;
+}
+
+// 查找路径缓存
+struct path* lookup_path_cache(path_cache* cache, const char* path) {
+    unsigned int hash = path_hash(path, cache->num_buckets);
+    struct path_cache_entry* entry;
+    struct hlist_node* pos;
+    unsigned long flags;
+
+    spin_lock_irqsave(&cache->lock, flags);
+
+    // 遍历哈希链表
+    hlist_for_each_entry(entry, pos, &cache->buckets[hash], hash_node) {
+        if (strcmp(entry->path, path) == 0) {
+            // 找到缓存条目
+            atomic_inc(&cache->hits);
+            entry->last_access = jiffies;
+
+            // 创建路径副本
+            struct path* result = kmalloc(sizeof(struct path), GFP_ATOMIC);
+            if (result) {
+                *result = (struct path){
+                    .dentry = entry->dentry,
+                    .mnt = entry->mnt
+                };
+                path_get(result);
+            }
+
+            spin_unlock_irqrestore(&cache->lock, flags);
+            return result;
+        }
+    }
+
+    // 缓存未命中
+    atomic_inc(&cache->misses);
+    spin_unlock_irqrestore(&cache->lock, flags);
+
+    return NULL;
+}
+
+// 添加路径缓存
+int add_path_cache(path_cache* cache, const char* path,
+                 struct dentry* dentry, struct vfsmount* mnt) {
+    unsigned int hash = path_hash(path, cache->num_buckets);
+    path_cache_entry* entry;
+    unsigned long flags;
+
+    // 检查是否已存在
+    if (lookup_path_cache(cache, path)) {
+        return 0;
+    }
+
+    // 创建缓存条目
+    entry = kmalloc(sizeof(path_cache_entry), GFP_KERNEL);
+    if (!entry) {
+        return -ENOMEM;
+    }
+
+    entry->path = kstrdup(path, GFP_KERNEL);
+    if (!entry->path) {
+        kfree(entry);
+        return -ENOMEM;
+    }
+
+    entry->dentry = dentry;
+    entry->mnt = mnt;
+    entry->last_access = jiffies;
+    atomic_set(&entry->ref_count, 1);
+
+    spin_lock_irqsave(&cache->lock, flags);
+
+    // 添加到哈希表
+    hlist_add_head(&entry->hash_node, &cache->buckets[hash]);
+    atomic_inc(&cache->entries);
+
+    spin_unlock_irqrestore(&cache->lock, flags);
+
+    return 0;
+}
+
+// 清理路径缓存
+void cleanup_path_cache(path_cache* cache) {
+    int i;
+    struct path_cache_entry* entry;
+    struct hlist_node* pos, *tmp;
+    unsigned long flags;
+
+    printk(KERN_INFO "清理路径缓存\n");
+
+    spin_lock_irqsave(&cache->lock, flags);
+
+    // 清理所有哈希桶
+    for (i = 0; i < cache->num_buckets; i++) {
+        hlist_for_each_entry_safe(entry, pos, tmp, &cache->buckets[i], hash_node) {
+            hlist_del(&entry->hash_node);
+            kfree(entry->path);
+            kfree(entry);
+        }
+    }
+
+    spin_unlock_irqrestore(&cache->lock, flags);
+
+    kfree(cache->buckets);
+}
+```
+
+### 2. 文件系统实现
+
+#### 2.1 基本文件系统结构
+
+```c
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/mpage.h>
+#include <linux/iversion.h>
+
+// 文件系统超级块（磁盘上）
+typedef struct simplefs_super_block {
+    __le32 s_magic;                  // 文件系统魔数
+    __le32 s_blocks_count;           // 块总数
+    __le32 s_free_blocks_count;      // 空闲块数
+    __le32 s_inodes_count;           // inode总数
+    __le32 s_free_inodes_count;      // 空闲inode数
+    __le32 s_block_size;             // 块大小
+    __le32 s_inode_size;             // inode大小
+    __le32 s_first_data_block;       // 第一个数据块
+    __le32 s_blocks_per_group;       // 每组块数
+    __le32 s_inodes_per_group;       // 每组inode数
+    __le32 s_mtime;                  // 修改时间
+    __le32 s_wtime;                  // 写入时间
+    __le16 s_mnt_count;              // 挂载计数
+    __le16 s_max_mnt_count;          // 最大挂载计数
+    __le16 s_state;                  // 文件系统状态
+    __le16 s_errors;                 // 错误行为
+    __le32 s_last_check;             // 最后检查时间
+    __le32 s_check_interval;         // 检查间隔
+    __le32 s_creator_os;             // 创建者操作系统
+    __le32 s_rev_level;              // 修订级别
+    __le16 s_def_resuid;             // 默认保留用户ID
+    __le16 s_def_resgid;             // 默认保留组ID
+} simplefs_super_block;
+
+// 文件系统组描述符
+typedef struct simplefs_group_desc {
+    __le32 bg_block_bitmap;          // 块位图块号
+    __le32 bg_inode_bitmap;          // inode位图块号
+    __le32 bg_inode_table;           // inode表起始块号
+    __le16 bg_free_blocks_count;     // 空闲块数
+    __le16 bg_free_inodes_count;     // 空闲inode数
+    __le16 bg_used_dirs_count;       // 已用目录数
+    __le16 bg_pad;                   // 填充
+    __le32 bg_reserved[3];           // 保留
+} simplefs_group_desc;
+
+// 文件系统inode（磁盘上）
+typedef struct simplefs_inode {
+    __le16 i_mode;                   // 文件模式
+    __le16 i_uid;                    // 用户ID
+    __le32 i_size;                   // 文件大小
+    __le32 i_atime;                  // 访问时间
+    __le32 i_ctime;                  // 创建时间
+    __le32 i_mtime;                  // 修改时间
+    __le32 i_dtime;                  // 删除时间
+    __le16 i_gid;                    // 组ID
+    __le16 i_links_count;            // 链接数
+    __le32 i_blocks;                 // 块数
+    __le32 i_flags;                  // 标志
+    __le32 i_block[15];              // 数据块指针
+    __le32 i_generation;             // 生成号
+    __le32 i_file_acl;               // 文件ACL
+    __le32 i_dir_acl;                // 目录ACL
+    __le32 i_faddr;                  // 片段地址
+} simplefs_inode;
+
+// 文件系统目录项
+typedef struct simplefs_dir_entry {
+    __le32 inode;                    // inode号
+    __le16 rec_len;                  // 记录长度
+    __u8 name_len;                   // 名称长度
+    __u8 file_type;                  // 文件类型
+    char name[255];                  // 文件名
+} simplefs_dir_entry;
+
+// 文件系统内存中信息
+typedef struct simplefs_sb_info {
+    unsigned long s_sbh;             // 超级块缓冲区头
+    unsigned long s_group_desc;      // 组描述符
+    unsigned long s_inode_size;      // inode大小
+    unsigned long s_first_ino;        // 第一个inode号
+    unsigned long s_inode_per_group; // 每组inode数
+    unsigned long s_groups_count;    // 组数
+    unsigned long s_blocks_per_group; // 每组块数
+    unsigned long s_inodes_per_block; // 每块inode数
+    unsigned long s_itb_per_group;   // 每组inode表块数
+    unsigned long s_gdb_count;       // 组描述符块数
+    unsigned long s_desc_per_block;  // 每块组描述符数
+    unsigned long s_desc_per_block_bits; // 每块组描述符数位数
+    unsigned long s_inode_bitmap_number; // inode位图块号
+    unsigned long s_block_bitmap_number; // 块位图块号
+    struct buffer_head * s_sbh;      // 超级块缓冲区头
+    struct buffer_head ** s_group_desc; // 组描述符缓冲区头
+    struct simplefs_super_block * s_es; // 超级块
+    struct buffer_head * s_inode_bitmap; // inode位图缓冲区头
+    struct buffer_head * s_block_bitmap; // 块位图缓冲区头
+    struct rw_semaphore s_alloc_sem; // 分配信号量
+    spinlock_t s_lock;               // 文件系统锁
+    struct mutex s_resize_lock;      // 调整大小锁
+    unsigned long s_mount_state;     // 挂载状态
+    unsigned long s_mount_opt;       // 挂载选项
+    unsigned long s_resuid;          // 保留用户ID
+    unsigned long s_resgid;          // 保留组ID
+    unsigned short s_mount_flags;    // 挂载标志
+    unsigned short s_errors;         // 错误行为
+    unsigned char s_journal;         // 日志
+    unsigned char s_commit_interval;  // 提交间隔
+} simplefs_sb_info;
+
+// 文件系统inode内存信息
+typedef struct simplefs_inode_info {
+    __u32 i_data[15];                // 数据块指针
+    __u32 i_flags;                   // 标志
+    __u32 i_faddr;                   // 片段地址
+    __u8 i_frag;                     // 片段号
+    __u8 i_frag_size;                // 片段大小
+    __u16 i_state;                   // 状态
+    __u32 i_file_acl;                // 文件ACL
+    __u32 i_dir_acl;                 // 目录ACL
+    __u32 i_dtime;                   // 删除时间
+    struct mutex truncate_mutex;     // 截断互斥锁
+    struct inode vfs_inode;          // VFS inode
+} simplefs_inode_info;
+
+// 文件系统超级块操作
+static struct super_operations simplefs_sops = {
+    .alloc_inode = simplefs_alloc_inode,
+    .destroy_inode = simplefs_destroy_inode,
+    .write_inode = simplefs_write_inode,
+    .delete_inode = simplefs_delete_inode,
+    .put_super = simplefs_put_super,
+    .write_super = simplefs_write_super,
+    .statfs = simplefs_statfs,
+    .remount_fs = simplefs_remount,
+};
+
+// 文件系统inode操作
+static struct inode_operations simplefs_inode_ops = {
+    .lookup = simplefs_lookup,
+    .create = simplefs_create,
+    .link = simplefs_link,
+    .unlink = simplefs_unlink,
+    .symlink = simplefs_symlink,
+    .mkdir = simplefs_mkdir,
+    .rmdir = simplefs_rmdir,
+    .mknod = simplefs_mknod,
+    .rename = simplefs_rename,
+    .getattr = simplefs_getattr,
+    .setattr = simplefs_setattr,
+};
+
+// 文件系统文件操作
+static struct file_operations simplefs_file_ops = {
+    .llseek = generic_file_llseek,
+    .read = new_sync_read,
+    .write = new_sync_write,
+    .read_iter = generic_file_read_iter,
+    .write_iter = generic_file_write_iter,
+    .mmap = generic_file_mmap,
+    .open = generic_file_open,
+    .fsync = simplefs_sync_file,
+    .splice_read = generic_file_splice_read,
+    .splice_write = iter_file_splice_write,
+};
+
+// 文件系统目录操作
+static struct file_operations simplefs_dir_ops = {
+    .llseek = generic_file_llseek,
+    .read = generic_read_dir,
+    .iterate = simplefs_readdir,
+    .fsync = simplefs_sync_file,
+    .unlocked_ioctl = simplefs_ioctl,
+    .compat_ioctl = simplefs_compat_ioctl,
+};
+
+// 分配inode
+static struct inode *simplefs_alloc_inode(struct super_block *sb) {
+    struct simplefs_inode_info *ei;
+
+    ei = kmem_cache_alloc(simplefs_inode_cachep, GFP_KERNEL);
+    if (!ei)
+        return NULL;
+
+    ei->i_flags = 0;
+    ei->i_faddr = 0;
+    ei->i_frag = 0;
+    ei->i_frag_size = 0;
+    ei->i_file_acl = 0;
+    ei->i_dir_acl = 0;
+    ei->i_dtime = 0;
+    mutex_init(&ei->truncate_mutex);
+
+    return &ei->vfs_inode;
+}
+
+// 销毁inode
+static void simplefs_destroy_inode(struct inode *inode) {
+    struct simplefs_inode_info *ei = SIMPLEFS_I(inode);
+
+    mutex_destroy(&ei->truncate_mutex);
+    kmem_cache_free(simplefs_inode_cachep, ei);
+}
+
+// 读取inode
+static struct inode *simplefs_iget(struct super_block *sb, unsigned long ino) {
+    struct simplefs_inode_info *ei;
+    struct buffer_head *bh;
+    struct simplefs_inode *raw_inode;
+    struct inode *inode;
+    long ret = -EIO;
+
+    inode = iget_locked(sb, ino);
+    if (!inode)
+        return ERR_PTR(-ENOMEM);
+    if (!(inode->i_state & I_NEW))
+        return inode;
+
+    ei = SIMPLEFS_I(inode);
+
+    // 读取inode数据块
+    bh = sb_bread(sb, simplefs_inode_to_block(inode));
+    if (!bh) {
+        ret = -EIO;
+        goto bad_inode;
+    }
+
+    raw_inode = (struct simplefs_inode *)(bh->b_data +
+               simplefs_inode_offset(inode));
+
+    // 设置inode属性
+    inode->i_mode = le16_to_cpu(raw_inode->i_mode);
+    i_uid_write(inode, le16_to_cpu(raw_inode->i_uid));
+    i_gid_write(inode, le16_to_cpu(raw_inode->i_gid));
+    inode->i_size = le32_to_cpu(raw_inode->i_size);
+    inode->i_atime.tv_sec = le32_to_cpu(raw_inode->i_atime);
+    inode->i_ctime.tv_sec = le32_to_cpu(raw_inode->i_ctime);
+    inode->i_mtime.tv_sec = le32_to_cpu(raw_inode->i_mtime);
+    inode->i_atime.tv_nsec = 0;
+    inode->i_ctime.tv_nsec = 0;
+    inode->i_mtime.tv_nsec = 0;
+    inode->i_blocks = le32_to_cpu(raw_inode->i_blocks);
+    ei->i_flags = le32_to_cpu(raw_inode->i_flags);
+    ei->i_faddr = le32_to_cpu(raw_inode->i_faddr);
+    ei->i_file_acl = le32_to_cpu(raw_inode->i_file_acl);
+    ei->i_dir_acl = le32_to_cpu(raw_inode->i_dir_acl);
+    ei->i_dtime = le32_to_cpu(raw_inode->i_dtime);
+
+    // 复制数据块指针
+    memcpy(ei->i_data, raw_inode->i_block, sizeof(ei->i_data));
+
+    brelse(bh);
+
+    // 设置inode操作
+    if (S_ISREG(inode->i_mode)) {
+        inode->i_op = &simplefs_inode_ops;
+        inode->i_fop = &simplefs_file_ops;
+        inode->i_mapping->a_ops = &simplefs_aops;
+    } else if (S_ISDIR(inode->i_mode)) {
+        inode->i_op = &simplefs_inode_ops;
+        inode->i_fop = &simplefs_dir_ops;
+        inode->i_mapping->a_ops = &simplefs_aops;
+    } else if (S_ISLNK(inode->i_mode)) {
+        inode->i_op = &simplefs_inode_ops;
+        inode->i_fop = &simplefs_file_ops;
+    } else {
+        inode->i_op = &simplefs_inode_ops;
+        init_special_inode(inode, inode->i_mode, 0);
+    }
+
+    unlock_new_inode(inode);
+    return inode;
+
+bad_inode:
+    iget_failed(inode);
+    return ERR_PTR(ret);
+}
+
+// 写入inode
+static int simplefs_write_inode(struct inode *inode, struct writeback_control *wbc) {
+    struct simplefs_inode_info *ei = SIMPLEFS_I(inode);
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    struct simplefs_inode *raw_inode;
+
+    // 读取inode数据块
+    bh = sb_bread(sb, simplefs_inode_to_block(inode));
+    if (!bh)
+        return -EIO;
+
+    raw_inode = (struct simplefs_inode *)(bh->b_data +
+               simplefs_inode_offset(inode));
+
+    // 写入inode属性
+    raw_inode->i_mode = cpu_to_le16(inode->i_mode);
+    raw_inode->i_uid = cpu_to_le16(i_uid_read(inode));
+    raw_inode->i_gid = cpu_to_le16(i_gid_read(inode));
+    raw_inode->i_size = cpu_to_le32(inode->i_size);
+    raw_inode->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
+    raw_inode->i_ctime = cpu_to_le32(inode->i_ctime.tv_sec);
+    raw_inode->i_mtime = cpu_to_le32(inode->i_mtime.tv_sec);
+    raw_inode->i_blocks = cpu_to_le32(inode->i_blocks);
+    raw_inode->i_flags = cpu_to_le32(ei->i_flags);
+    raw_inode->i_faddr = cpu_to_le32(ei->i_faddr);
+    raw_inode->i_file_acl = cpu_to_le32(ei->i_file_acl);
+    raw_inode->i_dir_acl = cpu_to_le32(ei->i_dir_acl);
+    raw_inode->i_dtime = cpu_to_le32(ei->i_dtime);
+
+    // 写入数据块指针
+    memcpy(raw_inode->i_block, ei->i_data, sizeof(raw_inode->i_block));
+
+    // 标记缓冲区脏
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
+    return 0;
+}
+
+// 删除inode
+static void simplefs_delete_inode(struct inode *inode) {
+    struct simplefs_inode_info *ei = SIMPLEFS_I(inode);
+    struct simplefs_sb_info *sbi = SIMPLEFS_SB(inode->i_sb);
+
+    // 删除inode
+    simplefs_free_inode(inode);
+
+    // 更新超级块
+    mark_inode_dirty(inode);
+    simplefs_update_super(inode->i_sb);
+
+    // 清理inode
+    truncate_inode_pages(&inode->i_data, 0);
+    clear_inode(inode);
+}
+
+// 查找目录项
+static struct dentry *simplefs_lookup(struct inode *dir, struct dentry *dentry,
+                                     unsigned int flags) {
+    struct inode *inode = NULL;
+    ino_t ino;
+
+    if (dentry->d_name.len > SIMPLEFS_NAME_LEN)
+        return ERR_PTR(-ENAMETOOLONG);
+
+    // 在目录中查找inode号
+    ino = simplefs_inode_by_name(dir, &dentry->d_name);
+    if (ino) {
+        inode = simplefs_iget(dir->i_sb, ino);
+        if (IS_ERR(inode))
+            return ERR_CAST(inode);
+    }
+
+    d_add(dentry, inode);
+    return NULL;
+}
+
+// 创建目录项
+static int simplefs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+                          bool excl) {
+    struct inode *inode;
+    int err;
+
+    // 分配新inode
+    inode = simplefs_new_inode(dir, mode, &dentry->d_name);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+
+    // 添加目录项
+    err = simplefs_add_link(dentry, inode);
+    if (err) {
+        inode_dec_link_count(inode);
+        iput(inode);
+        return err;
+    }
+
+    // 初始化inode
+    inode->i_op = &simplefs_inode_ops;
+    inode->i_fop = &simplefs_file_ops;
+    inode->i_mapping->a_ops = &simplefs_aops;
+    mark_inode_dirty(inode);
+
+    // 设置dentry
+    d_instantiate(dentry, inode);
+    return 0;
+}
+```
+
+#### 2.2 块分配和位图管理
+
+```c
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/bitops.h>
+#include <linux/blkdev.h>
+
+// 块分配器
+typedef struct block_allocator {
+    struct super_block* sb;          // 超级块
+    struct simplefs_sb_info* sbi;     // 文件系统信息
+    struct buffer_head* bitmap_bh;    // 位图缓冲区
+    unsigned long* bitmap;           // 位图数据
+    unsigned long start_block;       // 起始块号
+    unsigned long total_blocks;      // 总块数
+    unsigned long free_blocks;       // 空闲块数
+    spinlock_t lock;                 // 分配器锁
+} block_allocator;
+
+// 初始化块分配器
+int init_block_allocator(block_allocator* ba, struct super_block* sb,
+                       unsigned long start_block, unsigned long total_blocks) {
+    struct simplefs_sb_info* sbi = SIMPLEFS_SB(sb);
+    struct buffer_head* bh;
+    unsigned long bitmap_size;
+
+    printk(KERN_INFO "初始化块分配器\n");
+
+    // 计算位图大小
+    bitmap_size = (total_blocks + BITS_PER_LONG - 1) / BITS_PER_LONG;
+
+    // 读取位图块
+    bh = sb_bread(sb, start_block);
+    if (!bh) {
+        printk(KERN_ERR "无法读取位图块\n");
+        return -EIO;
+    }
+
+    // 初始化分配器
+    ba->sb = sb;
+    ba->sbi = sbi;
+    ba->bitmap_bh = bh;
+    ba->bitmap = (unsigned long*)bh->b_data;
+    ba->start_block = start_block + 1; // 跳过位图块
+    ba->total_blocks = total_blocks - 1;
+    ba->free_blocks = total_blocks - 1;
+    spin_lock_init(&ba->lock);
+
+    // 统计空闲块数
+    ba->free_blocks = count_free_blocks(ba);
+
+    printk(KERN_INFO "块分配器初始化成功，总块数: %lu，空闲块数: %lu\n",
+           ba->total_blocks, ba->free_blocks);
+
+    return 0;
+}
+
+// 统计空闲块数
+unsigned long count_free_blocks(block_allocator* ba) {
+    unsigned long count = 0;
+    unsigned long i;
+
+    for (i = 0; i < ba->total_blocks; i++) {
+        if (!test_bit(i, ba->bitmap)) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+// 分配块
+unsigned long allocate_block(block_allocator* ba) {
+    unsigned long block;
+    unsigned long flags;
+
+    spin_lock_irqsave(&ba->lock, flags);
+
+    // 查找空闲块
+    block = find_first_zero_bit(ba->bitmap, ba->total_blocks);
+    if (block >= ba->total_blocks) {
+        spin_unlock_irqrestore(&ba->lock, flags);
+        return 0;  // 无空闲块
+    }
+
+    // 标记块为已使用
+    set_bit(block, ba->bitmap);
+    ba->free_blocks--;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ba->bitmap_bh);
+
+    spin_unlock_irqrestore(&ba->lock, flags);
+
+    printk(KERN_INFO "分配块: %lu\n", block);
+    return ba->start_block + block;
+}
+
+// 释放块
+void free_block(block_allocator* ba, unsigned long block_num) {
+    unsigned long block_offset;
+    unsigned long flags;
+
+    // 检查块号是否有效
+    if (block_num < ba->start_block ||
+        block_num >= ba->start_block + ba->total_blocks) {
+        printk(KERN_ERR "无效的块号: %lu\n", block_num);
+        return;
+    }
+
+    block_offset = block_num - ba->start_block;
+
+    spin_lock_irqsave(&ba->lock, flags);
+
+    // 检查块是否已空闲
+    if (!test_bit(block_offset, ba->bitmap)) {
+        printk(KERN_ERR "块 %lu 已经空闲\n", block_num);
+        spin_unlock_irqrestore(&ba->lock, flags);
+        return;
+    }
+
+    // 标记块为空闲
+    clear_bit(block_offset, ba->bitmap);
+    ba->free_blocks++;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ba->bitmap_bh);
+
+    spin_unlock_irqrestore(&ba->lock, flags);
+
+    printk(KERN_INFO "释放块: %lu\n", block_num);
+}
+
+// 批量分配块
+int allocate_blocks(block_allocator* ba, unsigned long* blocks,
+                   unsigned long count) {
+    unsigned long i;
+    unsigned long flags;
+
+    spin_lock_irqsave(&ba->lock, flags);
+
+    // 检查是否有足够的空闲块
+    if (ba->free_blocks < count) {
+        spin_unlock_irqrestore(&ba->lock, flags);
+        return -ENOSPC;
+    }
+
+    // 分配块
+    for (i = 0; i < count; i++) {
+        unsigned long block = find_first_zero_bit(ba->bitmap, ba->total_blocks);
+        if (block >= ba->total_blocks) {
+            // 分配失败，回滚已分配的块
+            unsigned long j;
+            for (j = 0; j < i; j++) {
+                clear_bit(blocks[j] - ba->start_block, ba->bitmap);
+            }
+            spin_unlock_irqrestore(&ba->lock, flags);
+            return -ENOSPC;
+        }
+
+        // 标记块为已使用
+        set_bit(block, ba->bitmap);
+        blocks[i] = ba->start_block + block;
+    }
+
+    ba->free_blocks -= count;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ba->bitmap_bh);
+
+    spin_unlock_irqrestore(&ba->lock, flags);
+
+    printk(KERN_INFO "批量分配 %lu 个块\n", count);
+    return 0;
+}
+
+// 批量释放块
+void free_blocks(block_allocator* ba, unsigned long* blocks,
+                unsigned long count) {
+    unsigned long i;
+    unsigned long flags;
+
+    spin_lock_irqsave(&ba->lock, flags);
+
+    // 释放块
+    for (i = 0; i < count; i++) {
+        unsigned long block_offset = blocks[i] - ba->start_block;
+
+        // 检查块号是否有效
+        if (block_offset >= ba->total_blocks) {
+            printk(KERN_ERR "无效的块号: %lu\n", blocks[i]);
+            continue;
+        }
+
+        // 检查块是否已空闲
+        if (!test_bit(block_offset, ba->bitmap)) {
+            printk(KERN_ERR "块 %lu 已经空闲\n", blocks[i]);
+            continue;
+        }
+
+        // 标记块为空闲
+        clear_bit(block_offset, ba->bitmap);
+    }
+
+    ba->free_blocks += count;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ba->bitmap_bh);
+
+    spin_unlock_irqrestore(&ba->lock, flags);
+
+    printk(KERN_INFO "批量释放 %lu 个块\n", count);
+}
+
+// 获取分配器统计信息
+void get_allocator_stats(block_allocator* ba, struct block_allocator_stats* stats) {
+    unsigned long flags;
+
+    spin_lock_irqsave(&ba->lock, flags);
+
+    stats->total_blocks = ba->total_blocks;
+    stats->free_blocks = ba->free_blocks;
+    stats->used_blocks = ba->total_blocks - ba->free_blocks;
+    stats->utilization = (float)(ba->total_blocks - ba->free_blocks) / ba->total_blocks;
+
+    spin_unlock_irqrestore(&ba->lock, flags);
+}
+
+// 清理块分配器
+void cleanup_block_allocator(block_allocator* ba) {
+    printk(KERN_INFO "清理块分配器\n");
+
+    if (ba->bitmap_bh) {
+        brelse(ba->bitmap_bh);
+    }
+
+    printk(KERN_INFO "块分配器清理完成\n");
+}
+
+// inode分配器
+typedef struct inode_allocator {
+    struct super_block* sb;          // 超级块
+    struct simplefs_sb_info* sbi;     // 文件系统信息
+    struct buffer_head* bitmap_bh;    // 位图缓冲区
+    unsigned long* bitmap;           // 位图数据
+    unsigned long start_ino;          // 起始inode号
+    unsigned long total_inodes;      // 总inode数
+    unsigned long free_inodes;       // 空闲inode数
+    spinlock_t lock;                 // 分配器锁
+} inode_allocator;
+
+// 初始化inode分配器
+int init_inode_allocator(inode_allocator* ia, struct super_block* sb,
+                        unsigned long start_ino, unsigned long total_inodes) {
+    struct simplefs_sb_info* sbi = SIMPLEFS_SB(sb);
+    struct buffer_head* bh;
+    unsigned long bitmap_size;
+
+    printk(KERN_INFO "初始化inode分配器\n");
+
+    // 计算位图大小
+    bitmap_size = (total_inodes + BITS_PER_LONG - 1) / BITS_PER_LONG;
+
+    // 读取位图块
+    bh = sb_bread(sb, start_ino);
+    if (!bh) {
+        printk(KERN_ERR "无法读取inode位图块\n");
+        return -EIO;
+    }
+
+    // 初始化分配器
+    ia->sb = sb;
+    ia->sbi = sbi;
+    ia->bitmap_bh = bh;
+    ia->bitmap = (unsigned long*)bh->b_data;
+    ia->start_ino = start_ino + 1; // 跳过位图块
+    ia->total_inodes = total_inodes - 1;
+    ia->free_inodes = total_inodes - 1;
+    spin_lock_init(&ia->lock);
+
+    // 统计空闲inode数
+    ia->free_inodes = count_free_inodes(ia);
+
+    printk(KERN_INFO "inode分配器初始化成功，总数: %lu，空闲数: %lu\n",
+           ia->total_inodes, ia->free_inodes);
+
+    return 0;
+}
+
+// 统计空闲inode数
+unsigned long count_free_inodes(inode_allocator* ia) {
+    unsigned long count = 0;
+    unsigned long i;
+
+    for (i = 0; i < ia->total_inodes; i++) {
+        if (!test_bit(i, ia->bitmap)) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
+// 分配inode
+unsigned long allocate_inode(inode_allocator* ia) {
+    unsigned long ino;
+    unsigned long flags;
+
+    spin_lock_irqsave(&ia->lock, flags);
+
+    // 查找空闲inode
+    ino = find_first_zero_bit(ia->bitmap, ia->total_inodes);
+    if (ino >= ia->total_inodes) {
+        spin_unlock_irqrestore(&ia->lock, flags);
+        return 0;  // 无空闲inode
+    }
+
+    // 标记inode为已使用
+    set_bit(ino, ia->bitmap);
+    ia->free_inodes--;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ia->bitmap_bh);
+
+    spin_unlock_irqrestore(&ia->lock, flags);
+
+    printk(KERN_INFO "分配inode: %lu\n", ino);
+    return ia->start_ino + ino;
+}
+
+// 释放inode
+void free_inode(inode_allocator* ia, unsigned long ino) {
+    unsigned long ino_offset;
+    unsigned long flags;
+
+    // 检查inode号是否有效
+    if (ino < ia->start_ino ||
+        ino >= ia->start_ino + ia->total_inodes) {
+        printk(KERN_ERR "无效的inode号: %lu\n", ino);
+        return;
+    }
+
+    ino_offset = ino - ia->start_ino;
+
+    spin_lock_irqsave(&ia->lock, flags);
+
+    // 检查inode是否已空闲
+    if (!test_bit(ino_offset, ia->bitmap)) {
+        printk(KERN_ERR "inode %lu 已经空闲\n", ino);
+        spin_unlock_irqrestore(&ia->lock, flags);
+        return;
+    }
+
+    // 标记inode为空闲
+    clear_bit(ino_offset, ia->bitmap);
+    ia->free_inodes++;
+
+    // 标记缓冲区为脏
+    mark_buffer_dirty(ia->bitmap_bh);
+
+    spin_unlock_irqrestore(&ia->lock, flags);
+
+    printk(KERN_INFO "释放inode: %lu\n", ino);
+}
+
+// 获取inode分配器统计信息
+void get_inode_allocator_stats(inode_allocator* ia, struct inode_allocator_stats* stats) {
+    unsigned long flags;
+
+    spin_lock_irqsave(&ia->lock, flags);
+
+    stats->total_inodes = ia->total_inodes;
+    stats->free_inodes = ia->free_inodes;
+    stats->used_inodes = ia->total_inodes - ia->free_inodes;
+    stats->utilization = (float)(ia->total_inodes - ia->free_inodes) / ia->total_inodes;
+
+    spin_unlock_irqrestore(&ia->lock, flags);
+}
+
+// 清理inode分配器
+void cleanup_inode_allocator(inode_allocator* ia) {
+    printk(KERN_INFO "清理inode分配器\n");
+
+    if (ia->bitmap_bh) {
+        brelse(ia->bitmap_bh);
+    }
+
+    printk(KERN_INFO "inode分配器清理完成\n");
+}
+```
+
+### 3. 日志文件系统
+
+#### 3.1 日志结构和提交机制
+
+```c
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/jbd2.h>
+#include <linux/blkdev.h>
+
+// 日志块大小
+#define JOURNAL_BLOCK_SIZE 4096
+#define JOURNAL_HEADER_MAGIC 0xC03B3998
+#define JOURNAL_DESCRIPTOR_BLOCK 1
+#define JOURNAL_COMMIT_BLOCK 2
+
+// 日志头部
+typedef struct journal_header {
+    __le32 h_magic;                  // 日志魔数
+    __le32 h_blocktype;              // 块类型
+    __le32 h_sequence;               // 序列号
+} journal_header;
+
+// 日志描述符块
+typedef struct journal_descriptor {
+    journal_header jd_header;        // 日志头部
+    __le32 jd_nr_blocks;             // 数据块数量
+    __le32 jd_block[1];              // 数据块号数组
+} journal_descriptor;
+
+// 日志提交块
+typedef struct journal_commit {
+    journal_header jc_header;        // 日志头部
+    __le32 jc_checksum;              // 校验和
+    __le32 jc_padding[508];          // 填充
+} journal_commit;
+
+// 日志超级块
+typedef struct journal_superblock {
+    journal_header js_header;        // 日志头部
+    __le32 js_blocksize;             // 日志块大小
+    __le32 js_total_blocks;          // 日志总块数
+    __le32 js_first_block;           // 第一个日志块
+    __le32 js_last_block;            // 最后一个日志块
+    __le32 js_first_commit_id;       // 第一个提交ID
+    __le32 js_start;                 // 日志起始位置
+    __le32 js_sequence;              // 当前序列号
+    __le32 js_tail;                  // 日志尾部位置
+} journal_superblock;
+
+// 日志事务
+typedef struct journal_transaction {
+    struct list_head t_list;         // 事务链表
+    unsigned int t_tid;              // 事务ID
+    atomic_t t_updates;              // 更新计数
+    atomic_t t_outstanding_credits;   // 未完成信用
+    struct list_head t_buffers;      // 缓冲区列表
+    struct list_head t_inode_list;   // inode列表
+    struct list_head t_shadow_list;  // 影子缓冲区列表
+    struct journal* t_journal;       // 日志结构
+    unsigned long t_start_time;      // 开始时间
+    unsigned long t_state;           // 事务状态
+    struct work_struct t_work;       // 工作队列
+} journal_transaction;
+
+// 日志缓冲区
+typedef struct journal_buffer {
+    struct buffer_head* bh;          // 缓冲区头
+    struct journal_transaction* b_transaction; // 所属事务
+    struct list_head b_list;         // 缓冲区链表
+    unsigned long b_blocknr;         // 块号
+    unsigned long b_orig_blocknr;    // 原始块号
+    unsigned int b_orig_jh;         // 原始日志头
+    unsigned int b_jcount;           // 日志计数
+    unsigned int b_jdirty;           // 脏标志
+    unsigned int b_frozen;           // 冻结标志
+    struct journal_head* b_jh;       // 日志头
+} journal_buffer;
+
+// 日志结构
+typedef struct journal {
+    struct block_device* j_dev;      // 日志设备
+    struct super_block* j_fs_dev;    // 文件系统设备
+    struct journal_superblock* j_superblock; // 日志超级块
+    struct buffer_head* j_sb_buffer;  // 日志超级块缓冲区
+    struct list_head t_list;         // 事务列表
+    struct list_head t_locked_list;   // 锁定事务列表
+    struct list_head t_running_list;  // 运行事务列表
+    struct list_head t_checkpoint_list; // 检查点列表
+    spinlock_t j_list_lock;          // 列表锁
+    spinlock_t j_state_lock;         // 状态锁
+    struct mutex j_checkpoint_mutex; // 检查点互斥锁
+    wait_queue_head_t j_wait_commit; // 提交等待队列
+    wait_queue_head_t j_wait_updates; // 更新等待队列
+    wait_queue_head_t j_wait_checkpoint; // 检查点等待队列
+    unsigned int j_blocksize;         // 日志块大小
+    unsigned int j_blocksize_bits;   // 日志块大小位数
+    unsigned int j_max_transaction_buffers; // 最大事务缓冲区数
+    unsigned int j_commit_interval;   // 提交间隔
+    unsigned int j_commit_timeout;    // 提交超时
+    unsigned long j_tail;             // 日志尾部
+    unsigned long j_head;             // 日志头部
+    unsigned long j_free;             // 空闲空间
+    unsigned long j_first;            // 第一个事务
+    unsigned long j_last;             // 最后一个事务
+    unsigned long j_sequence;         // 当前序列号
+    atomic_t j_task_credits;          // 任务信用
+    atomic_t j_reserved_credits;     // 保留信用
+    atomic_t j_barrier_count;         // 屏障计数
+    unsigned long j_flags;            // 日志标志
+    struct timer_list j_commit_timer; // 提交定时器
+    struct work_struct j_revoke_work; // 撤销工作
+    struct work_struct j_checkpoint_work; // 检查点工作
+    struct proc_dir_entry* j_proc_entry; // /proc条目
+    char* j_devname;                 // 设备名称
+    struct kobject j_kobj;           // kobject
+    struct completion j_checkpoint_done; // 检查点完成
+    struct completion j_done;         // 日志完成
+} journal;
+
+// 事务状态
+typedef enum {
+    T_RUNNING,                       // 运行中
+    T_LOCKED,                        // 已锁定
+    T_FLUSH,                         // 刷新中
+    T_COMMIT,                        // 提交中
+    T_FINISHED,                      // 已完成
+    T_DELETED                        // 已删除
+} transaction_state;
+
+// 初始化日志
+journal* journal_init(struct block_device* bdev, struct super_block* fs_dev,
+                     int blocksize) {
+    journal* j;
+    struct buffer_head* bh;
+    journal_superblock* jsb;
+    int err;
+
+    printk(KERN_INFO "初始化日志\n");
+
+    // 分配日志结构
+    j = kzalloc(sizeof(journal), GFP_KERNEL);
+    if (!j) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    // 设置基本参数
+    j->j_dev = bdev;
+    j->j_fs_dev = fs_dev;
+    j->j_blocksize = blocksize;
+    j->j_blocksize_bits = ilog2(blocksize);
+
+    // 读取日志超级块
+    bh = __bread(bdev, 1, blocksize);
+    if (!bh) {
+        err = -EIO;
+        goto fail;
+    }
+
+    jsb = (journal_superblock*)bh->b_data;
+
+    // 检查日志魔数
+    if (be32_to_cpu(jsb->js_header.h_magic) != JOURNAL_HEADER_MAGIC) {
+        printk(KERN_ERR "无效的日志魔数\n");
+        err = -EINVAL;
+        goto fail_bh;
+    }
+
+    // 验证日志块大小
+    if (be32_to_cpu(jsb->js_blocksize) != blocksize) {
+        printk(KERN_ERR "日志块大小不匹配\n");
+        err = -EINVAL;
+        goto fail_bh;
+    }
+
+    // 设置日志参数
+    j->j_superblock = jsb;
+    j->j_sb_buffer = bh;
+    j->j_max_transaction_buffers = 32;
+    j->j_commit_interval = 5 * HZ;
+    j->j_commit_timeout = 30 * HZ;
+
+    // 初始化链表和锁
+    INIT_LIST_HEAD(&j->t_list);
+    INIT_LIST_HEAD(&j->t_locked_list);
+    INIT_LIST_HEAD(&j->t_running_list);
+    INIT_LIST_HEAD(&j->t_checkpoint_list);
+    spin_lock_init(&j->j_list_lock);
+    spin_lock_init(&j->j_state_lock);
+    mutex_init(&j->j_checkpoint_mutex);
+
+    // 初始化等待队列
+    init_waitqueue_head(&j->j_wait_commit);
+    init_waitqueue_head(&j->j_wait_updates);
+    init_waitqueue_head(&j->j_wait_checkpoint);
+
+    // 初始化定时器和工作队列
+    setup_timer(&j->j_commit_timer, journal_commit_timer, (unsigned long)j);
+    INIT_WORK(&j->j_revoke_work, journal_revoke_work);
+    INIT_WORK(&j->j_checkpoint_work, journal_checkpoint_work);
+
+    // 初始化完成量
+    init_completion(&j->j_checkpoint_done);
+    init_completion(&j->j_done);
+
+    printk(KERN_INFO "日志初始化成功\n");
+    return j;
+
+fail_bh:
+    brelse(bh);
+fail:
+    kfree(j);
+    return ERR_PTR(err);
+}
+
+// 创建新事务
+journal_transaction* journal_new_transaction(journal* j) {
+    journal_transaction* transaction;
+    unsigned long flags;
+
+    // 分配事务结构
+    transaction = kzalloc(sizeof(journal_transaction), GFP_KERNEL);
+    if (!transaction) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    // 初始化事务
+    INIT_LIST_HEAD(&transaction->t_buffers);
+    INIT_LIST_HEAD(&transaction->t_inode_list);
+    INIT_LIST_HEAD(&transaction->t_shadow_list);
+    transaction->t_journal = j;
+    transaction->t_state = T_RUNNING;
+    transaction->t_start_time = jiffies;
+    INIT_WORK(&transaction->t_work, journal_transaction_work);
+
+    // 获取序列号
+    spin_lock_irqsave(&j->j_state_lock, flags);
+    transaction->t_tid = ++j->j_sequence;
+    atomic_set(&transaction->t_updates, 0);
+    atomic_set(&transaction->t_outstanding_credits, 0);
+    list_add_tail(&transaction->t_list, &j->t_running_list);
+    spin_unlock_irqrestore(&j->j_state_lock, flags);
+
+    printk(KERN_INFO "创建新事务: %u\n", transaction->t_tid);
+    return transaction;
+}
+
+// 添加缓冲区到事务
+int journal_add_buffer(journal_transaction* transaction, struct buffer_head* bh) {
+    journal_buffer* jb;
+    unsigned long flags;
+
+    // 检查缓冲区是否已在事务中
+    if (buffer_jbd(bh)) {
+        return 0;
+    }
+
+    // 分配日志缓冲区
+    jb = kzalloc(sizeof(journal_buffer), GFP_KERNEL);
+    if (!jb) {
+        return -ENOMEM;
+    }
+
+    // 设置日志缓冲区
+    jb->bh = bh;
+    jb->b_transaction = transaction;
+    jb->b_blocknr = bh->b_blocknr;
+    jb->b_orig_blocknr = bh->b_blocknr;
+    jb->b_orig_jh = 0;
+    jb->b_jcount = 1;
+    jb->b_jdirty = 0;
+    jb->b_frozen = 0;
+
+    // 关联日志头
+    bh->b_private = jb;
+    set_buffer_jbd(bh);
+
+    // 添加到事务列表
+    spin_lock_irqsave(&transaction->t_journal->j_list_lock, flags);
+    list_add_tail(&jb->b_list, &transaction->t_buffers);
+    atomic_inc(&transaction->t_updates);
+    spin_unlock_irqrestore(&transaction->t_journal->j_list_lock, flags);
+
+    return 0;
+}
+
+// 提交事务
+int journal_commit_transaction(journal_transaction* transaction) {
+    journal* j = transaction->t_journal;
+    unsigned long flags;
+    int err = 0;
+
+    printk(KERN_INFO "提交事务: %u\n", transaction->t_tid);
+
+    // 检查事务状态
+    spin_lock_irqsave(&j->j_state_lock, flags);
+    if (transaction->t_state != T_RUNNING) {
+        spin_unlock_irqrestore(&j->j_state_lock, flags);
+        return -EINVAL;
+    }
+
+    // 设置事务状态为提交中
+    transaction->t_state = T_COMMIT;
+    spin_unlock_irqrestore(&j->j_state_lock, flags);
+
+    // 写入日志
+    err = journal_write_transaction(transaction);
+    if (err) {
+        printk(KERN_ERR "写入日志失败: %d\n", err);
+        return err;
+    }
+
+    // 等待写入完成
+    err = journal_wait_transaction(transaction);
+    if (err) {
+        printk(KERN_ERR "等待事务完成失败: %d\n", err);
+        return err;
+    }
+
+    // 检查点处理
+    journal_checkpoint_transaction(transaction);
+
+    // 清理事务
+    journal_cleanup_transaction(transaction);
+
+    printk(KERN_INFO "事务提交完成: %u\n", transaction->t_tid);
+    return 0;
+}
+
+// 写入事务到日志
+int journal_write_transaction(journal_transaction* transaction) {
+    journal* j = transaction->t_journal;
+    journal_descriptor* jd;
+    journal_commit* jc;
+    struct buffer_head* desc_bh, *commit_bh;
+    struct list_head* entry;
+    journal_buffer* jb;
+    unsigned long desc_block, commit_block;
+    int err = 0;
+
+    printk(KERN_INFO "写入事务到日志\n");
+
+    // 分配描述符块
+    desc_block = journal_alloc_block(j);
+    if (!desc_block) {
+        return -ENOSPC;
+    }
+
+    desc_bh = __getblk(j->j_dev, desc_block, j->j_blocksize);
+    if (!desc_bh) {
+        return -ENOMEM;
+    }
+
+    // 分配提交块
+    commit_block = journal_alloc_block(j);
+    if (!commit_block) {
+        brelse(desc_bh);
+        return -ENOSPC;
+    }
+
+    commit_bh = __getblk(j->j_dev, commit_block, j->j_blocksize);
+    if (!commit_bh) {
+        brelse(desc_bh);
+        return -ENOMEM;
+    }
+
+    // 准备描述符块
+    jd = (journal_descriptor*)desc_bh->b_data;
+    memset(jd, 0, j->j_blocksize);
+    jd->jd_header.h_magic = cpu_to_be32(JOURNAL_HEADER_MAGIC);
+    jd->jd_header.h_blocktype = cpu_to_be32(JOURNAL_DESCRIPTOR_BLOCK);
+    jd->jd_header.h_sequence = cpu_to_be32(transaction->t_tid);
+
+    // 添加数据块信息
+    jd->jd_nr_blocks = 0;
+    list_for_each(entry, &transaction->t_buffers) {
+        jb = list_entry(entry, journal_buffer, b_list);
+        if (jd->jd_nr_blocks < JOURNAL_MAX_BLOCKS - 1) {
+            jd->jd_block[jd->jd_nr_blocks++] = cpu_to_be32(jb->b_blocknr);
+        }
+    }
+
+    // 准备提交块
+    jc = (journal_commit*)commit_bh->b_data;
+    memset(jc, 0, j->j_blocksize);
+    jc->jc_header.h_magic = cpu_to_be32(JOURNAL_HEADER_MAGIC);
+    jc->jc_header.h_blocktype = cpu_to_be32(JOURNAL_COMMIT_BLOCK);
+    jc->jc_header.h_sequence = cpu_to_be32(transaction->t_tid);
+
+    // 计算校验和
+    jc->jc_checksum = journal_calculate_checksum((void*)jc, j->j_blocksize);
+
+    // 写入描述符块
+    err = journal_write_block(j, desc_bh);
+    if (err) {
+        brelse(desc_bh);
+        brelse(commit_bh);
+        return err;
+    }
+
+    // 写入数据块
+    list_for_each(entry, &transaction->t_buffers) {
+        jb = list_entry(entry, journal_buffer, b_list);
+        err = journal_write_block(j, jb->bh);
+        if (err) {
+            brelse(desc_bh);
+            brelse(commit_bh);
+            return err;
+        }
+    }
+
+    // 写入提交块
+    err = journal_write_block(j, commit_bh);
+    if (err) {
+        brelse(desc_bh);
+        brelse(commit_bh);
+        return err;
+    }
+
+    brelse(desc_bh);
+    brelse(commit_bh);
+
+    printk(KERN_INFO "事务写入完成\n");
+    return 0;
+}
+
+// 等待事务完成
+int journal_wait_transaction(journal_transaction* transaction) {
+    journal* j = transaction->t_journal;
+    int err = 0;
+
+    // 等待所有缓冲区写入完成
+    err = journal_wait_for_buffers(transaction);
+    if (err) {
+        return err;
+    }
+
+    // 等待提交完成
+    wait_event(j->j_wait_commit, transaction->t_state == T_FINISHED);
+
+    return 0;
+}
+
+// 检查点处理
+void journal_checkpoint_transaction(journal_transaction* transaction) {
+    journal* j = transaction->t_journal;
+    struct list_head* entry;
+    journal_buffer* jb;
+
+    printk(KERN_INFO "检查点处理事务: %u\n", transaction->t_tid);
+
+    // 将缓冲区写入文件系统
+    list_for_each(entry, &transaction->t_buffers) {
+        jb = list_entry(entry, journal_buffer, b_list);
+        mark_buffer_dirty(jb->bh);
+        sync_dirty_buffer(jb->bh);
+    }
+
+    // 更新日志超级块
+    spin_lock(&j->j_state_lock);
+    j->j_tail = j->j_head;
+    spin_unlock(&j->j_state_lock);
+
+    // 写入日志超级块
+    journal_write_superblock(j);
+
+    printk(KERN_INFO "检查点处理完成\n");
+}
+
+// 清理事务
+void journal_cleanup_transaction(journal_transaction* transaction) {
+    journal* j = transaction->t_journal;
+    struct list_head* entry, *temp;
+    journal_buffer* jb;
+    unsigned long flags;
+
+    printk(KERN_INFO "清理事务: %u\n", transaction->t_tid);
+
+    // 清理缓冲区
+    list_for_each_safe(entry, temp, &transaction->t_buffers) {
+        jb = list_entry(entry, journal_buffer, b_list);
+
+        // 清除日志标记
+        clear_buffer_jbd(jb->bh);
+        jb->bh->b_private = NULL;
+
+        // 从列表中移除
+        list_del(&jb->b_list);
+        kfree(jb);
+    }
+
+    // 从运行列表中移除
+    spin_lock_irqsave(&j->j_list_lock, flags);
+    list_del(&transaction->t_list);
+    spin_unlock_irqrestore(&j->j_list_lock, flags);
+
+    // 释放事务结构
+    kfree(transaction);
+
+    printk(KERN_INFO "事务清理完成\n");
+}
+
+// 销毁日志
+void journal_destroy(journal* j) {
+    printk(KERN_INFO "销毁日志\n");
+
+    // 停止定时器
+    del_timer_sync(&j->j_commit_timer);
+
+    // 取消工作队列
+    cancel_work_sync(&j->j_revoke_work);
+    cancel_work_sync(&j->j_checkpoint_work);
+
+    // 释放日志超级块缓冲区
+    if (j->j_sb_buffer) {
+        brelse(j->j_sb_buffer);
+    }
+
+    // 清理剩余事务
+    journal_cleanup_all_transactions(j);
+
+    // 释放日志结构
+    kfree(j);
+
+    printk(KERN_INFO "日志销毁完成\n");
+}
+```
+
+### 4. 分布式文件系统
+
+#### 4.1 分布式文件系统架构
+
+```c
+#include <linux/fs.h>
+#include <linux/net.h>
+#include <linux/inet.h>
+#include <linux/socket.h>
+#include <linux/workqueue.h>
+
+// 分布式文件系统节点类型
+typedef enum {
+    NODE_CLIENT,                     // 客户端节点
+    NODE_METADATA,                   // 元数据节点
+    NODE_DATA,                       // 数据节点
+    NODE_COORDINATOR                 // 协调节点
+} node_type;
+
+// 节点状态
+typedef enum {
+    NODE_UP,                         // 节点正常
+    NODE_DOWN,                       // 节点故障
+    NODE_RECOVERING,                 // 节点恢复中
+    NODE_MAINTENANCE                 // 节点维护中
+} node_status;
+
+// 分布式文件系统节点
+typedef struct dfs_node {
+    char node_id[64];                // 节点ID
+    char hostname[256];              // 主机名
+    struct sockaddr_in addr;         // 网络地址
+    node_type type;                  // 节点类型
+    node_status status;              // 节点状态
+    unsigned long last_heartbeat;    // 最后心跳时间
+    unsigned long join_time;         // 加入时间
+    struct list_head node_list;      // 节点链表
+    atomic_t ref_count;              // 引用计数
+    spinlock_t lock;                 // 节点锁
+    void* private_data;              // 私有数据
+} dfs_node;
+
+// 分布式文件系统配置
+typedef struct dfs_config {
+    int cluster_size;                // 集群大小
+    int replication_factor;          // 副本因子
+    int chunk_size;                 // 数据块大小
+    int metadata_replicas;           // 元数据副本数
+    int data_replicas;              // 数据副本数
+    int heartbeat_interval;         // 心跳间隔
+    int timeout;                    // 超时时间
+    int max_retries;                // 最大重试次数
+    int max_connections;            // 最大连接数
+    int buffer_size;                // 缓冲区大小
+    int compression_enabled;        // 压缩启用标志
+    int encryption_enabled;         // 加密启用标志
+    int checksum_enabled;           // 校验和启用标志
+} dfs_config;
+
+// 分布式文件系统
+typedef struct distributed_fs {
+    char fs_name[64];               // 文件系统名称
+    char cluster_name[64];           // 集群名称
+    dfs_config config;               // 配置
+    struct list_head nodes;          // 节点列表
+    struct list_head metadata_nodes; // 元数据节点列表
+    struct list_head data_nodes;     // 数据节点列表
+    dfs_node* local_node;           // 本地节点
+    struct socket** connections;     // 连接数组
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list heartbeat_timer; // 心跳定时器
+    struct timer_list gc_timer;      // 垃圾回收定时器
+    spinlock_t node_lock;            // 节点锁
+    spinlock_t connection_lock;      // 连接锁
+    struct mutex config_lock;        // 配置锁
+    atomic_t node_count;             // 节点计数
+    atomic_t connection_count;       // 连接计数
+    int initialized;                // 初始化标志
+    int running;                    // 运行标志
+} distributed_fs;
+
+// 分布式文件句柄
+typedef struct dfs_file_handle {
+    char file_id[128];              // 文件ID
+    char path[PATH_MAX];            // 文件路径
+    loff_t offset;                  // 文件偏移
+    int flags;                     // 打开标志
+    mode_t mode;                   // 文件模式
+    struct timespec open_time;      // 打开时间
+    struct timespec access_time;    // 访问时间
+    struct timespec modify_time;    // 修改时间
+    atomic_t ref_count;             // 引用计数
+    struct list_head chunk_list;    // 数据块列表
+    distributed_fs* dfs;           // 文件系统引用
+} dfs_file_handle;
+
+// 数据块信息
+typedef struct dfs_chunk {
+    char chunk_id[64];              // 数据块ID
+    char file_id[128];              // 文件ID
+    int chunk_index;                // 数据块索引
+    size_t chunk_size;              // 数据块大小
+    size_t actual_size;             // 实际大小
+    struct timespec create_time;    // 创建时间
+    struct timespec modify_time;    // 修改时间
+    char checksum[64];              // 校验和
+    struct list_head replica_list;   // 副本列表
+    struct list_head chunk_list;     // 数据块链表
+    atomic_t ref_count;             // 引用计数
+} dfs_chunk;
+
+// 数据块副本
+typedef struct dfs_chunk_replica {
+    dfs_node* node;                 // 存储节点
+    char replica_id[64];            // 副本ID
+    struct sockaddr_in addr;        // 节点地址
+    int replica_index;              // 副本索引
+    int status;                     // 副本状态
+    struct timespec last_sync;      // 最后同步时间
+    struct list_head replica_list;  // 副本链表
+} dfs_chunk_replica;
+
+// 初始化分布式文件系统
+int dfs_init(distributed_fs* dfs, const char* fs_name, const char* cluster_name,
+            const dfs_config* config) {
+    int err;
+
+    printk(KERN_INFO "初始化分布式文件系统: %s\n", fs_name);
+
+    // 设置基本参数
+    strncpy(dfs->fs_name, fs_name, sizeof(dfs->fs_name) - 1);
+    strncpy(dfs->cluster_name, cluster_name, sizeof(dfs->cluster_name) - 1);
+    memcpy(&dfs->config, config, sizeof(dfs_config));
+
+    // 初始化链表
+    INIT_LIST_HEAD(&dfs->nodes);
+    INIT_LIST_HEAD(&dfs->metadata_nodes);
+    INIT_LIST_HEAD(&dfs->data_nodes);
+
+    // 初始化锁和原子变量
+    spin_lock_init(&dfs->node_lock);
+    spin_lock_init(&dfs->connection_lock);
+    mutex_init(&dfs->config_lock);
+    atomic_set(&dfs->node_count, 0);
+    atomic_set(&dfs->connection_count, 0);
+
+    // 创建工作队列
+    dfs->workqueue = alloc_workqueue("dfs_workqueue", WQ_MEM_RECLAIM, 0);
+    if (!dfs->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        return -ENOMEM;
+    }
+
+    // 初始化定时器
+    setup_timer(&dfs->heartbeat_timer, dfs_heartbeat_timer, (unsigned long)dfs);
+    setup_timer(&dfs->gc_timer, dfs_gc_timer, (unsigned long)dfs);
+
+    // 分配连接数组
+    dfs->connections = kzalloc(config->max_connections * sizeof(struct socket*),
+                              GFP_KERNEL);
+    if (!dfs->connections) {
+        destroy_workqueue(dfs->workqueue);
+        return -ENOMEM;
+    }
+
+    // 初始化网络栈
+    err = dfs_init_network(dfs);
+    if (err) {
+        kfree(dfs->connections);
+        destroy_workqueue(dfs->workqueue);
+        return err;
+    }
+
+    // 发现集群节点
+    err = dfs_discover_nodes(dfs);
+    if (err) {
+        dfs_cleanup_network(dfs);
+        kfree(dfs->connections);
+        destroy_workqueue(dfs->workqueue);
+        return err;
+    }
+
+    // 启动心跳定时器
+    mod_timer(&dfs->heartbeat_timer, jiffies + config->heartbeat_interval * HZ);
+
+    // 启动垃圾回收定时器
+    mod_timer(&dfs->gc_timer, jiffies + 60 * HZ);
+
+    dfs->initialized = 1;
+    dfs->running = 1;
+
+    printk(KERN_INFO "分布式文件系统初始化成功: %s\n", fs_name);
+    return 0;
+}
+
+// 添加节点
+int dfs_add_node(distributed_fs* dfs, const char* node_id, const char* hostname,
+                struct sockaddr_in* addr, node_type type) {
+    dfs_node* node;
+    unsigned long flags;
+
+    printk(KERN_INFO "添加节点: %s (%s)\n", node_id, hostname);
+
+    // 分配节点结构
+    node = kzalloc(sizeof(dfs_node), GFP_KERNEL);
+    if (!node) {
+        return -ENOMEM;
+    }
+
+    // 设置节点信息
+    strncpy(node->node_id, node_id, sizeof(node->node_id) - 1);
+    strncpy(node->hostname, hostname, sizeof(node->hostname) - 1);
+    memcpy(&node->addr, addr, sizeof(struct sockaddr_in));
+    node->type = type;
+    node->status = NODE_UP;
+    node->join_time = jiffies;
+    node->last_heartbeat = jiffies;
+    atomic_set(&node->ref_count, 1);
+    spin_lock_init(&node->lock);
+
+    // 添加到节点列表
+    spin_lock_irqsave(&dfs->node_lock, flags);
+    list_add_tail(&node->node_list, &dfs->nodes);
+
+    // 根据类型添加到相应列表
+    switch (type) {
+        case NODE_METADATA:
+            list_add_tail(&node->node_list, &dfs->metadata_nodes);
+            break;
+        case NODE_DATA:
+            list_add_tail(&node->node_list, &dfs->data_nodes);
+            break;
+        default:
+            break;
+    }
+
+    atomic_inc(&dfs->node_count);
+    spin_unlock_irqrestore(&dfs->node_lock, flags);
+
+    // 建立连接
+    dfs_establish_connection(dfs, node);
+
+    printk(KERN_INFO "节点添加成功: %s\n", node_id);
+    return 0;
+}
+
+// 移除节点
+int dfs_remove_node(distributed_fs* dfs, const char* node_id) {
+    dfs_node* node;
+    unsigned long flags;
+
+    printk(KERN_INFO "移除节点: %s\n", node_id);
+
+    // 查找节点
+    node = dfs_find_node(dfs, node_id);
+    if (!node) {
+        printk(KERN_ERR "节点未找到: %s\n", node_id);
+        return -ENOENT;
+    }
+
+    // 设置节点状态
+    spin_lock(&node->lock);
+    node->status = NODE_DOWN;
+    spin_unlock(&node->lock);
+
+    // 关闭连接
+    dfs_close_connection(dfs, node);
+
+    // 从列表中移除
+    spin_lock_irqsave(&dfs->node_lock, flags);
+    list_del(&node->node_list);
+    list_del(&node->node_list);  // 从类型列表中移除
+    atomic_dec(&dfs->node_count);
+    spin_unlock_irqrestore(&dfs->node_lock, flags);
+
+    // 释放节点
+    dfs_put_node(node);
+
+    printk(KERN_INFO "节点移除成功: %s\n", node_id);
+    return 0;
+}
+
+// 查找节点
+dfs_node* dfs_find_node(distributed_fs* dfs, const char* node_id) {
+    dfs_node* node;
+    struct list_head* entry;
+    unsigned long flags;
+
+    spin_lock_irqsave(&dfs->node_lock, flags);
+    list_for_each(entry, &dfs->nodes) {
+        node = list_entry(entry, dfs_node, node_list);
+        if (strcmp(node->node_id, node_id) == 0) {
+            atomic_inc(&node->ref_count);
+            spin_unlock_irqrestore(&dfs->node_lock, flags);
+            return node;
+        }
+    }
+    spin_unlock_irqrestore(&dfs->node_lock, flags);
+
+    return NULL;
+}
+
+// 获取节点引用
+void dfs_get_node(dfs_node* node) {
+    atomic_inc(&node->ref_count);
+}
+
+// 释放节点引用
+void dfs_put_node(dfs_node* node) {
+    if (atomic_dec_and_test(&node->ref_count)) {
+        kfree(node);
+    }
+}
+
+// 心跳处理
+void dfs_heartbeat_handler(struct work_struct* work) {
+    // 实现心跳处理逻辑
+}
+
+// 心跳定时器
+void dfs_heartbeat_timer(unsigned long data) {
+    distributed_fs* dfs = (distributed_fs*)data;
+
+    // 重新调度定时器
+    mod_timer(&dfs->heartbeat_timer, jiffies + dfs->config.heartbeat_interval * HZ);
+
+    // 处理心跳
+    queue_work(dfs->workqueue, &dfs->heartbeat_work);
+}
+
+// 垃圾回收定时器
+void dfs_gc_timer(unsigned long data) {
+    distributed_fs* dfs = (distributed_fs*)data;
+
+    // 重新调度定时器
+    mod_timer(&dfs->gc_timer, jiffies + 60 * HZ);
+
+    // 执行垃圾回收
+    dfs_garbage_collect(dfs);
+}
+
+// 垃圾回收
+void dfs_garbage_collect(distributed_fs* dfs) {
+    // 实现垃圾回收逻辑
+}
+
+// 建立连接
+int dfs_establish_connection(distributed_fs* dfs, dfs_node* node) {
+    struct socket* sock;
+    int err;
+
+    printk(KERN_INFO "建立连接到节点: %s\n", node->node_id);
+
+    // 创建socket
+    err = sock_create_kern(&init_net, AF_INET, SOCK_STREAM, IPPROTO_TCP, &sock);
+    if (err) {
+        printk(KERN_ERR "无法创建socket: %d\n", err);
+        return err;
+    }
+
+    // 连接到节点
+    err = kernel_connect(sock, (struct sockaddr*)&node->addr, sizeof(node->addr), 0);
+    if (err) {
+        printk(KERN_ERR "连接失败: %d\n", err);
+        sock_release(sock);
+        return err;
+    }
+
+    // 保存连接
+    spin_lock(&dfs->connection_lock);
+    if (atomic_read(&dfs->connection_count) < dfs->config.max_connections) {
+        dfs->connections[atomic_read(&dfs->connection_count)] = sock;
+        atomic_inc(&dfs->connection_count);
+        spin_unlock(&dfs->connection_lock);
+
+        printk(KERN_INFO "连接建立成功: %s\n", node->node_id);
+        return 0;
+    }
+
+    spin_unlock(&dfs->connection_lock);
+    sock_release(sock);
+
+    printk(KERN_ERR "连接数已达上限\n");
+    return -ENOSPC;
+}
+
+// 关闭连接
+void dfs_close_connection(distributed_fs* dfs, dfs_node* node) {
+    int i;
+
+    spin_lock(&dfs->connection_lock);
+    for (i = 0; i < atomic_read(&dfs->connection_count); i++) {
+        if (dfs->connections[i]) {
+            sock_release(dfs->connections[i]);
+            dfs->connections[i] = NULL;
+        }
+    }
+    atomic_set(&dfs->connection_count, 0);
+    spin_unlock(&dfs->connection_lock);
+}
+
+// 清理分布式文件系统
+void dfs_cleanup(distributed_fs* dfs) {
+    printk(KERN_INFO "清理分布式文件系统: %s\n", dfs->fs_name);
+
+    // 停止运行
+    dfs->running = 0;
+
+    // 停止定时器
+    del_timer_sync(&dfs->heartbeat_timer);
+    del_timer_sync(&dfs->gc_timer);
+
+    // 清理网络
+    dfs_cleanup_network(dfs);
+
+    // 清理节点
+    dfs_cleanup_nodes(dfs);
+
+    // 销毁工作队列
+    if (dfs->workqueue) {
+        destroy_workqueue(dfs->workqueue);
+    }
+
+    // 释放连接数组
+    if (dfs->connections) {
+        kfree(dfs->connections);
+    }
+
+    printk(KERN_INFO "分布式文件系统清理完成: %s\n", dfs->fs_name);
+}
+```
+
+### 5. 实验项目：实现一个简单文件系统 (M6)
+
+#### 5.1 实验目标
+
+- 实现一个基本的文件系统
+- 支持文件和目录操作
+- 实现块分配和inode管理
+- 添加基本的日志功能
+
+#### 5.2 实验代码
+
+```c
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/buffer_head.h>
+#include <linux/mpage.h>
+#include <linux/iversion.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
+#include <linux/init.h>
+#include <linux/vfs.h>
+#include <linux/blkdev.h>
+
+#define MYFS_MAGIC 0x13131313
+#define MYFS_BLOCK_SIZE 4096
+#define MYFS_BLOCK_SIZE_BITS 12
+#define MYFS_INODE_SIZE 128
+#define MYFS_NAME_LEN 255
+
+// 文件系统超级块
+struct myfs_super_block {
+    __le32 s_magic;                  // 文件系统魔数
+    __le32 s_blocks_count;           // 块总数
+    __le32 s_free_blocks_count;      // 空闲块数
+    __le32 s_inodes_count;           // inode总数
+    __le32 s_free_inodes_count;      // 空闲inode数
+    __le32 s_block_size;             // 块大小
+    __le32 s_inode_size;             // inode大小
+    __le32 s_first_data_block;       // 第一个数据块
+    __le32 s_mtime;                  // 修改时间
+    __le32 s_wtime;                  // 写入时间
+    __le32 s_mnt_count;              // 挂载计数
+    __le32 s_max_mnt_count;          // 最大挂载计数
+    __le16 s_state;                  // 文件系统状态
+    __le16 s_errors;                 // 错误行为
+    __le32 s_last_check;             // 最后检查时间
+};
+
+// 文件系统inode
+struct myfs_inode {
+    __le16 i_mode;                   // 文件模式
+    __le16 i_uid;                    // 用户ID
+    __le32 i_size;                   // 文件大小
+    __le32 i_atime;                  // 访问时间
+    __le32 i_ctime;                  // 创建时间
+    __le32 i_mtime;                  // 修改时间
+    __le32 i_dtime;                  // 删除时间
+    __le16 i_gid;                    // 组ID
+    __le16 i_links_count;            // 链接数
+    __le32 i_blocks;                 // 块数
+    __le32 i_flags;                  // 标志
+    __le32 i_block[15];              // 数据块指针
+};
+
+// 文件系统目录项
+struct myfs_dir_entry {
+    __le32 inode;                    // inode号
+    __le16 rec_len;                  // 记录长度
+    __u8 name_len;                   // 名称长度
+    __u8 file_type;                  // 文件类型
+    char name[MYFS_NAME_LEN];        // 文件名
+};
+
+// 文件系统超级块信息
+struct myfs_sb_info {
+    unsigned long s_sbh;             // 超级块缓冲区头
+    unsigned long s_inode_size;      // inode大小
+    unsigned long s_first_ino;        // 第一个inode号
+    struct buffer_head * s_sbh;      // 超级块缓冲区头
+    struct myfs_super_block * s_es;  // 超级块
+    struct buffer_head * s_inode_bitmap; // inode位图缓冲区头
+    struct buffer_head * s_block_bitmap; // 块位图缓冲区头
+    struct rw_semaphore s_alloc_sem; // 分配信号量
+    spinlock_t s_lock;               // 文件系统锁
+    unsigned long s_mount_state;     // 挂载状态
+    unsigned long s_mount_opt;       // 挂载选项
+};
+
+// 文件系统inode信息
+struct myfs_inode_info {
+    __u32 i_data[15];                // 数据块指针
+    __u32 i_flags;                   // 标志
+    __u32 i_dtime;                   // 删除时间
+    struct mutex truncate_mutex;     // 截断互斥锁
+    struct inode vfs_inode;          // VFS inode
+};
+
+// 获取文件系统超级块信息
+#define MYFS_SB(sb) ((struct myfs_sb_info *)(sb)->s_fs_info)
+// 获取文件系统inode信息
+#define MYFS_I(inode) ((struct myfs_inode_info *)(container_of(inode, struct myfs_inode_info, vfs_inode)))
+
+// 全局变量
+static struct kmem_cache * myfs_inode_cachep;
+static int myfs_mount_count;
+
+// 超级块操作
+static struct super_operations myfs_sops = {
+    .alloc_inode = myfs_alloc_inode,
+    .destroy_inode = myfs_destroy_inode,
+    .write_inode = myfs_write_inode,
+    .delete_inode = myfs_delete_inode,
+    .put_super = myfs_put_super,
+    .write_super = myfs_write_super,
+    .statfs = myfs_statfs,
+};
+
+// inode操作
+static struct inode_operations myfs_inode_ops = {
+    .lookup = myfs_lookup,
+    .create = myfs_create,
+    .link = myfs_link,
+    .unlink = myfs_unlink,
+    .mkdir = myfs_mkdir,
+    .rmdir = myfs_rmdir,
+    .getattr = myfs_getattr,
+};
+
+// 文件操作
+static struct file_operations myfs_file_ops = {
+    .llseek = generic_file_llseek,
+    .read = new_sync_read,
+    .write = new_sync_write,
+    .read_iter = generic_file_read_iter,
+    .write_iter = generic_file_write_iter,
+    .mmap = generic_file_mmap,
+    .open = generic_file_open,
+    .fsync = myfs_sync_file,
+};
+
+// 目录操作
+static struct file_operations myfs_dir_ops = {
+    .llseek = generic_file_llseek,
+    .read = generic_read_dir,
+    .iterate = myfs_readdir,
+    .fsync = myfs_sync_file,
+};
+
+// 地址空间操作
+static struct address_space_operations myfs_aops = {
+    .readpage = myfs_readpage,
+    .writepage = myfs_writepage,
+    .write_begin = myfs_write_begin,
+    .write_end = myfs_write_end,
+    .bmap = myfs_bmap,
+};
+
+// 分配inode
+static struct inode *myfs_alloc_inode(struct super_block *sb) {
+    struct myfs_inode_info *ei;
+
+    ei = kmem_cache_alloc(myfs_inode_cachep, GFP_KERNEL);
+    if (!ei)
+        return NULL;
+
+    ei->i_flags = 0;
+    ei->i_dtime = 0;
+    mutex_init(&ei->truncate_mutex);
+
+    return &ei->vfs_inode;
+}
+
+// 销毁inode
+static void myfs_destroy_inode(struct inode *inode) {
+    struct myfs_inode_info *ei = MYFS_I(inode);
+
+    mutex_destroy(&ei->truncate_mutex);
+    kmem_cache_free(myfs_inode_cachep, ei);
+}
+
+// 读取inode
+static struct inode *myfs_iget(struct super_block *sb, unsigned long ino) {
+    struct myfs_inode_info *ei;
+    struct buffer_head *bh;
+    struct myfs_inode *raw_inode;
+    struct inode *inode;
+    long ret = -EIO;
+    unsigned long block;
+    unsigned long offset;
+
+    inode = iget_locked(sb, ino);
+    if (!inode)
+        return ERR_PTR(-ENOMEM);
+    if (!(inode->i_state & I_NEW))
+        return inode;
+
+    ei = MYFS_I(inode);
+
+    // 计算inode位置
+    block = (ino - 1) * MYFS_INODE_SIZE / MYFS_BLOCK_SIZE + 2;
+    offset = (ino - 1) * MYFS_INODE_SIZE % MYFS_BLOCK_SIZE;
+
+    // 读取inode数据块
+    bh = sb_bread(sb, block);
+    if (!bh) {
+        ret = -EIO;
+        goto bad_inode;
+    }
+
+    raw_inode = (struct myfs_inode *)(bh->b_data + offset);
+
+    // 设置inode属性
+    inode->i_mode = le16_to_cpu(raw_inode->i_mode);
+    i_uid_write(inode, le16_to_cpu(raw_inode->i_uid));
+    i_gid_write(inode, le16_to_cpu(raw_inode->i_gid));
+    inode->i_size = le32_to_cpu(raw_inode->i_size);
+    inode->i_atime.tv_sec = le32_to_cpu(raw_inode->i_atime);
+    inode->i_ctime.tv_sec = le32_to_cpu(raw_inode->i_ctime);
+    inode->i_mtime.tv_sec = le32_to_cpu(raw_inode->i_mtime);
+    inode->i_atime.tv_nsec = 0;
+    inode->i_ctime.tv_nsec = 0;
+    inode->i_mtime.tv_nsec = 0;
+    inode->i_blocks = le32_to_cpu(raw_inode->i_blocks);
+    ei->i_flags = le32_to_cpu(raw_inode->i_flags);
+    ei->i_dtime = le32_to_cpu(raw_inode->i_dtime);
+
+    // 复制数据块指针
+    memcpy(ei->i_data, raw_inode->i_block, sizeof(ei->i_data));
+
+    brelse(bh);
+
+    // 设置inode操作
+    if (S_ISREG(inode->i_mode)) {
+        inode->i_op = &myfs_inode_ops;
+        inode->i_fop = &myfs_file_ops;
+        inode->i_mapping->a_ops = &myfs_aops;
+    } else if (S_ISDIR(inode->i_mode)) {
+        inode->i_op = &myfs_inode_ops;
+        inode->i_fop = &myfs_dir_ops;
+        inode->i_mapping->a_ops = &myfs_aops;
+    } else if (S_ISLNK(inode->i_mode)) {
+        inode->i_op = &myfs_inode_ops;
+        inode->i_fop = &myfs_file_ops;
+    } else {
+        inode->i_op = &myfs_inode_ops;
+        init_special_inode(inode, inode->i_mode, 0);
+    }
+
+    unlock_new_inode(inode);
+    return inode;
+
+bad_inode:
+    iget_failed(inode);
+    return ERR_PTR(ret);
+}
+
+// 写入inode
+static int myfs_write_inode(struct inode *inode, struct writeback_control *wbc) {
+    struct myfs_inode_info *ei = MYFS_I(inode);
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    struct myfs_inode *raw_inode;
+    unsigned long block;
+    unsigned long offset;
+
+    // 计算inode位置
+    block = (inode->i_ino - 1) * MYFS_INODE_SIZE / MYFS_BLOCK_SIZE + 2;
+    offset = (inode->i_ino - 1) * MYFS_INODE_SIZE % MYFS_BLOCK_SIZE;
+
+    // 读取inode数据块
+    bh = sb_bread(sb, block);
+    if (!bh)
+        return -EIO;
+
+    raw_inode = (struct myfs_inode *)(bh->b_data + offset);
+
+    // 写入inode属性
+    raw_inode->i_mode = cpu_to_le16(inode->i_mode);
+    raw_inode->i_uid = cpu_to_le16(i_uid_read(inode));
+    raw_inode->i_gid = cpu_to_le16(i_gid_read(inode));
+    raw_inode->i_size = cpu_to_le32(inode->i_size);
+    raw_inode->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
+    raw_inode->i_ctime = cpu_to_le32(inode->i_ctime.tv_sec);
+    raw_inode->i_mtime = cpu_to_le32(inode->i_mtime.tv_sec);
+    raw_inode->i_blocks = cpu_to_le32(inode->i_blocks);
+    raw_inode->i_flags = cpu_to_le32(ei->i_flags);
+    raw_inode->i_dtime = cpu_to_le32(ei->i_dtime);
+
+    // 写入数据块指针
+    memcpy(raw_inode->i_block, ei->i_data, sizeof(raw_inode->i_block));
+
+    // 标记缓冲区脏
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
+    return 0;
+}
+
+// 删除inode
+static void myfs_delete_inode(struct inode *inode) {
+    struct myfs_inode_info *ei = MYFS_I(inode);
+    struct myfs_sb_info *sbi = MYFS_SB(inode->i_sb);
+
+    // 删除inode
+    myfs_free_inode(inode);
+
+    // 更新超级块
+    mark_inode_dirty(inode);
+    myfs_update_super(inode->i_sb);
+
+    // 清理inode
+    truncate_inode_pages(&inode->i_data, 0);
+    clear_inode(inode);
+}
+
+// 查找目录项
+static struct dentry *myfs_lookup(struct inode *dir, struct dentry *dentry,
+                                 unsigned int flags) {
+    struct inode *inode = NULL;
+    ino_t ino;
+
+    if (dentry->d_name.len > MYFS_NAME_LEN)
+        return ERR_PTR(-ENAMETOOLONG);
+
+    // 在目录中查找inode号
+    ino = myfs_inode_by_name(dir, &dentry->d_name);
+    if (ino) {
+        inode = myfs_iget(dir->i_sb, ino);
+        if (IS_ERR(inode))
+            return ERR_CAST(inode);
+    }
+
+    d_add(dentry, inode);
+    return NULL;
+}
+
+// 创建目录项
+static int myfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+                      bool excl) {
+    struct inode *inode;
+    int err;
+
+    // 分配新inode
+    inode = myfs_new_inode(dir, mode, &dentry->d_name);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+
+    // 添加目录项
+    err = myfs_add_link(dentry, inode);
+    if (err) {
+        inode_dec_link_count(inode);
+        iput(inode);
+        return err;
+    }
+
+    // 初始化inode
+    inode->i_op = &myfs_inode_ops;
+    inode->i_fop = &myfs_file_ops;
+    inode->i_mapping->a_ops = &myfs_aops;
+    mark_inode_dirty(inode);
+
+    // 设置dentry
+    d_instantiate(dentry, inode);
+    return 0;
+}
+
+// 读取目录
+static int myfs_readdir(struct file *file, struct dir_context *ctx) {
+    struct inode *inode = file_inode(file);
+    struct super_block *sb = inode->i_sb;
+    struct buffer_head *bh;
+    struct myfs_dir_entry *de;
+    unsigned long offset, blk;
+    int err = 0;
+
+    // 从指定偏移开始读取
+    offset = ctx->pos & (sb->s_blocksize - 1);
+    blk = ctx->pos >> sb->s_blocksize_bits;
+
+    while (blk < inode->i_blocks) {
+        // 读取数据块
+        bh = sb_bread(sb, blk);
+        if (!bh) {
+            printk(KERN_ERR "无法读取目录块 %lu\n", blk);
+            err = -EIO;
+            break;
+        }
+
+        // 遍历目录项
+        while (offset < sb->s_blocksize) {
+            de = (struct myfs_dir_entry *)(bh->b_data + offset);
+
+            // 检查目录项是否有效
+            if (de->inode == 0 || de->rec_len == 0)
+                break;
+
+            // 发送目录项到用户空间
+            if (!dir_emit(ctx, de->name, de->name_len,
+                         le32_to_cpu(de->inode),
+                         de->file_type)) {
+                brelse(bh);
+                return 0;
+            }
+
+            offset += le16_to_cpu(de->rec_len);
+            ctx->pos += le16_to_cpu(de->rec_len);
+        }
+
+        brelse(bh);
+        offset = 0;
+        blk++;
+    }
+
+    return err;
+}
+
+// 读取页面
+static int myfs_readpage(struct file *file, struct page *page) {
+    return block_read_full_page(page, myfs_get_block);
+}
+
+// 写入页面
+static int myfs_writepage(struct page *page, struct writeback_control *wbc) {
+    return block_write_full_page(page, myfs_get_block, wbc);
+}
+
+// 写入开始
+static int myfs_write_begin(struct file *file, struct address_space *mapping,
+                           loff_t pos, unsigned len, unsigned flags,
+                           struct page **pagep, void **fsdata) {
+    return block_write_begin(mapping, pos, len, flags, pagep, fsdata,
+                            myfs_get_block);
+}
+
+// 写入结束
+static int myfs_write_end(struct file *file, struct address_space *mapping,
+                         loff_t pos, unsigned len, unsigned copied,
+                         struct page *page, void *fsdata) {
+    return block_write_end(file, mapping, pos, len, copied, page, fsdata);
+}
+
+// 获取块号
+static int myfs_bmap(struct address_space *mapping, sector_t block) {
+    return generic_block_bmap(mapping, block, myfs_get_block);
+}
+
+// 同步文件
+static int myfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync) {
+    struct inode *inode = file_inode(file);
+    struct super_block *sb = inode->i_sb;
+    int err;
+
+    // 同步inode
+    err = sync_inode_metadata(inode, 1);
+    if (err)
+        return err;
+
+    // 同步超级块
+    sync_dirty_buffer(MYFS_SB(sb)->s_sbh);
+
+    return 0;
+}
+
+// 获取文件属性
+static int myfs_getattr(struct vfsmount *mnt, struct dentry *dentry,
+                       struct kstat *stat) {
+    struct inode *inode = dentry->d_inode;
+    generic_fillattr(inode, stat);
+    return 0;
+}
+
+// 获取块号
+static int myfs_get_block(struct inode *inode, sector_t iblock,
+                         struct buffer_head *bh_result, int create) {
+    struct super_block *sb = inode->i_sb;
+    struct myfs_inode_info *ei = MYFS_I(inode);
+    unsigned long block;
+    int err;
+
+    // 检查块号是否在范围内
+    if (iblock >= inode->i_blocks) {
+        if (!create)
+            return 0;
+
+        // 分配新块
+        err = myfs_new_data_block(inode, &block);
+        if (err)
+            return err;
+
+        // 设置块号
+        ei->i_data[iblock] = block;
+        inode->i_blocks++;
+        mark_inode_dirty(inode);
+    } else {
+        block = ei->i_data[iblock];
+    }
+
+    // 设置缓冲区
+    map_bh(bh_result, sb, block);
+    return 0;
+}
+
+// 放置超级块
+static int myfs_fill_super(struct super_block *sb, void *data, int silent) {
+    struct buffer_head *bh;
+    struct myfs_super_block *esb;
+    struct myfs_sb_info *sbi;
+    struct inode *root_inode;
+    int ret = -EINVAL;
+
+    // 分配文件系统信息
+    sbi = kzalloc(sizeof(struct myfs_sb_info), GFP_KERNEL);
+    if (!sbi)
+        return -ENOMEM;
+
+    sb->s_fs_info = sbi;
+
+    // 设置块大小
+    if (!sb_set_blocksize(sb, MYFS_BLOCK_SIZE)) {
+        printk(KERN_ERR "无法设置块大小\n");
+        goto failed_sbi;
+    }
+
+    // 读取超级块
+    bh = sb_bread(sb, 1);
+    if (!bh) {
+        printk(KERN_ERR "无法读取超级块\n");
+        goto failed_sbi;
+    }
+
+    esb = (struct myfs_super_block *)bh->b_data;
+
+    // 检查魔数
+    if (le32_to_cpu(esb->s_magic) != MYFS_MAGIC) {
+        printk(KERN_ERR "无效的文件系统魔数\n");
+        goto failed_bh;
+    }
+
+    // 设置超级块参数
+    sb->s_magic = MYFS_MAGIC;
+    sb->s_op = &myfs_sops;
+    sb->s_maxbytes = MYFS_BLOCK_SIZE * 1024;
+    sb->s_time_gran = 1;
+
+    // 设置文件系统信息
+    sbi->s_es = esb;
+    sbi->s_sbh = bh;
+    sbi->s_inode_size = MYFS_INODE_SIZE;
+    sbi->s_first_ino = 1;
+
+    // 初始化锁
+    init_rwsem(&sbi->s_alloc_sem);
+    spin_lock_init(&sbi->s_lock);
+
+    // 读取位图
+    sbi->s_inode_bitmap = sb_bread(sb, 2);
+    sbi->s_block_bitmap = sb_bread(sb, 3);
+    if (!sbi->s_inode_bitmap || !sbi->s_block_bitmap) {
+        printk(KERN_ERR "无法读取位图\n");
+        goto failed_bh;
+    }
+
+    // 创建根inode
+    root_inode = myfs_iget(sb, 1);
+    if (IS_ERR(root_inode)) {
+        ret = PTR_ERR(root_inode);
+        goto failed_bh;
+    }
+
+    // 设置超级块根inode
+    sb->s_root = d_make_root(root_inode);
+    if (!sb->s_root) {
+        ret = -ENOMEM;
+        goto failed_bh;
+    }
+
+    printk(KERN_INFO "MyFS文件系统挂载成功\n");
+    return 0;
+
+failed_bh:
+    brelse(bh);
+failed_sbi:
+    kfree(sbi);
+    return ret;
+}
+
+// 挂载文件系统
+static struct dentry *myfs_mount(struct file_system_type *fs_type,
+                                int flags, const char *dev_name,
+                                void *data) {
+    return mount_bdev(fs_type, flags, dev_name, data, myfs_fill_super);
+}
+
+// 文件系统类型
+static struct file_system_type myfs_fs_type = {
+    .owner = THIS_MODULE,
+    .name = "myfs",
+    .mount = myfs_mount,
+    .kill_sb = kill_block_super,
+    .fs_flags = FS_REQUIRES_DEV,
+};
+
+// 模块初始化
+static int __init myfs_init(void) {
+    int err;
+
+    printk(KERN_INFO "初始化MyFS文件系统模块\n");
+
+    // 创建inode缓存
+    myfs_inode_cachep = kmem_cache_create("myfs_inode_cache",
+                                        sizeof(struct myfs_inode_info),
+                                        0, (SLAB_RECLAIM_ACCOUNT |
+                                        SLAB_MEM_SPREAD), NULL);
+    if (!myfs_inode_cachep) {
+        printk(KERN_ERR "无法创建inode缓存\n");
+        return -ENOMEM;
+    }
+
+    // 注册文件系统
+    err = register_filesystem(&myfs_fs_type);
+    if (err) {
+        printk(KERN_ERR "无法注册文件系统: %d\n", err);
+        kmem_cache_destroy(myfs_inode_cachep);
+        return err;
+    }
+
+    printk(KERN_INFO "MyFS文件系统模块初始化成功\n");
+    return 0;
+}
+
+// 模块退出
+static void __exit myfs_exit(void) {
+    printk(KERN_INFO "退出MyFS文件系统模块\n");
+
+    // 注销文件系统
+    unregister_filesystem(&myfs_fs_type);
+
+    // 销毁inode缓存
+    kmem_cache_destroy(myfs_inode_cachep);
+
+    printk(KERN_INFO "MyFS文件系统模块退出成功\n");
+}
+
+module_init(myfs_init);
+module_exit(myfs_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Your Name");
+MODULE_DESCRIPTION("My Simple File System");
+MODULE_VERSION("1.0");
+```
+
+## 实验任务
+
+### 基础任务
+
+1. **实现基本文件系统**：创建一个支持文件和目录的基本文件系统
+2. **块分配管理**：实现块分配和位图管理
+3. **inode管理**：实现inode的分配、释放和操作
+
+### 进阶任务
+
+1. **日志功能**：为文件系统添加日志功能
+2. **缓存优化**：实现缓存机制和预读取
+3. **性能优化**：优化文件系统的读写性能
+
+### 挑战任务
+
+1. **分布式文件系统**：实现一个简单的分布式文件系统
+2. **快照功能**：为文件系统添加快照功能
+3. **压缩支持**：实现数据压缩功能
+
+## 扩展阅读
+
+### 推荐书籍
+
+1. 《The Design and Implementation of a Log-Structured File System》- Rosenblum & Ousterhout
+2. 《File System Implementation》- Craig A. N.
+3. 《Distributed File Systems: Concepts and Examples》- Nagios
+
+### 在线资源
+
+1. [Linux Kernel Documentation - Filesystems](https://www.kernel.org/doc/html/latest/filesystems/)
+2. [ext4 Filesystem](https://ext4.wiki.kernel.org/)
+3. [ZFS Documentation](https://openzfs.github.io/openzfs-docs/)
+
+## 课后习题
+
+1. **概念题**：解释虚拟文件系统的概念和作用
+2. **分析题**：分析日志文件系统的优缺点
+3. **设计题**：设计一个支持快照的文件系统
+4. **实现题**：实现一个支持加密的文件系统
+5. **优化题**：优化给定文件系统的性能
+
+## 下一讲预告
+
+第16讲将介绍安全与现代系统，包括：
+
+- 操作系统安全机制
+- 访问控制和权限管理
+- 容器和虚拟化技术
+- 现代操作系统架构
+- AI时代的操作系统挑战
+
+## 参考资料
+
+- 南京大学操作系统课程讲义: https://jyywiki.cn/OS/2025/
+- B站视频资源: [南京大学操作系统课程](https://www.bilibili.com/video/BV1GX4y1K7Kj/)
+- 《操作系统概念》- Abraham Silberschatz
+- 《深入理解Linux内核》- Daniel P. Bovet

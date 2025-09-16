@@ -1,0 +1,881 @@
+---
+title: "Lecture 11: 连接算法"
+description: "CMU 15-445 Lecture 11 - 嵌套循环连接、哈希连接、归并连接、连接优化"
+---
+
+# Lecture 11: 连接算法
+
+## 连接算法概述
+
+### 数据库连接操作的重要性
+
+连接是数据库系统中最重要也是最昂贵的操作之一：
+
+1. **关系组合**：将多个表的数据按关联条件组合
+2. **查询复杂度**：连接操作通常是查询的主要性能瓶颈
+3. **资源消耗**：需要大量的CPU、内存和I/O资源
+4. **优化空间**：不同算法在不同场景下性能差异巨大
+
+### 连接算法分类
+- **嵌套循环连接**：简单的双重循环方法
+- **哈希连接**：基于哈希表的高效连接
+- **归并连接**：利用有序输入的连接算法
+- **混合连接**：结合多种技术的混合算法
+
+## 嵌套循环连接
+
+### 基本嵌套循环连接
+
+#### 简单嵌套循环实现
+```cpp
+class NestedLoopJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    size_t memory_limit;
+
+public:
+    NestedLoopJoin(Table* left, Table* right, JoinCondition* cond, size_t mem_limit)
+        : left_table(left), right_table(right), condition(cond), memory_limit(mem_limit) {}
+
+    vector<JoinedRecord> execute_join() {
+        vector<JoinedRecord> result;
+        auto left_iterator = left_table->create_iterator();
+
+        while (left_iterator->has_next()) {
+            Record left_record = left_iterator->next();
+            auto right_iterator = right_table->create_iterator();
+
+            while (right_iterator->has_next()) {
+                Record right_record = right_iterator->next();
+
+                if (condition->matches(left_record, right_record)) {
+                    JoinedRecord joined = create_joined_record(left_record, right_record);
+                    result.push_back(joined);
+                }
+            }
+        }
+
+        return result;
+    }
+
+private:
+    JoinedRecord create_joined_record(const Record& left, const Record& right) {
+        JoinedRecord joined;
+        joined.add_left_record(left);
+        joined.add_right_record(right);
+        return joined;
+    }
+};
+```
+
+### 分块嵌套循环连接
+
+#### 基于内存的分块算法
+```cpp
+class BlockNestedLoopJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    size_t block_size;  // 内存块大小（记录数）
+
+public:
+    BlockNestedLoopJoin(Table* left, Table* right, JoinCondition* cond, size_t blk_size)
+        : left_table(left), right_table(right), condition(cond), block_size(blk_size) {}
+
+    vector<JoinedRecord> execute_join() {
+        vector<JoinedRecord> result;
+        auto left_iterator = left_table->create_iterator();
+
+        while (left_iterator->has_next()) {
+            // 读取左表的一个块到内存
+            vector<Record> left_block = read_block(left_iterator, block_size);
+
+            // 用这个块与右表进行连接
+            auto right_iterator = right_table->create_iterator();
+            vector<Record> right_block;
+
+            while (right_iterator->has_next()) {
+                // 读取右表的一个块
+                right_block = read_block(right_iterator, block_size);
+
+                // 内存中进行块连接
+                vector<JoinedRecord> block_result = join_blocks(left_block, right_block);
+                result.insert(result.end(), block_result.begin(), block_result.end());
+            }
+        }
+
+        return result;
+    }
+
+private:
+    vector<Record> read_block(Iterator* iterator, size_t block_size) {
+        vector<Record> block;
+        block.reserve(block_size);
+
+        for (size_t i = 0; i < block_size && iterator->has_next(); i++) {
+            block.push_back(iterator->next());
+        }
+
+        return block;
+    }
+
+    vector<JoinedRecord> join_blocks(const vector<Record>& left_block,
+                                     const vector<Record>& right_block) {
+        vector<JoinedRecord> result;
+
+        for (const auto& left_record : left_block) {
+            for (const auto& right_record : right_block) {
+                if (condition->matches(left_record, right_record)) {
+                    result.push_back(create_joined_record(left_record, right_record));
+                }
+            }
+        }
+
+        return result;
+    }
+};
+```
+
+### 索引嵌套循环连接
+
+#### 利用索引的连接优化
+```cpp
+class IndexedNestedLoopJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    Index* right_table_index;  // 右表的索引
+
+public:
+    IndexedNestedLoopJoin(Table* left, Table* right, JoinCondition* cond, Index* index)
+        : left_table(left), right_table(right), condition(cond), right_table_index(index) {}
+
+    vector<JoinedRecord> execute_join() {
+        vector<JoinedRecord> result;
+        auto left_iterator = left_table->create_iterator();
+
+        while (left_iterator->has_next()) {
+            Record left_record = left_iterator->next();
+
+            // 从左记录中提取连接条件的值
+            Value join_value = condition->extract_join_value(left_record);
+
+            // 使用索引查找匹配的右记录
+            vector<Record> matching_records = right_table_index->lookup(join_value);
+
+            // 连接匹配的记录
+            for (const auto& right_record : matching_records) {
+                if (condition->matches(left_record, right_record)) {
+                    result.push_back(create_joined_record(left_record, right_record));
+                }
+            }
+        }
+
+        return result;
+    }
+
+private:
+    JoinedRecord create_joined_record(const Record& left, const Record& right) {
+        JoinedRecord joined;
+        joined.add_left_record(left);
+        joined.add_right_record(right);
+        return joined;
+    }
+};
+```
+
+## 哈希连接
+
+### 经典哈希连接
+
+#### 哈希连接实现
+```cpp
+class HashJoin {
+private:
+    Table* build_table;      // 构建表（通常是较小的表）
+    Table* probe_table;      // 探测表
+    JoinCondition* condition;
+    size_t memory_limit;
+    HashFunction* hash_function;
+
+public:
+    HashJoin(Table* build, Table* probe, JoinCondition* cond, size_t mem_limit)
+        : build_table(build), probe_table(probe), condition(cond),
+          memory_limit(mem_limit), hash_function(new DefaultHashFunction()) {}
+
+    vector<JoinedRecord> execute_join() {
+        // 构建阶段
+        auto build_result = build_phase();
+        if (!build_result.success) {
+            return {};  // 内存不足
+        }
+
+        // 探测阶段
+        return probe_phase(build_result.hash_table);
+    }
+
+private:
+    struct BuildResult {
+        bool success;
+        unordered_multimap<Value, Record> hash_table;
+    };
+
+    BuildResult build_phase() {
+        BuildResult result;
+        result.success = true;
+
+        auto build_iterator = build_table->create_iterator();
+        size_t estimated_size = estimate_hashtable_size();
+
+        if (estimated_size > memory_limit) {
+            result.success = false;
+            return result;
+        }
+
+        while (build_iterator->has_next()) {
+            Record record = build_iterator->next();
+            Value key = condition->extract_join_value(record);
+            result.hash_table.emplace(key, record);
+        }
+
+        return result;
+    }
+
+    vector<JoinedRecord> probe_phase(
+        const unordered_multimap<Value, Record>& hash_table) {
+
+        vector<JoinedRecord> result;
+        auto probe_iterator = probe_table->create_iterator();
+
+        while (probe_iterator->has_next()) {
+            Record probe_record = probe_iterator->next();
+            Value key = condition->extract_join_value(probe_record);
+
+            // 在哈希表中查找匹配的记录
+            auto range = hash_table.equal_range(key);
+            for (auto it = range.first; it != range.second; ++it) {
+                const Record& build_record = it->second;
+
+                if (condition->matches(build_record, probe_record)) {
+                    result.push_back(create_joined_record(build_record, probe_record));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    size_t estimate_hashtable_size() const {
+        size_t record_count = build_table->get_record_count();
+        size_t avg_record_size = build_table->get_average_record_size();
+        return record_count * (avg_record_size + sizeof(Value) + sizeof(Record*)) * 1.5;  // 1.5是哈希表负载因子
+    }
+};
+```
+
+### 分区哈希连接
+
+#### Grace哈希连接实现
+```cpp
+class GraceHashJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    size_t memory_limit;
+    size_t partition_count;
+
+public:
+    GraceHashJoin(Table* left, Table* right, JoinCondition* cond, size_t mem_limit)
+        : left_table(left), right_table(right), condition(cond),
+          memory_limit(mem_limit) {
+        partition_count = calculate_optimal_partitions();
+    }
+
+    vector<JoinedRecord> execute_join() {
+        // 分区阶段
+        auto left_partitions = partition_table(left_table, "left");
+        auto right_partitions = partition_table(right_table, "right");
+
+        // 连接阶段
+        vector<JoinedRecord> result;
+        for (size_t i = 0; i < partition_count; i++) {
+            auto partition_result = join_partitions(
+                left_partitions[i], right_partitions[i]);
+
+            result.insert(result.end(),
+                        partition_result.begin(), partition_result.end());
+        }
+
+        return result;
+    }
+
+private:
+    struct Partition {
+        string file_path;
+        size_t record_count;
+        bool is_memory_resident;
+        vector<Record> memory_records;  // 如果内存足够，直接存储在内存中
+    };
+
+    vector<Partition> partition_table(Table* table, const string& prefix) {
+        vector<Partition> partitions(partition_count);
+        string temp_dir = get_temp_directory();
+
+        // 创建分区文件
+        for (size_t i = 0; i < partition_count; i++) {
+            partitions[i].file_path = temp_dir + "/" + prefix + "_part_" + to_string(i) + ".tmp";
+            partitions[i].is_memory_resident = can_fit_in_memory(table, i);
+        }
+
+        auto iterator = table->create_iterator();
+
+        while (iterator->has_next()) {
+            Record record = iterator->next();
+            Value join_value = condition->extract_join_value(record);
+            size_t partition_index = hash_function(join_value) % partition_count;
+
+            if (partitions[partition_index].is_memory_resident) {
+                partitions[partition_index].memory_records.push_back(record);
+            } else {
+                // 写入磁盘
+                write_to_partition(partitions[partition_index], record);
+            }
+            partitions[partition_index].record_count++;
+        }
+
+        return partitions;
+    }
+
+    vector<JoinedRecord> join_partitions(const Partition& left_part, const Partition& right_part) {
+        if (left_part.is_memory_resident && right_part.is_memory_resident) {
+            // 两个分区都在内存中，直接内存连接
+            return memory_join(left_part.memory_records, right_part.memory_records);
+        } else {
+            // 需要从磁盘读取并连接
+            return disk_join(left_part, right_part);
+        }
+    }
+
+    vector<JoinedRecord> memory_join(const vector<Record>& left_records,
+                                     const vector<Record>& right_records) {
+        vector<JoinedRecord> result;
+
+        // 构建左分区的哈希表
+        unordered_multimap<Value, Record> hash_table;
+        for (const auto& record : left_records) {
+            Value key = condition->extract_join_value(record);
+            hash_table.emplace(key, record);
+        }
+
+        // 探测右分区
+        for (const auto& probe_record : right_records) {
+            Value key = condition->extract_join_value(probe_record);
+            auto range = hash_table.equal_range(key);
+
+            for (auto it = range.first; it != range.second; ++it) {
+                if (condition->matches(it->second, probe_record)) {
+                    result.push_back(create_joined_record(it->second, probe_record));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    vector<JoinedRecord> disk_join(const Partition& left_part, const Partition& right_part) {
+        vector<JoinedRecord> result;
+
+        // 读取左分区到内存并构建哈希表
+        auto left_records = read_partition(left_part);
+        unordered_multimap<Value, Record> hash_table;
+
+        for (const auto& record : left_records) {
+            Value key = condition->extract_join_value(record);
+            hash_table.emplace(key, record);
+        }
+
+        // 流式读取右分区并探测
+        auto right_reader = create_reader(right_part.file_path);
+        Record right_record;
+
+        while (right_reader->read_record(&right_record)) {
+            Value key = condition->extract_join_value(right_record);
+            auto range = hash_table.equal_range(key);
+
+            for (auto it = range.first; it != range.second; ++it) {
+                if (condition->matches(it->second, right_record)) {
+                    result.push_back(create_joined_record(it->second, right_record));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    size_t calculate_optimal_partitions() const {
+        size_t total_memory = memory_limit;
+        size_t avg_record_size = (left_table->get_average_record_size() +
+                                right_table->get_average_record_size()) / 2;
+        size_t records_per_partition = total_memory / (avg_record_size * 2);  // 为两个表预留空间
+
+        size_t total_records = left_table->get_record_count() + right_table->get_record_count();
+        size_t min_partitions = (total_records + records_per_partition - 1) / records_per_partition;
+
+        // 选择2的幂次方作为分区数，便于哈希
+        size_t partitions = 1;
+        while (partitions < min_partitions) {
+            partitions *= 2;
+        }
+
+        return min(partitions, 256);  // 限制最大分区数
+    }
+
+    bool can_fit_in_memory(Table* table, size_t partition_index) const {
+        // 简化的内存估算
+        size_t estimated_size = table->get_record_count() / partition_count *
+                               table->get_average_record_size();
+        return estimated_size < memory_limit / 4;  // 使用25%的内存限制
+    }
+};
+```
+
+## 归并连接
+
+### 归并连接算法
+
+#### 排序-归并连接实现
+```cpp
+class SortMergeJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    size_t memory_limit;
+
+public:
+    SortMergeJoin(Table* left, Table* right, JoinCondition* cond, size_t mem_limit)
+        : left_table(left), right_table(right), condition(cond), memory_limit(mem_limit) {}
+
+    vector<JoinedRecord> execute_join() {
+        // 排序阶段
+        auto left_sorted = sort_table(left_table);
+        auto right_sorted = sort_table(right_table);
+
+        // 归并连接阶段
+        return merge_join(left_sorted, right_sorted);
+    }
+
+private:
+    vector<Record> sort_table(Table* table) {
+        ExternalSorter sorter(memory_limit, table->get_average_record_size(),
+                           get_temp_directory());
+
+        string temp_file = get_temp_file();
+        sorter.external_sort(table->get_file_path(), temp_file,
+                            condition->get_sort_key());
+
+        // 读取排序后的文件
+        return read_sorted_file(temp_file);
+    }
+
+    vector<JoinedRecord> merge_join(const vector<Record>& left_sorted,
+                                   const vector<Record>& right_sorted) {
+        vector<JoinedRecord> result;
+        size_t left_index = 0, right_index = 0;
+
+        while (left_index < left_sorted.size() && right_index < right_sorted.size()) {
+            const Record& left_record = left_sorted[left_index];
+            const Record& right_record = right_sorted[right_index];
+
+            Value left_key = condition->extract_join_value(left_record);
+            Value right_key = condition->extract_join_value(right_record);
+
+            if (left_key < right_key) {
+                left_index++;
+            } else if (left_key > right_key) {
+                right_index++;
+            } else {
+                // 找到匹配的键，处理所有匹配的记录
+                auto left_group = get_matching_group(left_sorted, left_index, left_key);
+                auto right_group = get_matching_group(right_sorted, right_index, right_key);
+
+                // 连接两个组
+                for (const auto& left_rec : left_group) {
+                    for (const auto& right_rec : right_group) {
+                        if (condition->matches(left_rec, right_rec)) {
+                            result.push_back(create_joined_record(left_rec, right_rec));
+                        }
+                    }
+                }
+
+                left_index += left_group.size();
+                right_index += right_group.size();
+            }
+        }
+
+        return result;
+    }
+
+    vector<Record> get_matching_group(const vector<Record>& sorted_records,
+                                     size_t start_index, const Value& key) {
+        vector<Record> group;
+
+        for (size_t i = start_index; i < sorted_records.size(); i++) {
+            if (condition->extract_join_value(sorted_records[i]) == key) {
+                group.push_back(sorted_records[i]);
+            } else {
+                break;
+            }
+        }
+
+        return group;
+    }
+};
+```
+
+### 混合连接算法
+
+#### 混合哈希-归并连接
+```cpp
+class HybridJoin {
+private:
+    Table* left_table;
+    Table* right_table;
+    JoinCondition* condition;
+    size_t memory_limit;
+
+public:
+    HybridJoin(Table* left, Table* right, JoinCondition* cond, size_t mem_limit)
+        : left_table(left), right_table(right), condition(cond), memory_limit(mem_limit) {}
+
+    vector<JoinedRecord> execute_join() {
+        // 根据表的大小和特征选择最优算法
+        JoinAlgorithm algorithm = select_optimal_algorithm();
+
+        switch (algorithm) {
+            case JoinAlgorithm::HASH_JOIN:
+                return execute_hash_join();
+            case JoinAlgorithm::MERGE_JOIN:
+                return execute_merge_join();
+            case JoinAlgorithm::NESTED_LOOP:
+                return execute_nested_loop();
+            case JoinAlgorithm::HYBRID_HASH_MERGE:
+                return execute_hybrid_hash_merge();
+            default:
+                return execute_hash_join();  // 默认使用哈希连接
+        }
+    }
+
+private:
+    enum class JoinAlgorithm {
+        HASH_JOIN,
+        MERGE_JOIN,
+        NESTED_LOOP,
+        HYBRID_HASH_MERGE
+    };
+
+    JoinAlgorithm select_optimal_algorithm() const {
+        size_t left_size = left_table->get_record_count();
+        size_t right_size = right_table->get_record_count();
+        size_t left_avg_size = left_table->get_average_record_size();
+        size_t right_avg_size = right_table->get_average_record_size();
+
+        // 检查是否有可用的索引
+        bool has_index = left_table->has_index(condition->get_join_column()) ||
+                        right_table->has_index(condition->get_join_column());
+
+        // 基于启发式规则选择算法
+        if (has_index) {
+            return JoinAlgorithm::NESTED_LOOP;  // 使用索引嵌套循环
+        }
+
+        size_t smaller_table_size = min(left_size, right_size);
+        size_t smaller_table_memory = smaller_table_size *
+                                    (left_size < right_size ? left_avg_size : right_avg_size);
+
+        if (smaller_table_memory < memory_limit * 0.3) {
+            return JoinAlgorithm::HASH_JOIN;  // 较小表适合哈希连接
+        }
+
+        if (left_table->is_sorted() && right_table->is_sorted()) {
+            return JoinAlgorithm::MERGE_JOIN;  // 两个表都已排序，使用归并连接
+        }
+
+        if (left_size > 1000000 && right_size > 1000000) {
+            return JoinAlgorithm::HYBRID_HASH_MERGE;  // 大表使用混合算法
+        }
+
+        return JoinAlgorithm::HASH_JOIN;  // 默认哈希连接
+    }
+
+    vector<JoinedRecord> execute_hybrid_hash_merge() {
+        // 混合算法：先使用哈希连接处理部分数据，然后使用归并连接
+        size_t partition_size = memory_limit / 4;  // 使用25%内存进行分区
+
+        auto left_partitions = partition_and_sort(left_table, partition_size);
+        auto right_partitions = partition_and_sort(right_table, partition_size);
+
+        vector<JoinedRecord> result;
+        for (size_t i = 0; i < left_partitions.size(); i++) {
+            // 对每个分区使用最适合的连接算法
+            vector<JoinedRecord> partition_result;
+
+            if (left_partitions[i].size() < 10000 && right_partitions[i].size() < 10000) {
+                // 小分区使用哈希连接
+                partition_result = hash_join_partitions(
+                    left_partitions[i], right_partitions[i]);
+            } else {
+                // 大分区使用归并连接
+                partition_result = merge_join_partitions(
+                    left_partitions[i], right_partitions[i]);
+            }
+
+            result.insert(result.end(), partition_result.begin(), partition_result.end());
+        }
+
+        return result;
+    }
+
+    vector<vector<Record>> partition_and_sort(Table* table, size_t partition_size) {
+        vector<vector<Record>> partitions;
+        vector<Record> current_partition;
+
+        auto iterator = table->create_iterator();
+
+        while (iterator->has_next()) {
+            Record record = iterator->next();
+            current_partition.push_back(record);
+
+            if (current_partition.size() >= partition_size) {
+                sort(current_partition.begin(), current_partition.end(),
+                    [this](const Record& a, const Record& b) {
+                        return condition->extract_join_value(a) < condition->extract_join_value(b);
+                    });
+                partitions.push_back(current_partition);
+                current_partition.clear();
+            }
+        }
+
+        // 处理最后一个分区
+        if (!current_partition.empty()) {
+            sort(current_partition.begin(), current_partition.end(),
+                [this](const Record& a, const Record& b) {
+                    return condition->extract_join_value(a) < condition->extract_join_value(b);
+                });
+            partitions.push_back(current_partition);
+        }
+
+        return partitions;
+    }
+};
+```
+
+## 连接优化技术
+
+### 连接顺序优化
+
+#### 动态规划连接顺序
+```cpp
+class JoinOrderOptimizer {
+private:
+    vector<Table*> tables;
+    vector<JoinCondition*> conditions;
+    CostEstimator* cost_estimator;
+
+public:
+    struct JoinPlan {
+        double estimated_cost;
+        vector<Table*> join_order;
+        JoinAlgorithm algorithm;
+        string plan_string;
+    };
+
+    JoinPlan optimize_join_order(const vector<Table*>& available_tables,
+                                const vector<JoinCondition*>& available_conditions) {
+        tables = available_tables;
+        conditions = available_conditions;
+
+        // 使用动态规划寻找最优连接顺序
+        return find_optimal_plan();
+    }
+
+private:
+    JoinPlan find_optimal_plan() {
+        // DP表：table_set -> best_plan
+        unordered_map<bitset<32>, JoinPlan> dp_table;
+
+        // 初始化：单表访问
+        for (size_t i = 0; i < tables.size(); i++) {
+            bitset<32> table_set;
+            table_set.set(i);
+
+            JoinPlan plan;
+            plan.estimated_cost = cost_estimator->estimate_scan_cost(tables[i]);
+            plan.join_order = {tables[i]};
+            plan.algorithm = JoinAlgorithm::TABLE_SCAN;
+            plan.plan_string = "Scan(" + tables[i]->get_name() + ")";
+
+            dp_table[table_set] = plan;
+        }
+
+        // DP：逐步增加表的数量
+        for (size_t k = 2; k <= tables.size(); k++) {
+            for (const auto& [table_set, plan] : dp_table) {
+                if (table_set.count() == k - 1) {
+                    // 尝试添加一个新表
+                    for (size_t i = 0; i < tables.size(); i++) {
+                        if (!table_set.test(i)) {
+                            bitset<32> new_set = table_set;
+                            new_set.set(i);
+
+                            // 找到连接条件
+                            JoinCondition* join_cond = find_join_condition(table_set, i);
+
+                            if (join_cond) {
+                                JoinPlan new_plan = create_join_plan(plan, tables[i], join_cond);
+
+                                // 更新DP表
+                                if (dp_table.find(new_set) == dp_table.end() ||
+                                    new_plan.estimated_cost < dp_table[new_set].estimated_cost) {
+                                    dp_table[new_set] = new_plan;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 返回包含所有表的最优计划
+        bitset<32> full_set;
+        for (size_t i = 0; i < tables.size(); i++) {
+            full_set.set(i);
+        }
+
+        return dp_table[full_set];
+    }
+
+    JoinCondition* find_join_condition(bitset<32> table_set, size_t new_table_index) {
+        Table* new_table = tables[new_table_index];
+
+        for (auto* cond : conditions) {
+            if (involves_table(cond, table_set) && involves_table(cond, new_table)) {
+                return cond;
+            }
+        }
+
+        return nullptr;  // 没有找到连接条件
+    }
+
+    bool involves_table(JoinCondition* cond, bitset<32> table_set) const {
+        for (size_t i = 0; i < tables.size(); i++) {
+            if (table_set.test(i) && cond->involves_table(tables[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool involves_table(JoinCondition* cond, Table* table) const {
+        return cond->involves_table(table);
+    }
+
+    JoinPlan create_join_plan(const JoinPlan& left_plan, Table* right_table,
+                            JoinCondition* join_cond) {
+        JoinPlan new_plan;
+
+        // 选择最优连接算法
+        JoinAlgorithm algo = select_join_algorithm(left_plan, right_table, join_cond);
+
+        // 估算连接成本
+        new_plan.estimated_cost = cost_estimator->estimate_join_cost(
+            left_plan.estimated_cost, right_table, join_cond, algo);
+
+        // 构建连接顺序
+        new_plan.join_order = left_plan.join_order;
+        new_plan.join_order.push_back(right_table);
+        new_plan.algorithm = algo;
+
+        // 构建计划字符串
+        stringstream plan_ss;
+        plan_ss << get_algorithm_name(algo) << "("
+                << left_plan.plan_string << ", "
+                << right_table->get_name() << ")";
+        new_plan.plan_string = plan_ss.str();
+
+        return new_plan;
+    }
+
+    JoinAlgorithm select_join_algorithm(const JoinPlan& left_plan, Table* right_table,
+                                      JoinCondition* join_cond) const {
+        size_t left_size = estimate_join_size(left_plan);
+        size_t right_size = right_table->get_record_count();
+        size_t memory_limit = get_memory_limit();
+
+        // 基于成本的算法选择
+        double hash_cost = estimate_hash_join_cost(left_size, right_size, memory_limit);
+        double merge_cost = estimate_merge_join_cost(left_size, right_size);
+        double nested_cost = estimate_nested_loop_cost(left_size, right_size);
+
+        if (hash_cost <= merge_cost && hash_cost <= nested_cost) {
+            return JoinAlgorithm::HASH_JOIN;
+        } else if (merge_cost <= nested_cost) {
+            return JoinAlgorithm::MERGE_JOIN;
+        } else {
+            return JoinAlgorithm::NESTED_LOOP;
+        }
+    }
+
+    string get_algorithm_name(JoinAlgorithm algo) const {
+        switch (algo) {
+            case JoinAlgorithm::HASH_JOIN: return "HashJoin";
+            case JoinAlgorithm::MERGE_JOIN: return "MergeJoin";
+            case JoinAlgorithm::NESTED_LOOP: return "NestedLoop";
+            default: return "Unknown";
+        }
+    }
+};
+```
+
+## 实践建议
+
+### 算法选择策略
+1. **表大小**：小表优先作为构建表，大表作为探测表
+2. **内存限制**：根据可用内存选择合适的算法
+3. **数据分布**：考虑数据倾斜和连接选择性
+4. **索引可用性**：有索引时优先使用索引连接
+
+### 性能优化技巧
+1. **统计信息**：维护准确的表统计信息
+2. **连接顺序**：优化多表连接的执行顺序
+3. **并行处理**：利用多核CPU进行并行连接
+4. **内存管理**：合理分配内存资源给不同连接阶段
+
+## 课后练习
+
+### 编程题
+1. 实现一个自适应的连接算法，能够根据运行时统计信息动态调整策略
+2. 设计并实现一个支持多种连接条件的通用连接框架
+3. 实现一个分布式哈希连接算法，支持跨节点的数据分区和连接
+
+### 思考题
+1. 分析不同连接算法在各种数据分布和大小下的性能特征
+2. 讨论连接操作中的内存管理和优化策略
+3. 如何设计一个支持实时流处理的增量连接算法？
+
+## 下节预告
+
+下一讲将介绍**查询执行 I**，包括：
+- 查询处理框架
+- 执行引擎架构
+- 表达式求值
+- 物化与流水线处理
+
+---
+
+**关键概念**：连接算法的选择对数据库性能至关重要，需要根据数据特征、硬件条件和查询模式选择最优算法！

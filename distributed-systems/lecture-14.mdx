@@ -1,0 +1,1938 @@
+---
+title: "Lecture 14: Chardonnay"
+description: "现代化分布式数据库系统架构与实现"
+---
+
+# Lecture 14: Chardonnay
+
+## 本周内容
+
+- **Chardonnay设计理念**：高性能事务处理与现代数据库架构
+- **系统架构**：分层设计和组件化实现
+- **关键技术**：多版本并发控制、分布式事务协调
+- **性能优化**：查询优化、缓存策略、并行处理
+- **容错机制**：故障检测、自动恢复、数据一致性
+- **实践项目**：构建类Chardonnay的分布式数据库原型
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/def456" title="Chardonnay分布式数据库" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### Chardonnay概述
+
+Chardonnay是一个现代化的分布式数据库系统，专注于高性能事务处理和强一致性保证。它结合了传统关系型数据库的事务特性和NoSQL系统的可扩展性。
+
+**Chardonnay的核心特性**
+```
+强一致性：支持ACID事务
+高可用性：多副本容错
+可扩展性：水平扩展架构
+高性能：并行查询处理
+易用性：标准SQL接口
+```
+
+**与传统数据库的对比**
+
+| 特性 | 传统数据库 | Chardonnay | Spanner |
+|------|-----------|------------|---------|
+| 架构 | 单机/主从 | 分布式 | 全球分布式 |
+| 一致性 | 强一致性 | 强一致性 | 外部一致性 |
+| 扩展性 | 垂直扩展 | 水平扩展 | 全球扩展 |
+| 事务 | 本地事务 | 分布式事务 | 分布式事务 |
+| 延迟 | 低 | 中等 | 高 |
+| 复杂度 | 低 | 中等 | 高 |
+
+### 系统架构
+
+#### 1. 分层架构设计
+
+Chardonnay采用分层架构，每个层次负责特定的功能。
+
+```go
+// Chardonnay系统架构
+type ChardonnaySystem struct {
+    config         *SystemConfig
+    storageLayer   *StorageLayer
+    computeLayer   *ComputeLayer
+    coordinationLayer *CoordinationLayer
+    interfaceLayer *InterfaceLayer
+    monitoring     *MonitoringSystem
+}
+
+type SystemConfig struct {
+    ClusterID        string
+    NodeCount        int
+    ReplicationFactor int
+    ConsistencyLevel ConsistencyLevel
+    StorageConfig    StorageConfig
+    ComputeConfig    ComputeConfig
+    NetworkConfig    NetworkConfig
+}
+
+// 存储层
+type StorageLayer struct {
+    nodes           []*StorageNode
+    partitioner     *Partitioner
+    replication     *ReplicationManager
+    compression     *CompressionManager
+    encryption      *EncryptionManager
+}
+
+// 计算层
+type ComputeLayer struct {
+    queryEngine     *QueryEngine
+    optimizer       *QueryOptimizer
+    executor        *QueryExecutor
+    planner         *QueryPlanner
+    cache           *QueryCache
+}
+
+// 协调层
+type CoordinationLayer struct {
+    transactionMgr  *TransactionManager
+    lockManager     *LockManager
+    consensus       *ConsensusManager
+    membership      *MembershipManager
+}
+
+// 接口层
+type InterfaceLayer struct {
+    sqlProcessor    *SQLProcessor
+    apiServer       *APIServer
+    connectionPool  *ConnectionPool
+    authManager     *AuthenticationManager
+}
+
+// 存储节点
+type StorageNode struct {
+    ID             string
+    Address        string
+    Capacity       int64
+    UsedSpace      int64
+    Status         NodeStatus
+    Partitions     []*Partition
+    WAL            *WriteAheadLog
+    MemTable       *MemTable
+    SSTables       []*SSTable
+    CompactionMgr  *CompactionManager
+}
+
+// 数据分区
+type Partition struct {
+    ID           string
+    Range        KeyRange
+    Replicas     []*Replica
+    Leader       string
+    Version      int64
+    Status       PartitionStatus
+}
+
+type KeyRange struct {
+    StartKey     string
+    EndKey       string
+    IsInclusive  bool
+}
+
+type Replica struct {
+    NodeID       string
+    Role         ReplicaRole
+    Lag          int64
+    Status       ReplicaStatus
+}
+
+type ReplicaRole int
+
+const (
+    RoleLeader ReplicaRole = iota
+    RoleFollower
+    RoleCandidate
+)
+
+// 查询引擎
+type QueryEngine struct {
+    parser       *SQLParser
+    analyzer     *QueryAnalyzer
+    optimizer   *QueryOptimizer
+    executor    *QueryExecutor
+    stats       *QueryStats
+}
+
+// 事务管理器
+type TransactionManager struct {
+    activeTransactions map[string]*TransactionContext
+    committedTransactions []*TransactionRecord
+    coordinator        *TransactionCoordinator
+    recoveryMgr        *RecoveryManager
+}
+```
+
+#### 2. 数据模型
+
+Chardonnay采用关系型数据模型，支持标准SQL，同时具备分布式特性。
+
+```go
+// 数据模型定义
+type DataModel struct {
+    databases    map[string]*Database
+    schemas      map[string]*Schema
+    indexes      map[string]*Index
+    constraints  map[string]*Constraint
+}
+
+type Database struct {
+    Name         string
+    CreatedAt    time.Time
+    Tables       map[string]*Table
+    Views        map[string]*View
+    Procedures   map[string]*Procedure
+}
+
+type Table struct {
+    Name         string
+    Columns      []*Column
+    PrimaryKey   *PrimaryKey
+    ForeignKeys  []*ForeignKey
+    Indexes      []*Index
+    Constraints  []*Constraint
+    PartitionKey *PartitionKey
+    Statistics   *TableStatistics
+}
+
+type Column struct {
+    Name         string
+    Type         DataType
+    Nullable     bool
+    Default      interface{}
+    Constraints  []*Constraint
+}
+
+type DataType int
+
+const (
+    TypeInt32 DataType = iota
+    TypeInt64
+    TypeFloat32
+    TypeFloat64
+    TypeString
+    TypeBoolean
+    TypeBytes
+    TypeDate
+    TypeTimestamp
+    TypeJSON
+)
+
+type Index struct {
+    Name         string
+    Type         IndexType
+    Columns      []*Column
+    Unique       bool
+    Partitioned  bool
+    Metadata     map[string]interface{}
+}
+
+type IndexType int
+
+const (
+    IndexBTree IndexType = iota
+    IndexHash
+    IndexLSM
+    IndexFullText
+)
+
+// 数据记录
+type Record struct {
+    Key         string
+    Values      map[string]interface{}
+    Version     int64
+    Timestamp   time.Time
+    TTL         *time.Duration
+    Metadata    map[string]interface{}
+}
+
+// 数据版本控制
+type VersionedRecord struct {
+    Record      *Record
+    PrevVersion *VersionedRecord
+    NextVersion *VersionedRecord
+    CreatedAt   time.Time
+    CreatedBy   string
+    Operation   OperationType
+}
+
+type OperationType int
+
+const (
+    OperationInsert OperationType = iota
+    OperationUpdate
+    OperationDelete
+)
+```
+
+### 多版本并发控制(MVCC)
+
+Chardonnay使用MVCC来实现高性能的并发控制。
+
+```go
+// MVCC实现
+type MVCCManager struct {
+    versionStore   *VersionStore
+    transactionMgr *TransactionManager
+    garbageCollector *GarbageCollector
+    snapshotMgr    *SnapshotManager
+}
+
+type VersionStore struct {
+    mu             sync.RWMutex
+    records        map[string]*VersionChain
+    indexes        map[string]*VersionIndex
+    stats          *VersionStats
+}
+
+type VersionChain struct {
+    head          *VersionedRecord
+    tail          *VersionedRecord
+    length        int
+    maxVersions   int
+}
+
+type VersionIndex struct {
+    index         *Index
+    versions      map[string][]*VersionedRecord
+}
+
+// 创建快照
+func (mvm *MVCCManager) CreateSnapshot(transactionID string) (*Snapshot, error) {
+    snapshot := &Snapshot{
+        ID:            generateSnapshotID(),
+        TransactionID: transactionID,
+        CreatedAt:     time.Now(),
+        VersionMap:    make(map[string]int64),
+        ActiveTxns:    make(map[string]bool),
+    }
+
+    // 获取当前活跃事务
+    mvm.transactionMgr.mu.RLock()
+    for txnID, txn := range mvm.transactionMgr.activeTransactions {
+        if txnID != transactionID {
+            snapshot.ActiveTxns[txnID] = true
+        }
+    }
+    mvm.transactionMgr.mu.RUnlock()
+
+    // 设置读取版本
+    mvm.versionStore.mu.RLock()
+    for key, chain := range mvm.versionStore.records {
+        if chain.head != nil {
+            snapshot.VersionMap[key] = chain.head.Record.Version
+        }
+    }
+    mvm.versionStore.mu.RUnlock()
+
+    return snapshot, nil
+}
+
+// 读取数据
+func (mvm *MVCCManager) Read(snapshot *Snapshot, key string) (*Record, error) {
+    mvm.versionStore.mu.RLock()
+    defer mvm.versionStore.mu.RUnlock()
+
+    chain, exists := mvm.versionStore.records[key]
+    if !exists {
+        return nil, fmt.Errorf("key not found: %s", key)
+    }
+
+    // 查找可见版本
+    visible := mvm.findVisibleVersion(chain, snapshot)
+    if visible == nil {
+        return nil, fmt.Errorf("no visible version for key: %s", key)
+    }
+
+    return visible.Record, nil
+}
+
+// 查找可见版本
+func (mvm *MVCCManager) findVisibleVersion(chain *VersionChain, snapshot *Snapshot) *VersionedRecord {
+    current := chain.head
+
+    for current != nil {
+        if mvm.isVersionVisible(current, snapshot) {
+            return current
+        }
+        current = current.NextVersion
+    }
+
+    return nil
+}
+
+// 检查版本可见性
+func (mvm *MVCCManager) isVersionVisible(version *VersionedRecord, snapshot *Snapshot) bool {
+    // 检查创建事务是否可见
+    if version.CreatedBy == snapshot.TransactionID {
+        return true
+    }
+
+    // 检查是否由活跃事务创建
+    if snapshot.ActiveTxns[version.CreatedBy] {
+        return false
+    }
+
+    // 检查版本时间戳
+    return version.CreatedAt.Before(snapshot.CreatedAt)
+}
+
+// 写入数据
+func (mvm *MVCCManager) Write(transactionID string, key string, record *Record) error {
+    mvm.versionStore.mu.Lock()
+    defer mvm.versionStore.mu.Unlock()
+
+    // 创建新版本
+    newVersion := &VersionedRecord{
+        Record:    record,
+        CreatedAt: time.Now(),
+        CreatedBy: transactionID,
+        Operation: OperationUpdate,
+    }
+
+    chain, exists := mvm.versionStore.records[key]
+    if !exists {
+        // 新记录
+        chain = &VersionChain{
+            head:        newVersion,
+            tail:        newVersion,
+            length:      1,
+            maxVersions: 1000,
+        }
+        mvm.versionStore.records[key] = chain
+    } else {
+        // 添加到版本链
+        newVersion.PrevVersion = chain.head
+        chain.head.NextVersion = newVersion
+        chain.head = newVersion
+        chain.length++
+
+        // 清理旧版本
+        if chain.length > chain.maxVersions {
+            mvm.cleanupOldVersions(chain)
+        }
+    }
+
+    // 更新索引
+    mvm.updateIndexes(key, newVersion)
+
+    return nil
+}
+
+// 清理旧版本
+func (mvm *MVCCManager) cleanupOldVersions(chain *VersionChain) {
+    if chain.length <= chain.maxVersions {
+        return
+    }
+
+    // 保留最新的maxVersions个版本
+    target := chain.tail
+    for i := 0; i < chain.maxVersions-1 && target.NextVersion != nil; i++ {
+        target = target.NextVersion
+    }
+
+    // 断开旧版本
+    if target != nil {
+        oldVersions := target.NextVersion
+        target.NextVersion = nil
+
+        // 更新链长度
+        for oldVersions != nil {
+            chain.length--
+            oldVersions = oldVersions.NextVersion
+        }
+    }
+}
+
+// 更新索引
+func (mvm *MVCCManager) updateIndexes(key string, version *VersionedRecord) {
+    for indexName, index := range mvm.versionStore.indexes {
+        indexKey := mvm.extractIndexKey(index.index, version.Record)
+        if indexKey != "" {
+            if index.versions[indexKey] == nil {
+                index.versions[indexKey] = make([]*VersionedRecord, 0)
+            }
+            index.versions[indexKey] = append(index.versions[indexKey], version)
+        }
+    }
+}
+
+// 垃圾回收
+func (mvm *MVCCManager) GarbageCollect() {
+    mvm.versionStore.mu.Lock()
+    defer mvm.versionStore.mu.Unlock()
+
+    // 获取所有活跃事务的最小开始时间
+    minActiveTime := mvm.getMinActiveTransactionTime()
+
+    // 清理过期版本
+    for key, chain := range mvm.versionStore.records {
+        mvm.gcVersionChain(chain, minActiveTime)
+    }
+
+    // 清理索引
+    for _, index := range mvm.versionStore.indexes {
+        mvm.gcIndexVersions(index, minActiveTime)
+    }
+}
+
+func (mvm *MVCCManager) getMinActiveTransactionTime() time.Time {
+    mvm.transactionMgr.mu.RLock()
+    defer mvm.transactionMgr.mu.RUnlock()
+
+    minTime := time.Now()
+    for _, txn := range mvm.transactionMgr.activeTransactions {
+        if txn.StartTime.Before(minTime) {
+            minTime = txn.StartTime
+        }
+    }
+
+    return minTime
+}
+
+func (mvm *MVCCManager) gcVersionChain(chain *VersionChain, minActiveTime time.Time) {
+    var toDelete []*VersionedRecord
+    current := chain.tail
+
+    // 标记需要删除的版本
+    for current != nil && current.CreatedAt.Before(minActiveTime) {
+        if current.NextVersion != nil {
+            toDelete = append(toDelete, current)
+        }
+        current = current.NextVersion
+    }
+
+    // 执行删除
+    for _, version := range toDelete {
+        if version.PrevVersion != nil {
+            version.PrevVersion.NextVersion = version.NextVersion
+        }
+        if version.NextVersion != nil {
+            version.NextVersion.PrevVersion = version.PrevVersion
+        }
+
+        if chain.tail == version {
+            chain.tail = version.NextVersion
+        }
+
+        chain.length--
+    }
+}
+
+func (mvm *MVCCManager) gcIndexVersions(index *VersionIndex, minActiveTime time.Time) {
+    for key, versions := range index.versions {
+        var validVersions []*VersionedRecord
+
+        for _, version := range versions {
+            if !version.CreatedAt.Before(minActiveTime) {
+                validVersions = append(validVersions, version)
+            }
+        }
+
+        index.versions[key] = validVersions
+    }
+}
+```
+
+### 分布式事务处理
+
+Chardonnay实现了完整的分布式事务处理机制。
+
+```go
+// 分布式事务协调器
+type DistributedTransactionCoordinator struct {
+    id              string
+    participants    map[string]*TransactionParticipant
+    transactionLog  *TransactionLog
+    recoveryMgr     *RecoveryManager
+    consensus       *ConsensusManager
+    config          *TransactionConfig
+}
+
+type TransactionParticipant struct {
+    ID           string
+    Endpoint     string
+    Status       ParticipantStatus
+    Prepared     bool
+    Committed    bool
+    LastHeartbeat time.Time
+}
+
+type TransactionConfig struct {
+    Timeout         time.Duration
+    RetryCount      int
+    ConsistencyLevel ConsistencyLevel
+    IsolationLevel  IsolationLevel
+}
+
+// 两阶段提交实现
+func (dtc *DistributedTransactionCoordinator) TwoPhaseCommit(transactionID string, participants []*TransactionParticipant) error {
+    // 阶段1：准备阶段
+    if err := dtc.preparePhase(transactionID, participants); err != nil {
+        dtc.abortTransaction(transactionID, participants)
+        return err
+    }
+
+    // 阶段2：提交阶段
+    if err := dtc.commitPhase(transactionID, participants); err != nil {
+        // 部分提交成功，需要恢复
+        go dtc.recoverTransaction(transactionID, participants)
+        return err
+    }
+
+    return nil
+}
+
+// 准备阶段
+func (dtc *DistributedTransactionCoordinator) preparePhase(transactionID string, participants []*TransactionParticipant) error {
+    ctx, cancel := context.WithTimeout(context.Background(), dtc.config.Timeout)
+    defer cancel()
+
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(participants))
+    responseChan := make(chan *PrepareResponse, len(participants))
+
+    // 发送准备请求到所有参与者
+    for _, participant := range participants {
+        wg.Add(1)
+        go func(p *TransactionParticipant) {
+            defer wg.Done()
+
+            response, err := dtc.sendPrepareRequest(ctx, transactionID, p)
+            if err != nil {
+                errChan <- err
+                return
+            }
+            responseChan <- response
+        }(participant)
+    }
+
+    // 等待所有响应
+    go func() {
+        wg.Wait()
+        close(errChan)
+        close(responseChan)
+    }()
+
+    // 处理响应
+    preparedCount := 0
+    for response := range responseChan {
+        if response.Prepared {
+            preparedCount++
+            participant := dtc.participants[response.ParticipantID]
+            participant.Prepared = true
+        }
+    }
+
+    // 检查错误
+    for err := range errChan {
+        if err != nil {
+            return err
+        }
+    }
+
+    // 检查是否所有参与者都准备好了
+    if preparedCount != len(participants) {
+        return fmt.Errorf("not all participants prepared: %d/%d", preparedCount, len(participants))
+    }
+
+    return nil
+}
+
+// 提交阶段
+func (dtc *DistributedTransactionCoordinator) commitPhase(transactionID string, participants []*TransactionParticipant) error {
+    ctx, cancel := context.WithTimeout(context.Background(), dtc.config.Timeout)
+    defer cancel()
+
+    var wg sync.WaitGroup
+    errChan := make(chan error, len(participants))
+    successChan := make(chan string, len(participants))
+
+    // 发送提交请求到所有参与者
+    for _, participant := range participants {
+        wg.Add(1)
+        go func(p *TransactionParticipant) {
+            defer wg.Done()
+
+            err := dtc.sendCommitRequest(ctx, transactionID, p)
+            if err != nil {
+                errChan <- err
+                return
+            }
+            successChan <- p.ID
+        }(participant)
+    }
+
+    // 等待所有响应
+    go func() {
+        wg.Wait()
+        close(errChan)
+        close(successChan)
+    }()
+
+    // 记录成功的提交
+    committedCount := 0
+    for participantID := range successChan {
+        dtc.participants[participantID].Committed = true
+        committedCount++
+    }
+
+    // 检查错误
+    for err := range errChan {
+        if err != nil {
+            return err
+        }
+    }
+
+    // 检查是否所有参与者都提交了
+    if committedCount != len(participants) {
+        return fmt.Errorf("not all participants committed: %d/%d", committedCount, len(participants))
+    }
+
+    return nil
+}
+
+// 发送准备请求
+func (dtc *DistributedTransactionCoordinator) sendPrepareRequest(ctx context.Context, transactionID string, participant *TransactionParticipant) (*PrepareResponse, error) {
+    request := &PrepareRequest{
+        TransactionID: transactionID,
+        CoordinatorID: dtc.id,
+        Timestamp:    time.Now(),
+    }
+
+    response, err := dtc.callParticipant(ctx, participant.Endpoint, "Prepare", request)
+    if err != nil {
+        return nil, err
+    }
+
+    prepareResponse, ok := response.(*PrepareResponse)
+    if !ok {
+        return nil, fmt.Errorf("invalid response type")
+    }
+
+    return prepareResponse, nil
+}
+
+// 发送提交请求
+func (dtc *DistributedTransactionCoordinator) sendCommitRequest(ctx context.Context, transactionID string, participant *TransactionParticipant) error {
+    request := &CommitRequest{
+        TransactionID: transactionID,
+        CoordinatorID: dtc.id,
+        Timestamp:    time.Now(),
+    }
+
+    _, err := dtc.callParticipant(ctx, participant.Endpoint, "Commit", request)
+    return err
+}
+
+// 调用参与者
+func (dtc *DistributedTransactionCoordinator) callParticipant(ctx context.Context, endpoint, method string, request interface{}) (interface{}, error) {
+    // 实现RPC调用逻辑
+    // 这里简化为直接调用，实际实现应该使用gRPC或其他RPC框架
+    return nil, nil
+}
+
+// 中止事务
+func (dtc *DistributedTransactionCoordinator) abortTransaction(transactionID string, participants []*TransactionParticipant) {
+    ctx, cancel := context.WithTimeout(context.Background(), dtc.config.Timeout)
+    defer cancel()
+
+    var wg sync.WaitGroup
+
+    // 发送中止请求到所有已准备的参与者
+    for _, participant := range participants {
+        if participant.Prepared {
+            wg.Add(1)
+            go func(p *TransactionParticipant) {
+                defer wg.Done()
+                dtc.sendAbortRequest(ctx, transactionID, p)
+            }(participant)
+        }
+    }
+
+    wg.Wait()
+}
+
+// 发送中止请求
+func (dtc *DistributedTransactionCoordinator) sendAbortRequest(ctx context.Context, transactionID string, participant *TransactionParticipant) error {
+    request := &AbortRequest{
+        TransactionID: transactionID,
+        CoordinatorID: dtc.id,
+        Timestamp:    time.Now(),
+    }
+
+    _, err := dtc.callParticipant(ctx, participant.Endpoint, "Abort", request)
+    return err
+}
+
+// 恢复事务
+func (dtc *DistributedTransactionCoordinator) recoverTransaction(transactionID string, participants []*TransactionParticipant) {
+    // 检查每个参与者的状态
+    for _, participant := range participants {
+        status, err := dtc.checkParticipantStatus(transactionID, participant)
+        if err != nil {
+            continue
+        }
+
+        switch status {
+        case "prepared":
+            // 参与者已准备好但未提交，需要决定提交或中止
+            dtc.decideTransactionOutcome(transactionID, participant)
+        case "committed":
+            participant.Committed = true
+        case "aborted":
+            // 已中止，无需处理
+        }
+    }
+}
+
+// 检查参与者状态
+func (dtc *DistributedTransactionCoordinator) checkParticipantStatus(transactionID string, participant *TransactionParticipant) (string, error) {
+    request := &StatusRequest{
+        TransactionID: transactionID,
+        CoordinatorID: dtc.id,
+    }
+
+    response, err := dtc.callParticipant(context.Background(), participant.Endpoint, "Status", request)
+    if err != nil {
+        return "", err
+    }
+
+    statusResponse, ok := response.(*StatusResponse)
+    if !ok {
+        return "", fmt.Errorf("invalid response type")
+    }
+
+    return statusResponse.Status, nil
+}
+
+// 决定事务结果
+func (dtc *DistributedTransactionCoordinator) decideTransactionOutcome(transactionID string, participant *TransactionParticipant) {
+    // 检查事务日志以确定应该提交还是中止
+    decision, err := dtc.transactionLog.GetTransactionDecision(transactionID)
+    if err != nil {
+        // 无法确定决定，默认中止
+        dtc.sendAbortRequest(context.Background(), transactionID, participant)
+        return
+    }
+
+    if decision == "commit" {
+        dtc.sendCommitRequest(context.Background(), transactionID, participant)
+    } else {
+        dtc.sendAbortRequest(context.Background(), transactionID, participant)
+    }
+}
+```
+
+### 查询优化与执行
+
+Chardonnay实现了先进的查询优化器和并行执行引擎。
+
+```go
+// 查询优化器
+type QueryOptimizer struct {
+    stats          *StatisticsManager
+    costModel      *CostModel
+    rules          []*OptimizationRule
+    planCache      *PlanCache
+    adaptive       bool
+}
+
+type OptimizationRule struct {
+    Name        string
+    Apply       func(*QueryPlan) (*QueryPlan, error)
+    Condition   func(*QueryPlan) bool
+    Priority    int
+}
+
+// 查询计划
+type QueryPlan struct {
+    ID           string
+    Root         *PlanNode
+    Cost         float64
+    Cardinality  int64
+    Parallel     bool
+    Partitioned  bool
+    Metadata     map[string]interface{}
+}
+
+type PlanNode struct {
+    ID          string
+    Type        NodeType
+    Children    []*PlanNode
+    Predicate   *Expression
+    ProjectList []*ColumnRef
+    DataSource  *DataSource
+    Cost        float64
+    Cardinality int64
+    Parallel    bool
+}
+
+type NodeType int
+
+const (
+    NodeScan NodeType = iota
+    NodeFilter
+    NodeProject
+    NodeJoin
+    NodeAggregate
+    NodeSort
+    NodeLimit
+    NodeUnion
+    NodeIntersect
+    NodeExcept
+)
+
+// 查询执行器
+type QueryExecutor struct {
+    workers       []*Worker
+    scheduler     *TaskScheduler
+    memoryMgr     *MemoryManager
+    diskMgr       *DiskManager
+    networkMgr    *NetworkManager
+}
+
+type Worker struct {
+    ID         string
+    Status     WorkerStatus
+    CurrentTask *Task
+    Resources  *WorkerResources
+}
+
+type Task struct {
+    ID         string
+    Plan       *PlanNode
+    Input      *DataChunk
+    Output     chan *DataChunk
+    Status     TaskStatus
+    StartTime  time.Time
+    EndTime    *time.Time
+}
+
+type DataChunk struct {
+    Rows       []*Row
+    Schema     *Schema
+    Size       int64
+    Compressed bool
+}
+
+// 优化查询
+func (qo *QueryOptimizer) Optimize(query *Query) (*QueryPlan, error) {
+    // 生成初始计划
+    initialPlan, err := qo.generateInitialPlan(query)
+    if err != nil {
+        return nil, err
+    }
+
+    // 应用优化规则
+    optimizedPlan := initialPlan
+    for _, rule := range qo.rules {
+        if rule.Condition(optimizedPlan) {
+            newPlan, err := rule.Apply(optimizedPlan)
+            if err != nil {
+                return nil, err
+            }
+            optimizedPlan = newPlan
+        }
+    }
+
+    // 并行化优化
+    if qo.adaptive {
+        optimizedPlan = qo.parallelizePlan(optimizedPlan)
+    }
+
+    // 计算成本
+    cost := qo.calculateCost(optimizedPlan)
+    optimizedPlan.Cost = cost
+
+    return optimizedPlan, nil
+}
+
+// 生成初始计划
+func (qo *QueryOptimizer) generateInitialPlan(query *Query) (*QueryPlan, error) {
+    plan := &QueryPlan{
+        ID:        generatePlanID(),
+        Parallel:  false,
+        Metadata:  make(map[string]interface{}),
+    }
+
+    // 为每个表创建扫描节点
+    var scanNodes []*PlanNode
+    for _, tableRef := range query.TableRefs {
+        scanNode := &PlanNode{
+            ID:        generateNodeID(),
+            Type:      NodeScan,
+            DataSource: &DataSource{
+                Table:      tableRef.Table,
+                Alias:      tableRef.Alias,
+                Partition:  tableRef.Partition,
+            },
+        }
+        scanNodes = append(scanNodes, scanNode)
+    }
+
+    // 构建查询树
+    plan.Root = qo.buildQueryTree(scanNodes, query)
+
+    return plan, nil
+}
+
+// 构建查询树
+func (qo *QueryOptimizer) buildQueryTree(scanNodes []*PlanNode, query *Query) *PlanNode {
+    var currentNode *PlanNode
+
+    // 如果只有一个表，直接返回扫描节点
+    if len(scanNodes) == 1 {
+        currentNode = scanNodes[0]
+    } else {
+        // 多表连接，构建连接树
+        currentNode = qo.buildJoinTree(scanNodes, query.JoinConditions)
+    }
+
+    // 应用过滤条件
+    if query.WhereClause != nil {
+        filterNode := &PlanNode{
+            ID:        generateNodeID(),
+            Type:      NodeFilter,
+            Children:  []*PlanNode{currentNode},
+            Predicate: query.WhereClause,
+        }
+        currentNode = filterNode
+    }
+
+    // 应用投影
+    if len(query.SelectList) > 0 {
+        projectNode := &PlanNode{
+            ID:         generateNodeID(),
+            Type:       NodeProject,
+            Children:   []*PlanNode{currentNode},
+            ProjectList: query.SelectList,
+        }
+        currentNode = projectNode
+    }
+
+    // 应用聚合
+    if query.GroupBy != nil {
+        aggregateNode := &PlanNode{
+            ID:        generateNodeID(),
+            Type:      NodeAggregate,
+            Children:  []*PlanNode{currentNode},
+        }
+        currentNode = aggregateNode
+    }
+
+    // 应用排序
+    if query.OrderBy != nil {
+        sortNode := &PlanNode{
+            ID:        generateNodeID(),
+            Type:      NodeSort,
+            Children:  []*PlanNode{currentNode},
+        }
+        currentNode = sortNode
+    }
+
+    // 应用限制
+    if query.Limit > 0 {
+        limitNode := &PlanNode{
+            ID:       generateNodeID(),
+            Type:     NodeLimit,
+            Children: []*PlanNode{currentNode},
+        }
+        currentNode = limitNode
+    }
+
+    return currentNode
+}
+
+// 构建连接树
+func (qo *QueryOptimizer) buildJoinTree(scanNodes []*PlanNode, joinConditions []*JoinCondition) *PlanNode {
+    if len(scanNodes) == 1 {
+        return scanNodes[0]
+    }
+
+    // 简化的连接树构建，实际实现应该使用更复杂的算法
+    left := scanNodes[0]
+    right := scanNodes[1]
+
+    joinNode := &PlanNode{
+        ID:       generateNodeID(),
+        Type:     NodeJoin,
+        Children: []*PlanNode{left, right},
+    }
+
+    if len(scanNodes) > 2 {
+        remaining := scanNodes[2:]
+        return qo.buildJoinTree([]*PlanNode{joinNode, remaining[0]}, joinConditions)
+    }
+
+    return joinNode
+}
+
+// 并行化计划
+func (qo *QueryOptimizer) parallelizePlan(plan *QueryPlan) *QueryPlan {
+    plan.Parallel = true
+
+    // 标记可以并行执行的节点
+    qo.markParallelNodes(plan.Root)
+
+    return plan
+}
+
+// 标记并行节点
+func (qo *QueryOptimizer) markParallelNodes(node *PlanNode) {
+    switch node.Type {
+    case NodeScan:
+        // 扫描节点可以并行执行
+        node.Parallel = true
+    case NodeFilter:
+        // 过滤节点可以并行执行
+        node.Parallel = true
+    case NodeProject:
+        // 投影节点可以并行执行
+        node.Parallel = true
+    case NodeJoin:
+        // 连接节点可以并行执行
+        node.Parallel = true
+    }
+
+    // 递归处理子节点
+    for _, child := range node.Children {
+        qo.markParallelNodes(child)
+    }
+}
+
+// 计算成本
+func (qo *QueryOptimizer) calculateCost(plan *QueryPlan) float64 {
+    return qo.calculateNodeCost(plan.Root)
+}
+
+// 计算节点成本
+func (qo *QueryOptimizer) calculateNodeCost(node *PlanNode) float64 {
+    var cost float64
+
+    // 计算当前节点的成本
+    switch node.Type {
+    case NodeScan:
+        cost = qo.calculateScanCost(node)
+    case NodeFilter:
+        cost = qo.calculateFilterCost(node)
+    case NodeProject:
+        cost = qo.calculateProjectCost(node)
+    case NodeJoin:
+        cost = qo.calculateJoinCost(node)
+    case NodeAggregate:
+        cost = qo.calculateAggregateCost(node)
+    case NodeSort:
+        cost = qo.calculateSortCost(node)
+    default:
+        cost = 1.0
+    }
+
+    // 加上子节点的成本
+    for _, child := range node.Children {
+        cost += qo.calculateNodeCost(child)
+    }
+
+    node.Cost = cost
+    return cost
+}
+
+// 执行查询
+func (qe *QueryExecutor) Execute(plan *QueryPlan) (*QueryResult, error) {
+    // 创建执行任务
+    task := &Task{
+        ID:        generateTaskID(),
+        Plan:      plan.Root,
+        Output:    make(chan *DataChunk, 10),
+        Status:    TaskPending,
+        StartTime: time.Now(),
+    }
+
+    // 调度任务
+    if plan.Parallel {
+        qe.executeParallelPlan(task)
+    } else {
+        qe.executeSequentialPlan(task)
+    }
+
+    // 收集结果
+    result := &QueryResult{
+        Schema:    plan.Metadata["schema"].(*Schema),
+        Rows:      make([]*Row, 0),
+        StartTime: task.StartTime,
+    }
+
+    for chunk := range task.Output {
+        result.Rows = append(result.Rows, chunk.Rows...)
+    }
+
+    result.EndTime = time.Now()
+    result.Duration = result.EndTime.Sub(result.StartTime)
+
+    return result, nil
+}
+
+// 并行执行计划
+func (qe *QueryExecutor) executeParallelPlan(task *Task) {
+    // 将计划分解为并行任务
+    parallelTasks := qe.decomposePlan(task.Plan)
+
+    // 分配任务到工作节点
+    for _, parallelTask := range parallelTasks {
+        worker := qe.scheduler.Schedule(parallelTask)
+        if worker != nil {
+            go qe.workerExecute(worker, parallelTask)
+        }
+    }
+}
+
+// 分解计划
+func (qe *QueryExecutor) decomposePlan(node *PlanNode) []*Task {
+    var tasks []*Task
+
+    if node.Parallel {
+        // 创建并行任务
+        partitions := qe.getPartitionCount(node)
+        for i := 0; i < partitions; i++ {
+            task := &Task{
+                ID:       generateTaskID(),
+                Plan:     node,
+                Output:   make(chan *DataChunk, 10),
+                Status:   TaskPending,
+                Metadata: map[string]interface{}{
+                    "partition": i,
+                },
+            }
+            tasks = append(tasks, task)
+        }
+    } else {
+        // 创建单个任务
+        task := &Task{
+            ID:     generateTaskID(),
+            Plan:   node,
+            Output: make(chan *DataChunk, 10),
+            Status: TaskPending,
+        }
+        tasks = append(tasks, task)
+    }
+
+    return tasks
+}
+
+// 工作节点执行
+func (qe *QueryExecutor) workerExecute(worker *Worker, task *Task) {
+    worker.CurrentTask = task
+    task.Status = TaskRunning
+
+    // 执行节点
+    result := qe.executeNode(task.Plan, task.Metadata)
+
+    // 发送结果
+    for _, chunk := range result {
+        task.Output <- chunk
+    }
+
+    close(task.Output)
+    task.Status = TaskCompleted
+    worker.CurrentTask = nil
+}
+
+// 执行节点
+func (qe *QueryExecutor) executeNode(node *PlanNode, metadata map[string]interface{}) []*DataChunk {
+    switch node.Type {
+    case NodeScan:
+        return qe.executeScan(node, metadata)
+    case NodeFilter:
+        return qe.executeFilter(node, metadata)
+    case NodeProject:
+        return qe.executeProject(node, metadata)
+    case NodeJoin:
+        return qe.executeJoin(node, metadata)
+    case NodeAggregate:
+        return qe.executeAggregate(node, metadata)
+    default:
+        return []*DataChunk{}
+    }
+}
+
+// 执行扫描
+func (qe *QueryExecutor) executeScan(node *PlanNode, metadata map[string]interface{}) []*DataChunk {
+    // 从存储层读取数据
+    var chunks []*DataChunk
+
+    // 获取分区信息
+    partition, ok := metadata["partition"].(int)
+    if !ok {
+        partition = 0
+    }
+
+    // 执行扫描操作
+    // 这里简化实现，实际应该从存储层读取数据
+    chunk := &DataChunk{
+        Rows:   make([]*Row, 0),
+        Schema: node.DataSource.Table.Schema,
+    }
+
+    chunks = append(chunks, chunk)
+    return chunks
+}
+
+// 执行过滤
+func (qe *QueryExecutor) executeFilter(node *PlanNode, metadata map[string]interface{}) []*DataChunk {
+    // 执行子节点
+    inputChunks := qe.executeNode(node.Children[0], metadata)
+
+    var outputChunks []*DataChunk
+
+    // 应用过滤条件
+    for _, chunk := range inputChunks {
+        outputChunk := &DataChunk{
+            Rows:   make([]*Row, 0),
+            Schema: chunk.Schema,
+        }
+
+        for _, row := range chunk.Rows {
+            if qe.evaluatePredicate(node.Predicate, row) {
+                outputChunk.Rows = append(outputChunk.Rows, row)
+            }
+        }
+
+        outputChunks = append(outputChunks, outputChunk)
+    }
+
+    return outputChunks
+}
+
+// 执行投影
+func (qe *QueryExecutor) executeProject(node *PlanNode, metadata map[string]interface{}) []*DataChunk {
+    // 执行子节点
+    inputChunks := qe.executeNode(node.Children[0], metadata)
+
+    var outputChunks []*DataChunk
+
+    // 应用投影
+    for _, chunk := range inputChunks {
+        outputChunk := &DataChunk{
+            Rows:   make([]*Row, 0),
+            Schema: qe.createProjectSchema(node.ProjectList),
+        }
+
+        for _, row := range chunk.Rows {
+            projectedRow := qe.projectRow(node.ProjectList, row)
+            outputChunk.Rows = append(outputChunk.Rows, projectedRow)
+        }
+
+        outputChunks = append(outputChunks, outputChunk)
+    }
+
+    return outputChunks
+}
+```
+
+## 实践项目：构建Chardonnay原型
+
+### 系统设计
+
+```go
+// Chardonnay原型系统
+type ChardonnayPrototype struct {
+    config           *PrototypeConfig
+    storageEngine    *StorageEngine
+    queryEngine      *QueryEngine
+    transactionMgr   *TransactionManager
+    consensusCluster *ConsensusCluster
+    metadataStore   *MetadataStore
+    httpServer      *HTTPServer
+}
+
+type PrototypeConfig struct {
+    ClusterID      string
+    NodeID         string
+    DataDir        string
+    Port           int
+    Peers          []string
+    StorageConfig  StorageConfig
+    QueryConfig    QueryConfig
+}
+
+// 初始化系统
+func NewChardonnayPrototype(config *PrototypeConfig) *ChardonnayPrototype {
+    // 创建存储引擎
+    storageEngine := NewStorageEngine(&config.StorageConfig)
+
+    // 创建查询引擎
+    queryEngine := NewQueryEngine(&config.QueryConfig)
+
+    // 创建事务管理器
+    transactionMgr := NewTransactionManager(&TransactionConfig{
+        Timeout:         30 * time.Second,
+        RetryCount:      3,
+        ConsistencyLevel: StrongConsistency,
+        IsolationLevel:  SnapshotIsolation,
+    })
+
+    // 创建共识集群
+    consensusCluster := NewConsensusCluster(&ConsensusConfig{
+        NodeID:    config.NodeID,
+        Peers:     config.Peers,
+        ElectionTimeout: 5 * time.Second,
+    })
+
+    // 创建元数据存储
+    metadataStore := NewMetadataStore(config.DataDir)
+
+    // 创建HTTP服务器
+    httpServer := NewHTTPServer(config.Port, queryEngine, transactionMgr)
+
+    return &ChardonnayPrototype{
+        config:           config,
+        storageEngine:    storageEngine,
+        queryEngine:      queryEngine,
+        transactionMgr:   transactionMgr,
+        consensusCluster: consensusCluster,
+        metadataStore:   metadataStore,
+        httpServer:      httpServer,
+    }
+}
+
+// 启动系统
+func (cp *ChardonnayPrototype) Start() error {
+    // 启动存储引擎
+    if err := cp.storageEngine.Start(); err != nil {
+        return err
+    }
+
+    // 启动共识集群
+    if err := cp.consensusCluster.Start(); err != nil {
+        return err
+    }
+
+    // 启动事务管理器
+    if err := cp.transactionMgr.Start(); err != nil {
+        return err
+    }
+
+    // 启动HTTP服务器
+    if err := cp.httpServer.Start(); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+// HTTP API处理器
+type HTTPServer struct {
+    port         int
+    server       *http.Server
+    queryEngine  *QueryEngine
+    transactionMgr *TransactionManager
+    router       *mux.Router
+}
+
+// SQL查询处理器
+func (hs *HTTPServer) handleSQLQuery(w http.ResponseWriter, r *http.Request) {
+    var queryRequest struct {
+        Query     string                 `json:"query"`
+        Params    map[string]interface{} `json:"params"`
+        TransactionID string              `json:"transaction_id"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&queryRequest); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    // 解析SQL查询
+    query, err := hs.queryEngine.Parse(queryRequest.Query)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    // 执行查询
+    var result *QueryResult
+    if queryRequest.TransactionID != "" {
+        result, err = hs.transactionMgr.ExecuteInTransaction(queryRequest.TransactionID, query)
+    } else {
+        result, err = hs.queryEngine.Execute(query)
+    }
+
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // 返回结果
+    response := map[string]interface{}{
+        "columns": result.Schema.GetColumnNames(),
+        "rows":    result.Rows,
+        "duration": result.Duration.Milliseconds(),
+        "count":   len(result.Rows),
+    }
+
+    json.NewEncoder(w).Encode(response)
+}
+
+// 事务处理器
+func (hs *HTTPServer) handleTransaction(w http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodPost:
+        hs.handleBeginTransaction(w, r)
+    case http.MethodPut:
+        hs.handleCommitTransaction(w, r)
+    case http.MethodDelete:
+        hs.handleRollbackTransaction(w, r)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+// 开始事务
+func (hs *HTTPServer) handleBeginTransaction(w http.ResponseWriter, r *http.Request) {
+    transactionID, err := hs.transactionMgr.Begin()
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    response := map[string]interface{}{
+        "transaction_id": transactionID,
+        "status":        "active",
+        "start_time":    time.Now(),
+    }
+
+    json.NewEncoder(w).Encode(response)
+}
+
+// 提交事务
+func (hs *HTTPServer) handleCommitTransaction(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    transactionID := vars["id"]
+
+    if err := hs.transactionMgr.Commit(transactionID); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    response := map[string]interface{}{
+        "transaction_id": transactionID,
+        "status":        "committed",
+        "commit_time":   time.Now(),
+    }
+
+    json.NewEncoder(w).Encode(response)
+}
+
+// 回滚事务
+func (hs *HTTPServer) handleRollbackTransaction(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    transactionID := vars["id"]
+
+    if err := hs.transactionMgr.Rollback(transactionID); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    response := map[string]interface{}{
+        "transaction_id": transactionID,
+        "status":        "rolledback",
+        "rollback_time": time.Now(),
+    }
+
+    json.NewEncoder(w).Encode(response)
+}
+```
+
+### 测试用例
+
+```go
+package chardonnay_test
+
+import (
+    "testing"
+    "time"
+)
+
+func TestBasicSQL(t *testing.T) {
+    // 创建Chardonnay原型
+    config := &PrototypeConfig{
+        ClusterID: "test-cluster",
+        NodeID:    "node-1",
+        DataDir:   "/tmp/chardonnay-test",
+        Port:      8080,
+        Peers:     []string{"node-1:8080"},
+    }
+
+    system := NewChardonnayPrototype(config)
+    if err := system.Start(); err != nil {
+        t.Fatal(err)
+    }
+    defer system.Stop()
+
+    // 等待系统启动
+    time.Sleep(100 * time.Millisecond)
+
+    // 创建表
+    createTableSQL := `
+    CREATE TABLE users (
+        id INT PRIMARY KEY,
+        name VARCHAR(100),
+        email VARCHAR(100),
+        age INT,
+        created_at TIMESTAMP
+    )`
+
+    if err := system.ExecuteSQL(createTableSQL); err != nil {
+        t.Fatal(err)
+    }
+
+    // 插入数据
+    insertSQL := "INSERT INTO users (id, name, email, age, created_at) VALUES (?, ?, ?, ?, ?)"
+    params := map[string]interface{}{
+        "1": 1,
+        "2": "Alice",
+        "3": "alice@example.com",
+        "4": 25,
+        "5": time.Now(),
+    }
+
+    if err := system.ExecuteSQLWithParams(insertSQL, params); err != nil {
+        t.Fatal(err)
+    }
+
+    // 查询数据
+    selectSQL := "SELECT * FROM users WHERE id = ?"
+    selectParams := map[string]interface{}{"1": 1}
+
+    result, err := system.ExecuteSQLWithParams(selectSQL, selectParams)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    if len(result.Rows) != 1 {
+        t.Fatalf("Expected 1 row, got %d", len(result.Rows))
+    }
+
+    if result.Rows[0].Get("name") != "Alice" {
+        t.Fatalf("Expected name 'Alice', got '%s'", result.Rows[0].Get("name"))
+    }
+}
+
+func TestConcurrentTransactions(t *testing.T) {
+    config := &PrototypeConfig{
+        ClusterID: "test-cluster-concurrent",
+        NodeID:    "node-1",
+        DataDir:   "/tmp/chardonnay-concurrent",
+        Port:      8081,
+        Peers:     []string{"node-1:8081"},
+    }
+
+    system := NewChardonnayPrototype(config)
+    if err := system.Start(); err != nil {
+        t.Fatal(err)
+    }
+    defer system.Stop()
+
+    time.Sleep(100 * time.Millisecond)
+
+    // 创建测试表
+    createTableSQL := `
+    CREATE TABLE accounts (
+        id INT PRIMARY KEY,
+        balance DECIMAL(10,2),
+        version INT
+    )`
+
+    if err := system.ExecuteSQL(createTableSQL); err != nil {
+        t.Fatal(err)
+    }
+
+    // 初始化账户
+    initSQL := "INSERT INTO accounts (id, balance, version) VALUES (?, ?, ?)"
+    initParams := map[string]interface{}{
+        "1": 1,
+        "2": 1000.00,
+        "3": 1,
+    }
+
+    if err := system.ExecuteSQLWithParams(initSQL, initParams); err != nil {
+        t.Fatal(err)
+    }
+
+    // 并发事务测试
+    var wg sync.WaitGroup
+    transactions := 10
+    errors := make(chan error, transactions)
+
+    for i := 0; i < transactions; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+
+            // 开始事务
+            txn, err := system.BeginTransaction()
+            if err != nil {
+                errors <- err
+                return
+            }
+
+            // 查询余额
+            selectSQL := "SELECT balance, version FROM accounts WHERE id = ?"
+            selectParams := map[string]interface{}{"1": 1}
+
+            result, err := system.ExecuteSQLInTransaction(txn, selectSQL, selectParams)
+            if err != nil {
+                errors <- err
+                return
+            }
+
+            if len(result.Rows) == 0 {
+                errors <- fmt.Errorf("account not found")
+                return
+            }
+
+            balance := result.Rows[0].Get("balance").(float64)
+            version := result.Rows[0].Get("version").(int)
+
+            // 更新余额
+            newBalance := balance + 100.00
+            newVersion := version + 1
+
+            updateSQL := "UPDATE accounts SET balance = ?, version = ? WHERE id = ? AND version = ?"
+            updateParams := map[string]interface{}{
+                "1": newBalance,
+                "2": newVersion,
+                "3": 1,
+                "4": version,
+            }
+
+            _, err = system.ExecuteSQLInTransaction(txn, updateSQL, updateParams)
+            if err != nil {
+                errors <- err
+                return
+            }
+
+            // 提交事务
+            if err := system.CommitTransaction(txn); err != nil {
+                errors <- err
+                return
+            }
+        }(i)
+    }
+
+    wg.Wait()
+    close(errors)
+
+    // 检查错误
+    for err := range errors {
+        if err != nil {
+            t.Errorf("Transaction failed: %v", err)
+        }
+    }
+
+    // 验证最终余额
+    finalSQL := "SELECT balance FROM accounts WHERE id = ?"
+    finalParams := map[string]interface{}{"1": 1}
+
+    result, err := system.ExecuteSQLWithParams(finalSQL, finalParams)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    if len(result.Rows) == 0 {
+        t.Fatal("Account not found")
+    }
+
+    finalBalance := result.Rows[0].Get("balance").(float64)
+    expectedBalance := 1000.00 + (100.00 * float64(transactions))
+
+    if finalBalance != expectedBalance {
+        t.Errorf("Expected balance %.2f, got %.2f", expectedBalance, finalBalance)
+    }
+}
+
+func TestDistributedQuery(t *testing.T) {
+    // 创建多个节点
+    nodes := make([]*ChardonnayPrototype, 3)
+    ports := []int{8082, 8083, 8084}
+
+    for i := 0; i < 3; i++ {
+        config := &PrototypeConfig{
+            ClusterID: "test-cluster-distributed",
+            NodeID:    fmt.Sprintf("node-%d", i+1),
+            DataDir:   fmt.Sprintf("/tmp/chardonnay-distributed-%d", i+1),
+            Port:      ports[i],
+            Peers:     []string{
+                "node-1:8082",
+                "node-2:8083",
+                "node-3:8084",
+            },
+        }
+
+        system := NewChardonnayPrototype(config)
+        if err := system.Start(); err != nil {
+            t.Fatal(err)
+        }
+        defer system.Stop()
+
+        nodes[i] = system
+    }
+
+    time.Sleep(500 * time.Millisecond) // 等待集群建立
+
+    // 在主节点创建表
+    createTableSQL := `
+    CREATE TABLE distributed_data (
+        id INT PRIMARY KEY,
+        shard_key INT,
+        value VARCHAR(100),
+        created_at TIMESTAMP
+    ) PARTITION BY HASH(shard_key) PARTITIONS 3`
+
+    if err := nodes[0].ExecuteSQL(createTableSQL); err != nil {
+        t.Fatal(err)
+    }
+
+    // 插入测试数据
+    for i := 0; i < 100; i++ {
+        insertSQL := "INSERT INTO distributed_data (id, shard_key, value, created_at) VALUES (?, ?, ?, ?)"
+        params := map[string]interface{}{
+            "1": i + 1,
+            "2": i % 3, // 分片键
+            "3": fmt.Sprintf("value-%d", i+1),
+            "4": time.Now(),
+        }
+
+        if err := nodes[0].ExecuteSQLWithParams(insertSQL, params); err != nil {
+            t.Fatal(err)
+        }
+    }
+
+    time.Sleep(200 * time.Millisecond) // 等待数据复制
+
+    // 执行分布式查询
+    querySQL := "SELECT COUNT(*) as total FROM distributed_data"
+    result, err := nodes[1].ExecuteSQL(querySQL)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    if len(result.Rows) == 0 {
+        t.Fatal("No results returned")
+    }
+
+    count := result.Rows[0].Get("total").(int64)
+    if count != 100 {
+        t.Errorf("Expected 100 rows, got %d", count)
+    }
+
+    // 执行聚合查询
+    aggSQL := "SELECT shard_key, COUNT(*) as count FROM distributed_data GROUP BY shard_key"
+    aggResult, err := nodes[2].ExecuteSQL(aggSQL)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    if len(aggResult.Rows) != 3 {
+        t.Errorf("Expected 3 groups, got %d", len(aggResult.Rows))
+    }
+
+    // 验证每个分片的数据量
+    for _, row := range aggResult.Rows {
+        shardKey := row.Get("shard_key").(int64)
+        count := row.Get("count").(int64)
+
+        if count != 34 && count != 33 { // 100/3 ≈ 33.33
+            t.Errorf("Shard %d has %d rows, expected ~33", shardKey, count)
+        }
+    }
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **Chardonnay架构**：Chardonnay的分层架构有什么优势？
+
+2. **MVCC机制**：多版本并发控制如何提升数据库性能？
+
+3. **分布式事务**：Chardonnay如何处理分布式事务的一致性？
+
+4. **查询优化**：Chardonnay的查询优化器有哪些关键特性？
+
+### 编程题
+
+1. **MVCC实现**：实现一个简单的MVCC存储引擎。
+
+2. **查询优化器**：实现一个基于规则的查询优化器。
+
+3. **分布式协调**：实现一个简单的事务协调器。
+
+4. **并行执行**：实现一个并行查询执行引擎。
+
+### 设计题
+
+1. **系统设计**：设计一个支持大规模数据的分布式数据库架构。
+
+2. **一致性模型**：设计一个可配置的一致性模型。
+
+3. **故障恢复**：设计一个完整的故障恢复机制。
+
+4. **性能调优**：分析Chardonnay的性能瓶颈并提出优化方案。
+
+## 常见问题
+
+### Q: Chardonnay与Spanner的主要区别是什么？
+
+A: Chardonnay专注于单区域的高性能事务处理，而Spanner设计为全球分布式数据库。Chardonnay的延迟更低，但Spanner的扩展性更强。
+
+### Q: MVCC的内存消耗如何控制？
+
+A: 通过版本链长度限制、垃圾回收机制和压缩技术来控制内存消耗。定期清理旧版本，并使用紧凑的数据结构存储版本信息。
+
+### Q: 分布式事务的性能如何优化？
+
+A: 使用两阶段提交优化、批处理、并行执行、缓存机制和本地事务优先等策略。减少网络往返次数，提高事务吞吐量。
+
+### Q: 如何处理数据倾斜问题？
+
+A: 使用动态分片、一致性哈希、数据重平衡和查询路由优化。监控数据分布情况，及时调整分片策略。
+
+## 扩展资源
+
+### 必读论文
+
+1. **[The Chardonnay Prototype](https://www.example.com/chardonnay.pdf)** - Chardonnay系统论文
+2. **[Calvin: Fast Distributed Transactions](https://www.cs.cmu.edu/~pavlo/courses/fall2013/static/papers/calvin-paper.pdf)** - Calvin事务协议
+3. **[The Log-Structured Merge-Tree (LSM-Tree)](https://www.cs.umb.edu/~poneil/lsmtree.pdf)** - LSM树论文
+
+### 实践项目
+
+1. **[CockroachDB](https://github.com/cockroachdb/cockroach)** - 分布式SQL数据库
+2. **[TiDB](https://github.com/pingcap/tidb)** - 分布式HTAP数据库
+3. **[YugabyteDB](https://github.com/yugabyte/yugabyte-db)** - 分布式SQL数据库
+
+### 在线课程
+
+1. **[CMU 15-721: Advanced Database Systems](https://15721.courses.cs.cmu.edu/)** - 高级数据库系统
+2. **[Stanford CS346: Database System Implementation](https://web.stanford.edu/class/cs346/)** - 数据库系统实现
+3. **[MIT 6.824: Distributed Systems](https://pdos.csail.mit.edu/6.824/schedule.html)** - 分布式系统
+
+## 下一步学习
+
+在完成Chardonnay学习后，你应该继续：
+
+1. **Lecture 15**: 学习分布式系统验证技术
+2. **Lab 5**: 实现一个完整的分布式数据库系统
+3. **高级主题**: 分布式一致性算法、性能优化、故障恢复
+4. **实际应用**: 在生产环境中部署和管理分布式数据库
+
+---
+
+*Chardonnay代表了现代分布式数据库的发展方向，通过先进的架构设计和优化技术，在高性能和强一致性之间取得了良好的平衡。*

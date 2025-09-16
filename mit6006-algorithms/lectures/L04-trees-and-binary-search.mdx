@@ -1,0 +1,1385 @@
+---
+title: "L04 - 树与二叉搜索"
+description: "深入理解二叉搜索树、平衡树和B树的实现与应用"
+---
+
+import { useState, useEffect } from 'react';
+import { CodeBlock } from '@/src/components/algorithm';
+import { AlgorithmVisualizer } from '@/src/components/algorithm';
+import { TreeVisualizer } from '@/src/components/algorithm';
+import { ArrayVisualizer } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L04 - 树与二叉搜索
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🌳 **掌握树结构基础**：理解树的术语、性质和表示方法
+- 🔍 **精通BST操作**：实现搜索、插入、删除和遍历
+- ⚖️ **理解平衡策略**：掌握AVL和红黑树的平衡机制
+- 📊 **应用B树家族**：了解B树、B+树在数据库中的应用
+
+## 🎯 树的基础概念
+
+### 树的基本术语
+
+| 术语 | 定义 | 示例 | 重要性 |
+|------|------|------|--------|
+| **节点(Node)** | 树的基本单位 | 根节点、叶子节点 | 数据存储 |
+| **边(Edge)** | 节点间的连接关系 | 父子关系 | 结构连接 |
+| **深度(Depth)** | 根节点到当前节点的路径长度 | 根深度为0 | 路径计算 |
+| **高度(Height)** | 当前节点到最远叶子节点的路径长度 | 叶子高度为0 | 平衡计算 |
+| **度(Degree)** | 节点的子节点数量 | 二叉节点度≤2 | 分支限制 |
+| **子树(Subtree)** | 以某个节点为根的子树 | 左子树、右子树 | 递归结构 |
+
+### 树的数学性质
+
+```python
+def tree_properties_analysis():
+    """
+    二叉树的数学性质分析
+    """
+    properties = {
+        "最大节点数": "高度为h的二叉树最多有2^(h+1) - 1个节点",
+        "完美二叉树": "所有层都填满，节点数 = 2^(h+1) - 1",
+        "完全二叉树": "除最后一层外，其他层都填满",
+        "平衡二叉树": "任意节点左右子树高度差不超过1",
+        "满二叉树": "每个节点都有0或2个子节点"
+    }
+
+    for prop, desc in properties.items():
+        print(f"{prop}: {desc}")
+
+# 计算树的各种属性
+def calculate_tree_stats(root):
+    """计算树的统计信息"""
+    if not root:
+        return {"nodes": 0, "height": -1, "leaves": 0}
+
+    left_stats = calculate_tree_stats(root.left)
+    right_stats = calculate_tree_stats(root.right)
+
+    nodes = left_stats["nodes"] + right_stats["nodes"] + 1
+    height = max(left_stats["height"], right_stats["height"]) + 1
+    leaves = left_stats["leaves"] + right_stats["leaves"] if (root.left or root.right) else 1
+
+    return {"nodes": nodes, "height": height, "leaves": leaves}
+```
+
+## 🔍 二叉搜索树 (BST)
+
+### BST核心定义
+
+**二叉搜索树性质**：
+- 对于任意节点，其左子树中所有节点的值都小于该节点的值
+- 对于任意节点，其右子树中所有节点的值都大于该节点的值
+- 左右子树也都是二叉搜索树
+
+```python
+class TreeNode:
+    """二叉树节点"""
+    def __init__(self, val=0, left=None, right=None):
+        self.val = val
+        self.left = left
+        self.right = right
+
+class BinarySearchTree:
+    """
+    二叉搜索树实现
+    时间复杂度:
+    - 平均情况: O(log n)
+    - 最坏情况: O(n) (退化为链表)
+    """
+    def __init__(self):
+        self.root = None
+
+    def search(self, val: int) -> bool:
+        """
+        搜索操作
+        时间复杂度: O(h)，h为树的高度
+        """
+        return self._search_recursive(self.root, val)
+
+    def _search_recursive(self, node: TreeNode, val: int) -> bool:
+        if not node:
+            return False
+        if node.val == val:
+            return True
+        elif val < node.val:
+            return self._search_recursive(node.left, val)
+        else:
+            return self._search_recursive(node.right, val)
+
+    def insert(self, val: int) -> None:
+        """插入操作"""
+        self.root = self._insert_recursive(self.root, val)
+
+    def _insert_recursive(self, node: TreeNode, val: int) -> TreeNode:
+        if not node:
+            return TreeNode(val)
+
+        if val < node.val:
+            node.left = self._insert_recursive(node.left, val)
+        elif val > node.val:
+            node.right = self._insert_recursive(node.right, val)
+
+        return node
+
+    def delete(self, val: int) -> None:
+        """删除操作"""
+        self.root = self._delete_recursive(self.root, val)
+
+    def _delete_recursive(self, node: TreeNode, val: int) -> TreeNode:
+        if not node:
+            return None
+
+        if val < node.val:
+            node.left = self._delete_recursive(node.left, val)
+        elif val > node.val:
+            node.right = self._delete_recursive(node.right, val)
+        else:
+            # 找到要删除的节点
+            if not node.left:
+                return node.right
+            elif not node.right:
+                return node.left
+            else:
+                # 有两个子节点，找到右子树的最小值
+                min_node = self._find_min(node.right)
+                node.val = min_node.val
+                node.right = self._delete_recursive(node.right, min_node.val)
+
+        return node
+
+    def _find_min(self, node: TreeNode) -> TreeNode:
+        """找到子树的最小值节点"""
+        while node.left:
+            node = node.left
+        return node
+
+    def inorder_traversal(self) -> list:
+        """中序遍历（有序输出）"""
+        result = []
+        self._inorder_recursive(self.root, result)
+        return result
+
+    def _inorder_recursive(self, node: TreeNode, result: list) -> None:
+        if node:
+            self._inorder_recursive(node.left, result)
+            result.append(node.val)
+            self._inorder_recursive(node.right, result)
+```
+
+### BST的可视化演示
+
+```python
+# 创建示例BST用于演示
+def create_demo_bst():
+    """创建一个示例BST"""
+    bst = BinarySearchTree()
+    values = [50, 30, 70, 20, 40, 60, 80]
+    for val in values:
+        bst.insert(val)
+    return bst
+
+# 生成树的可视化数据
+def generate_tree_visualization_data():
+    """
+    生成树可视化所需的数据结构
+    """
+    tree_data = {
+        "value": 50,
+        "left": {
+            "value": 30,
+            "left": {"value": 20, "left": None, "right": None},
+            "right": {"value": 40, "left": None, "right": None}
+        },
+        "right": {
+            "value": 70,
+            "left": {"value": 60, "left": None, "right": None},
+            "right": {"value": 80, "left": None, "right": None}
+        }
+    }
+    return tree_data
+```
+
+<TreeVisualizer
+  tree={generate_tree_visualization_data()}
+  title="二叉搜索树示例"
+  width={600}
+  height={400}
+/>
+
+<ExerciseBlock
+  title="BST搜索分析"
+  question:"在BST中搜索值为45的元素，需要比较哪些节点的值？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "50, 30, 40",
+      correct: true,
+      explanation: "正确！路径为：50→30→40，45大于40所以在40的右子树中查找"
+    },
+    {
+      id: "b",
+      text: "50, 70, 60",
+      correct: false,
+      explanation: "这是搜索大于50的值的路径"
+    },
+    {
+      id: "c",
+      text: "50, 30, 20",
+      correct: false,
+      explanation: "这是搜索小于30的值的路径"
+    },
+    {
+      id: "d",
+      text: "所有节点",
+      correct: false,
+      explanation: "BST搜索不需要遍历所有节点"
+    }
+  ]}
+  hint="沿着搜索路径，根据大小关系决定向左还是向右"
+/>
+
+## ⚖️ 平衡二叉搜索树
+
+### AVL树
+
+AVL树是第一个自平衡二叉搜索树，通过旋转操作保持平衡。
+
+```python
+class AVLNode:
+    """AVL树节点"""
+    def __init__(self, val=0):
+        self.val = val
+        self.left = None
+        self.right = None
+        self.height = 1  # 节点高度
+
+class AVLTree:
+    """
+    AVL树实现
+    特性：任意节点的左右子树高度差不超过1
+    时间复杂度：O(log n) 所有操作
+    """
+    def __init__(self):
+        self.root = None
+
+    def _get_height(self, node):
+        """获取节点高度"""
+        if not node:
+            return 0
+        return node.height
+
+    def _get_balance(self, node):
+        """获取平衡因子"""
+        if not node:
+            return 0
+        return self._get_height(node.left) - self._get_height(node.right)
+
+    def _update_height(self, node):
+        """更新节点高度"""
+        node.height = max(self._get_height(node.left), self._get_height(node.right)) + 1
+
+    def _right_rotate(self, y):
+        """右旋转"""
+        x = y.left
+        T2 = x.right
+
+        # 执行旋转
+        x.right = y
+        y.left = T2
+
+        # 更新高度
+        self._update_height(y)
+        self._update_height(x)
+
+        return x
+
+    def _left_rotate(self, x):
+        """左旋转"""
+        y = x.right
+        T2 = y.left
+
+        # 执行旋转
+        y.left = x
+        x.right = T2
+
+        # 更新高度
+        self._update_height(x)
+        self._update_height(y)
+
+        return y
+
+    def insert(self, val: int) -> None:
+        """插入操作"""
+        self.root = self._insert_recursive(self.root, val)
+
+    def _insert_recursive(self, node: AVLNode, val: int) -> AVLNode:
+        # 标准BST插入
+        if not node:
+            return AVLNode(val)
+
+        if val < node.val:
+            node.left = self._insert_recursive(node.left, val)
+        elif val > node.val:
+            node.right = self._insert_recursive(node.right, val)
+        else:
+            return node  # 不允许重复值
+
+        # 更新高度
+        self._update_height(node)
+
+        # 获取平衡因子
+        balance = self._get_balance(node)
+
+        # 平衡处理
+
+        # 左左情况 (LL)
+        if balance > 1 and val < node.left.val:
+            return self._right_rotate(node)
+
+        # 右右情况 (RR)
+        if balance < -1 and val > node.right.val:
+            return self._left_rotate(node)
+
+        # 左右情况 (LR)
+        if balance > 1 and val > node.left.val:
+            node.left = self._left_rotate(node.left)
+            return self._right_rotate(node)
+
+        # 右左情况 (RL)
+        if balance < -1 and val < node.right.val:
+            node.right = self._right_rotate(node.right)
+            return self._left_rotate(node)
+
+        return node
+
+    def delete(self, val: int) -> None:
+        """删除操作"""
+        self.root = self._delete_recursive(self.root, val)
+
+    def _delete_recursive(self, node: AVLNode, val: int) -> AVLNode:
+        # 标准BST删除
+        if not node:
+            return node
+
+        if val < node.val:
+            node.left = self._delete_recursive(node.left, val)
+        elif val > node.val:
+            node.right = self._delete_recursive(node.right, val)
+        else:
+            if node.left is None:
+                return node.right
+            elif node.right is None:
+                return node.left
+            else:
+                # 有两个子节点
+                temp = self._get_min_value_node(node.right)
+                node.val = temp.val
+                node.right = self._delete_recursive(node.right, temp.val)
+
+        # 如果树只有一个节点，直接返回
+        if node is None:
+            return node
+
+        # 更新高度
+        self._update_height(node)
+
+        # 获取平衡因子
+        balance = self._get_balance(node)
+
+        # 平衡处理（与插入类似）
+
+        # 左左情况
+        if balance > 1 and self._get_balance(node.left) >= 0:
+            return self._right_rotate(node)
+
+        # 左右情况
+        if balance > 1 and self._get_balance(node.left) < 0:
+            node.left = self._left_rotate(node.left)
+            return self._right_rotate(node)
+
+        # 右右情况
+        if balance < -1 and self._get_balance(node.right) <= 0:
+            return self._left_rotate(node)
+
+        # 右左情况
+        if balance < -1 and self._get_balance(node.right) > 0:
+            node.right = self._right_rotate(node.right)
+            return self._left_rotate(node)
+
+        return node
+
+    def _get_min_value_node(self, node: AVLNode) -> AVLNode:
+        """获取最小值节点"""
+        current = node
+        while current.left:
+            current = current.left
+        return current
+```
+
+### 红黑树
+
+红黑树是另一种自平衡二叉搜索树，通过颜色和规则保持平衡。
+
+```python
+class RBNode:
+    """红黑树节点"""
+    def __init__(self, val=0, color='RED'):
+        self.val = val
+        self.left = None
+        self.right = None
+        self.parent = None
+        self.color = color  # RED 或 BLACK
+
+class RedBlackTree:
+    """
+    红黑树实现
+    性质：
+    1. 每个节点是红色或黑色
+    2. 根节点是黑色
+    3. 所有叶子节点都是黑色
+    4. 红色节点的子节点都是黑色
+    5. 从任一节点到其每个叶子的路径包含相同数目的黑色节点
+    """
+    def __init__(self):
+        self.NIL = RBNode(0, 'BLACK')  # 哨兵节点
+        self.root = self.NIL
+
+    def insert(self, val: int) -> None:
+        """插入操作"""
+        node = RBNode(val)
+        node.left = self.NIL
+        node.right = self.NIL
+        node.parent = None
+
+        # 标准BST插入
+        parent = None
+        current = self.root
+
+        while current != self.NIL:
+            parent = current
+            if node.val < current.val:
+                current = current.left
+            else:
+                current = current.right
+
+        node.parent = parent
+        if parent is None:
+            self.root = node
+        elif node.val < parent.val:
+            parent.left = node
+        else:
+            parent.right = node
+
+        # 如果新节点是根节点，设为黑色
+        if node.parent is None:
+            node.color = 'BLACK'
+            return
+
+        # 如果新节点的祖父节点是None，不需要修复
+        if node.parent.parent is None:
+            return
+
+        # 修复红黑树性质
+        self._fix_insert(node)
+
+    def _fix_insert(self, node: RBNode):
+        """修复插入后的红黑树性质"""
+        while node != self.root and node.parent.color == 'RED':
+            if node.parent == node.parent.parent.right:
+                uncle = node.parent.parent.left
+                if uncle.color == 'RED':
+                    # 情况1：叔叔是红色
+                    uncle.color = 'BLACK'
+                    node.parent.color = 'BLACK'
+                    node.parent.parent.color = 'RED'
+                    node = node.parent.parent
+                else:
+                    if node == node.parent.left:
+                        # 情况2：叔叔是黑色且节点是左孩子
+                        node = node.parent
+                        self._right_rotate(node)
+                    # 情况3：叔叔是黑色且节点是右孩子
+                    node.parent.color = 'BLACK'
+                    node.parent.parent.color = 'RED'
+                    self._left_rotate(node.parent.parent)
+            else:
+                # 对称情况
+                uncle = node.parent.parent.right
+                if uncle.color == 'RED':
+                    uncle.color = 'BLACK'
+                    node.parent.color = 'BLACK'
+                    node.parent.parent.color = 'RED'
+                    node = node.parent.parent
+                else:
+                    if node == node.parent.right:
+                        node = node.parent
+                        self._left_rotate(node)
+                    node.parent.color = 'BLACK'
+                    node.parent.parent.color = 'RED'
+                    self._right_rotate(node.parent.parent)
+
+        self.root.color = 'BLACK'
+
+    def _left_rotate(self, x: RBNode):
+        """左旋转"""
+        y = x.right
+        x.right = y.left
+        if y.left != self.NIL:
+            y.left.parent = x
+        y.parent = x.parent
+        if x.parent is None:
+            self.root = y
+        elif x == x.parent.left:
+            x.parent.left = y
+        else:
+            x.parent.right = y
+        y.left = x
+        x.parent = y
+
+    def _right_rotate(self, y: RBNode):
+        """右旋转"""
+        x = y.left
+        y.left = x.right
+        if x.right != self.NIL:
+            x.right.parent = y
+        x.parent = y.parent
+        if y.parent is None:
+            self.root = x
+        elif y == y.parent.right:
+            y.parent.right = x
+        else:
+            y.parent.left = x
+        x.right = y
+        y.parent = x
+```
+
+<ExerciseBlock
+  title="平衡树比较"
+  question:"AVL树和红黑树的主要区别是什么？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "AVL树比红黑树更平衡，但插入删除操作更慢",
+      correct: true,
+      explanation: "正确！AVL树严格保持平衡（高度差≤1），但需要更多旋转操作"
+    },
+    {
+      id: "b",
+      text: "红黑树比AVL树更平衡，但查询操作更慢",
+      correct: false,
+      explanation: "AVL树比红黑树更平衡，查询更快"
+    },
+    {
+      id: "c",
+      text: "两者在所有操作上性能完全相同",
+      correct: false,
+      explanation: "两者在平衡策略和操作开销上有明显差异"
+    },
+    {
+      id: "d",
+      text: "AVL树只支持查询，红黑树支持所有操作",
+      correct: false,
+      explanation: "两种树都支持完整的CRUD操作"
+    }
+  ]}
+  hint="考虑平衡严格度和操作开销的权衡"
+/>
+
+## 🌳 B树和B+树
+
+### B树
+
+B树是为磁盘存储等外部存储器设计的自平衡搜索树。
+
+```python
+class BTreeNode:
+    """B树节点"""
+    def __init__(self, leaf=False):
+        self.leaf = leaf          # 是否为叶子节点
+        self.keys = []            # 键值列表
+        self.children = []        # 子节点列表
+
+class BTree:
+    """
+    B树实现
+    特性：
+    1. 每个节点最多有m个子节点
+    2. 除根节点外，每个节点至少有⌈m/2⌉个子节点
+    3. 根节点至少有2个子节点（除非是叶子节点）
+    4. 所有叶子节点在同一层
+    """
+    def __init__(self, t):
+        self.root = BTreeNode(leaf=True)
+        self.t = t  # B树的最小度数
+
+    def search(self, key):
+        """搜索操作"""
+        return self._search_recursive(self.root, key)
+
+    def _search_recursive(self, node, key):
+        """递归搜索"""
+        i = 0
+        while i < len(node.keys) and key > node.keys[i]:
+            i += 1
+
+        if i < len(node.keys) and key == node.keys[i]:
+            return True  # 找到键
+
+        if node.leaf:
+            return False  # 未找到键
+
+        return self._search_recursive(node.children[i], key)
+
+    def insert(self, key):
+        """插入操作"""
+        root = self.root
+        if len(root.keys) == (2 * self.t - 1):
+            # 根节点已满，分裂
+            new_root = BTreeNode()
+            new_root.children.append(self.root)
+            self.root = new_root
+            self._split_child(new_root, 0)
+
+        self._insert_nonfull(self.root, key)
+
+    def _insert_nonfull(self, node, key):
+        """向非满节点插入"""
+        i = len(node.keys) - 1
+
+        if node.leaf:
+            # 叶子节点，直接插入
+            node.keys.append(0)
+            while i >= 0 and key < node.keys[i]:
+                node.keys[i + 1] = node.keys[i]
+                i -= 1
+            node.keys[i + 1] = key
+        else:
+            # 内部节点，找到合适的子节点
+            while i >= 0 and key < node.keys[i]:
+                i -= 1
+            i += 1
+
+            if len(node.children[i].keys) == (2 * self.t - 1):
+                # 子节点已满，分裂
+                self._split_child(node, i)
+                if key > node.keys[i]:
+                    i += 1
+
+            self._insert_nonfull(node.children[i], key)
+
+    def _split_child(self, parent, index):
+        """分裂子节点"""
+        t = self.t
+        y = parent.children[index]
+        z = BTreeNode(leaf=y.leaf)
+
+        # 将y的键提升到父节点
+        parent.keys.insert(index, y.keys[t - 1])
+        parent.children.insert(index + 1, z)
+
+        # 复制键到z节点
+        z.keys = y.keys[t:]
+        y.keys = y.keys[:t - 1]
+
+        # 如果不是叶子节点，复制子节点
+        if not y.leaf:
+            z.children = y.children[t:]
+            y.children = y.children[:t]
+
+    def delete(self, key):
+        """删除操作"""
+        self._delete_recursive(self.root, key)
+
+    def _delete_recursive(self, node, key):
+        """递归删除"""
+        # 实现较为复杂，需要处理多种情况
+        # 这里简化实现
+        pass
+```
+
+### B+树
+
+B+树是B树的变体，特别适合数据库索引。
+
+```python
+class BPlusTreeNode:
+    """B+树节点"""
+    def __init__(self, leaf=False):
+        self.leaf = leaf
+        self.keys = []
+        self.children = []  # 内部节点的子节点
+        self.next = None    # 叶子节点的链表指针
+
+class BPlusTree:
+    """
+    B+树实现
+    特性：
+    1. 所有数据记录都存储在叶子节点
+    2. 内部节点只存储键值，用于索引
+    3. 叶子节点通过指针连接，便于范围查询
+    """
+    def __init__(self, order):
+        self.root = BPlusTreeNode(leaf=True)
+        self.order = order
+
+    def search(self, key):
+        """搜索操作"""
+        leaf = self._find_leaf(key)
+        for i, k in enumerate(leaf.keys):
+            if k == key:
+                return leaf.data[i] if hasattr(leaf, 'data') else True
+        return None
+
+    def _find_leaf(self, key):
+        """找到包含key的叶子节点"""
+        node = self.root
+        while not node.leaf:
+            i = 0
+            while i < len(node.keys) and key >= node.keys[i]:
+                i += 1
+            node = node.children[i]
+        return node
+
+    def insert(self, key, value=None):
+        """插入操作"""
+        leaf = self._find_leaf(key)
+        # 在叶子节点中插入键值对
+        # 实现省略...
+
+    def range_query(self, start_key, end_key):
+        """范围查询"""
+        results = []
+        leaf = self._find_leaf(start_key)
+
+        while leaf:
+            for key, value in zip(leaf.keys, leaf.data):
+                if start_key <= key <= end_key:
+                    results.append((key, value))
+                elif key > end_key:
+                    return results
+            leaf = leaf.next
+
+        return results
+```
+
+## 🎯 树的应用场景
+
+### 1. 数据库索引
+
+```python
+class DatabaseIndex:
+    """
+    使用B+树实现数据库索引
+    """
+    def __init__(self):
+        self.primary_index = BPlusTree(order=100)  # 主键索引
+        self.secondary_indexes = {}                # 二级索引
+
+    def create_index(self, table_name, column_name):
+        """创建索引"""
+        index_key = f"{table_name}_{column_name}"
+        self.secondary_indexes[index_key] = BPlusTree(order=50)
+
+    def insert_record(self, table_name, record):
+        """插入记录并更新索引"""
+        # 假设record是一个字典
+        primary_key = record['id']
+        self.primary_index.insert(primary_key, record)
+
+        # 更新二级索引
+        for index_key, index in self.secondary_indexes.items():
+            table, column = index_key.split('_', 1)
+            if table == table_name and column in record:
+                index.insert(record[column], primary_key)
+
+    def query_by_primary(self, primary_key):
+        """通过主键查询"""
+        return self.primary_index.search(primary_key)
+
+    def query_by_secondary(self, table_name, column_name, value):
+        """通过二级索引查询"""
+        index_key = f"{table_name}_{column_name}"
+        if index_key in self.secondary_indexes:
+            primary_keys = self.secondary_indexes[index_key].search(value)
+            return [self.primary_index.search(pk) for pk in primary_keys]
+        return []
+
+    def range_query(self, table_name, column_name, start_val, end_val):
+        """范围查询"""
+        index_key = f"{table_name}_{column_name}"
+        if index_key in self.secondary_indexes:
+            return self.secondary_indexes[index_key].range_query(start_val, end_val)
+        return []
+```
+
+### 2. 文件系统
+
+```python
+class FileSystem:
+    """
+    使用树结构实现文件系统
+    """
+    def __init__(self):
+        self.root = DirectoryNode("/")
+        self.current_directory = self.root
+
+    def mkdir(self, path):
+        """创建目录"""
+        dirs = path.split('/')
+        current = self.current_directory
+
+        for dir_name in dirs:
+            if dir_name:  # 跳过空字符串
+                found = False
+                for child in current.children:
+                    if isinstance(child, DirectoryNode) and child.name == dir_name:
+                        current = child
+                        found = True
+                        break
+                if not found:
+                    new_dir = DirectoryNode(dir_name)
+                    current.add_child(new_dir)
+                    current = new_dir
+
+    def touch(self, filename, content=""):
+        """创建文件"""
+        new_file = FileNode(filename, content)
+        self.current_directory.add_child(new_file)
+
+    def cd(self, path):
+        """切换目录"""
+        if path == "/":
+            self.current_directory = self.root
+        elif path == "..":
+            if self.current_directory.parent:
+                self.current_directory = self.current_directory.parent
+        else:
+            dirs = path.split('/')
+            current = self.current_directory if path.startswith('/') else self.root
+
+            for dir_name in dirs:
+                if dir_name:
+                    found = False
+                    for child in current.children:
+                        if isinstance(child, DirectoryNode) and child.name == dir_name:
+                            current = child
+                            found = True
+                            break
+                    if not found:
+                        raise FileNotFoundError(f"Directory {dir_name} not found")
+
+            self.current_directory = current
+
+    def ls(self):
+        """列出当前目录内容"""
+        return [child.name for child in self.current_directory.children]
+
+class DirectoryNode:
+    """目录节点"""
+    def __init__(self, name):
+        self.name = name
+        self.children = []
+        self.parent = None
+
+    def add_child(self, child):
+        child.parent = self
+        self.children.append(child)
+
+class FileNode:
+    """文件节点"""
+    def __init__(self, name, content=""):
+        self.name = name
+        self.content = content
+        self.parent = None
+```
+
+### 3. 表达式树
+
+```python
+class ExpressionNode:
+    """表达式树节点"""
+    def __init__(self, value, left=None, right=None):
+        self.value = value
+        self.left = left
+        self.right = right
+
+class ExpressionTree:
+    """表达式树"""
+    def __init__(self):
+        self.root = None
+
+    def build_from_postfix(self, postfix):
+        """从后缀表达式构建表达式树"""
+        stack = []
+        operators = {'+', '-', '*', '/', '^'}
+
+        for token in postfix:
+            if token in operators:
+                # 运算符，弹出两个操作数
+                right = stack.pop()
+                left = stack.pop()
+                node = ExpressionNode(token, left, right)
+                stack.append(node)
+            else:
+                # 操作数
+                node = ExpressionNode(token)
+                stack.append(node)
+
+        self.root = stack.pop()
+
+    def evaluate(self):
+        """计算表达式值"""
+        return self._evaluate_recursive(self.root)
+
+    def _evaluate_recursive(self, node):
+        if not node.left and not node.right:
+            # 叶子节点，返回数值
+            return float(node.value)
+
+        left_val = self._evaluate_recursive(node.left)
+        right_val = self._evaluate_recursive(node.right)
+
+        if node.value == '+':
+            return left_val + right_val
+        elif node.value == '-':
+            return left_val - right_val
+        elif node.value == '*':
+            return left_val * right_val
+        elif node.value == '/':
+            return left_val / right_val
+        elif node.value == '^':
+            return left_val ** right_val
+
+    def inorder_traversal(self):
+        """中序遍历（中缀表达式）"""
+        result = []
+        self._inorder_recursive(self.root, result)
+        return ' '.join(result)
+
+    def _inorder_recursive(self, node, result):
+        if node:
+            if node.left or node.right:
+                result.append('(')
+            self._inorder_recursive(node.left, result)
+            result.append(str(node.value))
+            self._inorder_recursive(node.right, result)
+            if node.left or node.right:
+                result.append(')')
+```
+
+<ExerciseBlock
+  title="树的应用"
+  question:"为什么数据库索引通常使用B+树而不是B树？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "B+树的查询速度比B树快",
+      correct: false,
+      explanation: "两者查询复杂度相同，都是O(log n)"
+    },
+    {
+      id: "b",
+      text: "B+树支持更高效的范围查询和顺序访问",
+      correct: true,
+      explanation: "正确！B+树的叶子节点通过指针连接，非常适合范围查询"
+    },
+    {
+      id: "c",
+      text: "B+树占用更少的存储空间",
+      correct: false,
+      explanation: "B+树通常需要更多空间，因为数据在叶子节点有冗余"
+    },
+    {
+      id: "d",
+      text: "B+树的实现比B树简单",
+      correct: false,
+      explanation: "B+树的实现通常更复杂"
+    }
+  ]}
+  hint="考虑数据库操作的特点，特别是范围查询的需求"
+/>
+
+## 📊 性能分析与比较
+
+### 树结构性能对比
+
+| 树类型 | 查找 | 插入 | 删除 | 范围查询 | 平衡性 | 应用场景 |
+|--------|------|------|------|----------|--------|----------|
+| **BST** | O(h) | O(h) | O(h) | O(n) | 不保证 | 小规模数据 |
+| **AVL** | O(log n) | O(log n) | O(log n) | O(n) | 严格平衡 | 查询密集型 |
+| **红黑** | O(log n) | O(log n) | O(log n) | O(n) | 近似平衡 | 通用场景 |
+| **B树** | O(log n) | O(log n) | O(log n) | O(log n) | 平衡 | 外部存储 |
+| **B+树** | O(log n) | O(log n) | O(log n) | O(k) | 平衡 | 数据库索引 |
+
+### 实际性能测试
+
+```python
+def performance_comparison():
+    """
+    不同树结构的性能对比测试
+    """
+    import time
+    import random
+
+    # 生成测试数据
+    data_sizes = [1000, 10000, 100000]
+    results = {}
+
+    for size in data_sizes:
+        test_data = random.sample(range(size * 10), size)
+
+        # 测试不同树结构
+        trees = {
+            "BST": BinarySearchTree(),
+            "AVL": AVLTree(),
+            # "BTree": BTree(t=50)  # 需要实现
+        }
+
+        results[size] = {}
+
+        for name, tree in trees.items():
+            # 插入测试
+            start_time = time.time()
+            for val in test_data:
+                tree.insert(val)
+            insert_time = time.time() - start_time
+
+            # 查找测试
+            search_times = []
+            search_values = random.sample(test_data, min(100, len(test_data)))
+            for val in search_values:
+                start_time = time.time()
+                tree.search(val)
+                search_times.append(time.time() - start_time)
+
+            avg_search_time = sum(search_times) / len(search_times)
+
+            results[size][name] = {
+                "insert_time": insert_time,
+                "avg_search_time": avg_search_time,
+                "tree_height": get_tree_height(tree.root)
+            }
+
+    return results
+
+def get_tree_height(node):
+    """获取树的高度"""
+    if not node:
+        return -1
+    return 1 + max(get_tree_height(node.left), get_tree_height(node.right))
+```
+
+<ComplexityAnalyzer
+  title="树结构查询性能对比"
+  algorithm="AVL树查询"
+  theoreticalComplexity="O(log n)"
+  data={[
+    {"n": 1000, "time": 0.001},
+    {"n": 10000, "time": 0.003},
+    {"n": 100000, "time": 0.005},
+    {"n": 1000000, "time": 0.007}
+  ]}
+  color="rgb(34, 197, 94)"
+/>
+
+## 🎯 高级主题
+
+### 1. 树的序列化与反序列化
+
+```python
+class TreeSerializer:
+    """
+    树的序列化和反序列化
+    """
+    def serialize(self, root):
+        """将树序列化为字符串"""
+        if not root:
+            return "null"
+
+        queue = [root]
+        result = []
+
+        while queue:
+            node = queue.pop(0)
+            if node:
+                result.append(str(node.val))
+                queue.append(node.left)
+                queue.append(node.right)
+            else:
+                result.append("null")
+
+        # 移除末尾的null
+        while result and result[-1] == "null":
+            result.pop()
+
+        return "[" + ",".join(result) + "]"
+
+    def deserialize(self, data):
+        """从字符串反序列化树"""
+        if data == "[]":
+            return None
+
+        values = data[1:-1].split(",")
+        root = TreeNode(int(values[0]))
+        queue = [root]
+        index = 1
+
+        while queue and index < len(values):
+            node = queue.pop(0)
+
+            if index < len(values) and values[index] != "null":
+                node.left = TreeNode(int(values[index]))
+                queue.append(node.left)
+            index += 1
+
+            if index < len(values) and values[index] != "null":
+                node.right = TreeNode(int(values[index]))
+                queue.append(node.right)
+            index += 1
+
+        return root
+```
+
+### 2. 树的迭代遍历
+
+```python
+class TreeIterator:
+    """
+    树的迭代遍历器
+    """
+    def __init__(self, root):
+        self.root = root
+
+    def inorder_iterative(self):
+        """中序遍历的迭代实现"""
+        stack = []
+        current = self.root
+        result = []
+
+        while current or stack:
+            while current:
+                stack.append(current)
+                current = current.left
+
+            current = stack.pop()
+            result.append(current.val)
+            current = current.right
+
+        return result
+
+    def preorder_iterative(self):
+        """前序遍历的迭代实现"""
+        if not self.root:
+            return []
+
+        stack = [self.root]
+        result = []
+
+        while stack:
+            node = stack.pop()
+            result.append(node.val)
+
+            if node.right:
+                stack.append(node.right)
+            if node.left:
+                stack.append(node.left)
+
+        return result
+
+    def postorder_iterative(self):
+        """后序遍历的迭代实现"""
+        if not self.root:
+            return []
+
+        stack1 = [self.root]
+        stack2 = []
+        result = []
+
+        while stack1:
+            node = stack1.pop()
+            stack2.append(node)
+
+            if node.left:
+                stack1.append(node.left)
+            if node.right:
+                stack1.append(node.right)
+
+        while stack2:
+            node = stack2.pop()
+            result.append(node.val)
+
+        return result
+```
+
+### 3. 树的最近公共祖先
+
+```python
+def lowest_common_ancestor(root, p, q):
+    """
+    查找两个节点的最近公共祖先
+    时间复杂度: O(n)
+    空间复杂度: O(h)
+    """
+    if not root or root == p or root == q:
+        return root
+
+    left = lowest_common_ancestor(root.left, p, q)
+    right = lowest_common_ancestor(root.right, p, q)
+
+    if left and right:
+        return root
+
+    return left if left else right
+
+def lowest_common_ancestor_bst(root, p, q):
+    """
+    在BST中查找LCA，利用BST性质
+    时间复杂度: O(h)
+    """
+    if not root:
+        return None
+
+    # 如果p和q都小于当前节点，在左子树中查找
+    if p.val < root.val and q.val < root.val:
+        return lowest_common_ancestor_bst(root.left, p, q)
+
+    # 如果p和q都大于当前节点，在右子树中查找
+    if p.val > root.val and q.val > root.val:
+        return lowest_common_ancestor_bst(root.right, p, q)
+
+    # 否则当前节点就是LCA
+    return root
+```
+
+<ExerciseBlock
+  title="综合应用"
+  question:"设计一个系统来维护一个动态变化的整数集合，支持插入、删除、查找第k小的元素、查找某个元素的排名。哪种树结构最适合？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "普通二叉搜索树",
+      correct: false,
+      explanation: "普通BST可能退化，无法保证O(log n)的性能"
+    },
+    {
+      id: "b",
+      text: "AVL树或红黑树",
+      correct: true,
+      explanation: "正确！平衡树能保证O(log n)的所有操作性能"
+    },
+    {
+      id: "c",
+      text: "B树",
+      correct: false,
+      explanation: "B树更适合外部存储，不是最佳选择"
+    },
+    {
+      id: "d",
+      text: " Trie树",
+      correct: false,
+      explanation: "Trie树适合字符串，不是整数操作"
+    }
+  ]}
+  hint="考虑需要支持的查询类型和性能要求"
+/>
+
+## 📝 总结与最佳实践
+
+### 关键要点
+
+1. **树结构选择原则**：
+   - 小规模数据：普通BST足够
+   - 需要保证性能：AVL树或红黑树
+   - 外部存储：B树或B+树
+   - 数据库索引：B+树
+
+2. **平衡策略选择**：
+   - 查询密集型：AVL树（更严格平衡）
+   - 插入删除频繁：红黑树（较少旋转）
+   - 范围查询：B+树（叶子节点链表）
+
+3. **实现优化技巧**：
+   - 使用迭代而非递归避免栈溢出
+   - 实现树的序列化便于存储和传输
+   - 添加缓存机制提高热点查询性能
+
+### 实际应用建议
+
+```python
+def tree_structure_recommendation(use_case: str) -> str:
+    """
+    根据应用场景推荐树结构
+    """
+    recommendations = {
+        "memory_database": "红黑树或跳跃表",
+        "disk_database": "B+树",
+        "filesystem": "B树",
+        "autocomplete": "Trie树",
+        "network_routing": "前缀树",
+        "compression": "哈夫曼树",
+        "machine_learning": "决策树",
+        "caching_system": "LRU + 哈希表"
+    }
+
+    return recommendations.get(use_case, "根据具体需求分析")
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question:"在什么情况下应该选择B树而不是二叉搜索树？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "当数据量很小且完全在内存中时",
+      correct: false,
+      explanation: "小数据量在内存中时，二叉搜索树更简单高效"
+    },
+    {
+      id: "b",
+      text: "当数据存储在磁盘等外部存储器上时",
+      correct: true,
+      explanation: "正确！B树减少了磁盘I/O次数，适合外部存储"
+    },
+    {
+      id: "c",
+      text: "当需要频繁进行范围查询时",
+      correct: false,
+      explanation: "范围查询更适合B+树，而不是B树"
+    },
+    {
+      id: "d",
+      text: "当所有操作都是顺序访问时",
+      correct: false,
+      explanation: "顺序访问不需要复杂的树结构"
+    }
+  ]}
+  hint="考虑存储介质的特点和I/O开销"
+/>
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：实现BST、AVL树的所有基本操作
+2. **进阶练习**：实现红黑树和B树的插入删除操作
+3. **实战练习**：使用B+树实现简单的数据库索引系统
+4. **项目练习**：设计一个支持多种查询的树结构集合类
+
+**记住**：树结构是计算机科学中最重要的数据结构之一，掌握它们是成为优秀软件工程师的关键！🌳

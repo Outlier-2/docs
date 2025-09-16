@@ -1,0 +1,524 @@
+---
+title: "L01 - 算法复杂度与渐进分析"
+description: "深入理解渐进符号、复杂度分析方法和主定理应用"
+---
+
+import { CodeBlock } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L01 - 算法复杂度与渐进分析
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🔢 **理解渐进符号**：掌握O、Ω、Θ符号的数学定义和实际含义
+- 📊 **掌握分析方法**：学会分析算法的时间和空间复杂度
+- 🧮 **应用主定理**：使用主定理分析递归算法的复杂度
+- ⚡ **性能评估**：能够对算法进行实际的性能测量和对比分析
+
+## 🎯 核心概念
+
+### 渐进符号详解
+
+渐进符号是我们描述算法效率的语言，它们帮助我们理解算法随着输入规模增长的性能变化。
+
+#### 📈 大O符号 - 上界 (Upper Bound)
+
+**数学定义**: f(n) = O(g(n)) 如果存在正数c和n₀，使得对所有n ≥ n₀，有 f(n) ≤ c·g(n)
+
+**直观理解**: "算法的运行时间不会超过某个函数的常数倍"
+
+```python {1,3-5}
+def find_max(arr):
+    max_val = arr[0]           # O(1) - 常数时间
+    for val in arr[1:]:        # O(n) - 线性时间
+        if val > max_val:
+            max_val = val
+    return max_val              # O(1) - 常数时间
+# 总体复杂度: O(n)
+```
+
+<ExerciseBlock
+  title="练习：识别O符号"
+  question="判断以下函数的时间复杂度："
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "O(1)",
+      correct: false,
+      explanation: "这个函数遍历整个数组，不是常数时间"
+    },
+    {
+      id: "b",
+      text: "O(n)",
+      correct: true,
+      explanation: "正确！函数对每个元素访问一次，是线性时间"
+    },
+    {
+      id: "c",
+      text: "O(n²)",
+      correct: false,
+      explanation: "没有嵌套循环，不是平方时间"
+    },
+    {
+      id: "d",
+      text: "O(log n)",
+      correct: false,
+      explanation: "没有对数性质的操作"
+    }
+  ]}
+  hint="分析循环的次数和每次循环的操作"
+/>
+
+#### 📉 Omega符号 - 下界 (Lower Bound)
+
+**数学定义**: f(n) = Ω(g(n)) 如果存在正数c和n₀，使得对所有n ≥ n₀，有 f(n) ≥ c·g(n)
+
+**直观理解**: "算法至少需要某个函数的常数倍时间"
+
+```python {2-4,6}
+def linear_search(arr, target):
+    for i, val in enumerate(arr):     # Ω(1) - 最好情况
+        if val == target:             # 目标在第一个位置
+            return i
+    return -1                         # Ω(n) - 最坏情况
+# 复杂度分析:
+# - 最好情况: Ω(1)
+# - 最坏情况: Ω(n)
+```
+
+#### 🎯 Theta符号 - 紧确界 (Tight Bound)
+
+**数学定义**: f(n) = Θ(g(n)) 如果 f(n) = O(g(n)) 且 f(n) = Ω(g(n))
+
+**直观理解**: "算法的运行时间正好是这个函数的常数倍"
+
+```python {2-4}
+def sum_array(arr):
+    total = 0                        # O(1)
+    for val in arr:                  # O(n)
+        total += val                 # O(1)
+    return total                     # O(1)
+# 总体复杂度: Θ(n) - 既是O(n)也是Ω(n)
+```
+
+## 🔧 复杂度分析方法
+
+### 循环分析法则
+
+```python
+# 1. 单层循环
+def example1(n):
+    count = 0
+    for i in range(n):           # 执行n次
+        count += 1               # O(1)操作
+    return count                 # O(n)
+
+# 2. 嵌套循环
+def example2(n):
+    count = 0
+    for i in range(n):           # 外层n次
+        for j in range(n):       # 内层n次
+            count += 1           # O(n²)
+    return count
+
+# 3. 对数循环
+def example3(n):
+    count = 0
+    while n > 1:                 # 每次n减半
+        count += 1               # O(log n)
+        n = n // 2
+    return count
+```
+
+### 递归分析
+
+```python
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)  # O(2ⁿ)
+```
+
+<ExerciseBlock
+  title="递归复杂度分析"
+  question="分析以下递归函数的时间复杂度："
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "O(n)",
+      correct: false,
+      explanation: "每次调用产生两个新的递归调用"
+    },
+    {
+      id: "b",
+      text: "O(log n)",
+      correct: false,
+      explanation: "不是对数时间"
+    },
+    {
+      id: "c",
+      text: "O(2ⁿ)",
+      correct: true,
+      explanation: "正确！递归树呈指数增长"
+    },
+    {
+      id: "d",
+      text: "O(n²)",
+      correct: false,
+      explanation: "比平方时间更差"
+    }
+  ]}
+  hint="画出递归调用树，看看有多少个节点"
+/>
+
+## 🧮 主定理 (Master Theorem)
+
+主定理为我们提供了分析分治算法复杂度的便捷工具。
+
+### 主定理公式
+
+对于递归关系 T(n) = a·T(n/b) + f(n)，其中 a ≥ 1, b > 1：
+
+1. **情况1**: 如果 f(n) = O(n^log_b(a-ε))，则 T(n) = Θ(n^log_b(a))
+2. **情况2**: 如果 f(n) = Θ(n^log_b(a))，则 T(n) = Θ(n^log_b(a)·log n)
+3. **情况3**: 如果 f(n) = Ω(n^log_b(a+ε)) 且满足正则条件，则 T(n) = Θ(f(n))
+
+### 实际应用
+
+```python
+def merge_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])    # T(n/2)
+    right = merge_sort(arr[mid:])   # T(n/2)
+    return merge(left, right)       # O(n)
+# 递归关系: T(n) = 2T(n/2) + O(n)
+# a=2, b=2, f(n)=O(n)
+# log_b(a) = log₂(2) = 1
+# f(n) = Θ(n¹) → 情况2
+# T(n) = Θ(n·log n)
+```
+
+<ExerciseBlock
+  title="主定理应用"
+  question="对于递归关系 T(n) = 4T(n/2) + n²，使用主定理分析其复杂度："
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "Θ(n²)",
+      correct: true,
+      explanation: "a=4, b=2, log₂(4)=2, f(n)=n²=Θ(n²)，属于情况2"
+    },
+    {
+      id: "b",
+      text: "Θ(n·log n)",
+      correct: false,
+      explanation: "不满足情况2的条件"
+    },
+    {
+      id: "c",
+      text: "Θ(n³)",
+      correct: false,
+      explanation: "过于复杂的估计"
+    },
+    {
+      id: "d",
+      text: "Θ(n)",
+      correct: false,
+      explanation: "严重低估了复杂度"
+    }
+  ]}
+  hint="计算log_b(a)，然后与f(n)比较"
+/>
+
+## 📊 实际性能分析
+
+### 性能测量工具
+
+```python
+import time
+import random
+import matplotlib.pyplot as plt
+from typing import List, Callable
+
+def measure_performance(func: Callable, input_sizes: List[int], trials: int = 5) -> dict:
+    """
+    测量函数在不同输入规模下的性能
+
+    参数:
+        func: 要测试的函数
+        input_sizes: 输入规模列表
+        trials: 每个规模的测试次数
+
+    返回:
+        包含测量结果的字典
+    """
+    results = {"sizes": [], "times": [], "memory": []}
+
+    for n in input_sizes:
+        # 生成测试数据
+        test_data = list(range(n))
+        random.shuffle(test_data)
+
+        # 时间测量
+        times = []
+        for _ in range(trials):
+            start = time.time()
+            func(test_data.copy())
+            end = time.time()
+            times.append(end - start)
+
+        avg_time = sum(times) / trials
+        results["sizes"].append(n)
+        results["times"].append(avg_time)
+
+    return results
+```
+
+### 复杂度对比分析
+
+```python
+def linear_search_demo(arr: List[int], target: int) -> bool:
+    """线性搜索演示"""
+    for i, val in enumerate(arr):
+        if val == target:
+            return i
+    return -1
+
+def binary_search_demo(arr: List[int], target: int) -> bool:
+    """二分搜索演示"""
+    left, right = 0, len(arr) - 1
+    while left <= right:
+        mid = (left + right) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            left = mid + 1
+        else:
+            right = mid - 1
+    return -1
+
+# 模拟数据
+complexity_data = [
+    {"n": 100, "time": 0.0001},
+    {"n": 500, "time": 0.0005},
+    {"n": 1000, "time": 0.001},
+    {"n": 5000, "time": 0.005},
+    {"n": 10000, "time": 0.01},
+    {"n": 50000, "time": 0.05}
+]
+```
+
+<ComplexityAnalyzer
+  title="搜索算法性能对比"
+  algorithm="二分搜索"
+  theoreticalComplexity="O(log n)"
+  data={complexity_data}
+  color="rgb(59, 130, 246)"
+/>
+
+## 🎯 实际应用场景
+
+### 1. 数据库索引设计
+
+```python
+class DatabaseIndex:
+    """
+    数据库索引的复杂度分析
+    """
+    def __init__(self):
+        self.btree_index = {}      # B树索引: O(log n) 查找
+        self.hash_index = {}       # 哈希索引: O(1) 查找
+        self.sequential_data = []  # 顺序存储: O(n) 查找
+
+    def query_with_index(self, key):
+        """使用索引查询 - O(log n) 或 O(1)"""
+        return self.btree_index.get(key)  # 或 self.hash_index.get(key)
+
+    def query_sequential(self, key):
+        """顺序查询 - O(n)"""
+        for item in self.sequential_data:
+            if item == key:
+                return item
+        return None
+```
+
+### 2. 网络路由算法
+
+```python
+class NetworkRouter:
+    """
+    网络路由算法的复杂度优化
+    """
+    def __init__(self):
+        self.routing_table = {}      # 路由表: O(1) 查找
+        self.adjacency_list = {}     # 邻接表: O(V+E) 存储空间
+
+    def find_shortest_path(self, graph, start, end):
+        """
+        Dijkstra算法 - O(V²) 或 O(E + V log V)
+        使用优先队列优化后的复杂度
+        """
+        import heapq
+        distances = {node: float('inf') for node in graph}
+        distances[start] = 0
+        heap = [(0, start)]
+
+        while heap:
+            current_dist, current = heapq.heappop(heap)
+            if current == end:
+                break
+
+            for neighbor, weight in graph[current].items():
+                distance = current_dist + weight
+                if distance < distances[neighbor]:
+                    distances[neighbor] = distance
+                    heapq.heappush(heap, (distance, neighbor))
+
+        return distances[end]
+```
+
+<ExerciseBlock
+  title="综合应用"
+  question="设计一个算法来处理大规模社交媒体网络中的好友推荐。每个用户平均有150个好友，总用户数为1亿。你的算法需要为每个用户推荐10个潜在好友。哪种算法复杂度更适合？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "O(n³) - 三重循环比较所有用户",
+      correct: false,
+      explanation: "对于1亿用户，n³会达到10²⁴，完全不可行"
+    },
+    {
+      id: "b",
+      text: "O(n²) - 比较每对用户",
+      correct: false,
+      explanation: "O(n²) = 10¹⁶次操作，仍然太大"
+    },
+    {
+      id: "c",
+      text: "O(n·log n) - 使用图算法和优先队列",
+      correct: true,
+      explanation: "正确！基于共同好友的图算法可以达到O(n·log n)或更好"
+    },
+    {
+      id: "d",
+      text: "O(1) - 常数时间算法",
+      correct: false,
+      explanation: "不可能在常数时间内处理所有用户"
+    }
+  ]}
+  hint="考虑大规模数据处理中的复杂度限制"
+/>
+
+## 📝 总结与最佳实践
+
+### 关键要点
+
+1. **渐进符号的含义**：
+   - O符号：上界，表示"不超过"
+   - Ω符号：下界，表示"至少"
+   - Θ符号：紧确界，表示"正好"
+
+2. **复杂度分析技巧**：
+   - 识别循环结构和递归模式
+   - 使用主定理分析分治算法
+   - 考虑最好、最坏和平均情况
+
+3. **实际应用考虑**：
+   - 大O常数因子在实际中很重要
+   - 缓存局部性影响实际性能
+   - 算法选择要考虑数据规模特征
+
+### 性能优化策略
+
+```python
+def algorithm_optimization_example():
+    """
+    算法优化示例：从O(n²)优化到O(n·log n)
+    """
+
+    # 原始版本 - O(n²)
+    def find_pairs_naive(arr, target):
+        pairs = []
+        for i in range(len(arr)):              # 外层循环: n
+            for j in range(i + 1, len(arr)):   # 内层循环: n
+                if arr[i] + arr[j] == target:  # O(n²)
+                    pairs.append((i, j))
+        return pairs
+
+    # 优化版本 - O(n·log n)
+    def find_pairs_optimized(arr, target):
+        pairs = []
+        arr_sorted = sorted(arr)              # 排序: O(n·log n)
+        left, right = 0, len(arr) - 1
+
+        while left < right:                   # 双指针: O(n)
+            current_sum = arr_sorted[left] + arr_sorted[right]
+            if current_sum == target:
+                pairs.append((left, right))
+                left += 1
+                right -= 1
+            elif current_sum < target:
+                left += 1
+            else:
+                right -= 1
+
+        return pairs  # 总体: O(n·log n)
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question="对于一个处理大数据的算法，理论复杂度为O(n²)，但实际运行时，当n=1000时只需要1秒，当n=2000时需要4秒。这个算法的实际复杂度是？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "O(n)",
+      correct: false,
+      explanation: "时间随n平方增长，不是线性"
+    },
+    {
+      id: "b",
+      text: "O(n·log n)",
+      correct: false,
+      explanation: "增长速度接近平方"
+    },
+    {
+      id: "c",
+      text: "O(n²)",
+      correct: true,
+      explanation: "正确！n翻倍，时间变为4倍，符合平方关系"
+    },
+    {
+      id: "d",
+      text: "O(2ⁿ)",
+      correct: false,
+      explanation: "指数增长会快得多"
+    }
+  ]}
+  hint="观察输入规模与运行时间的关系"
+/>
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：分析常见算法（排序、搜索）的复杂度
+2. **进阶练习**：使用主定理分析分治算法
+3. **实战练习**：实现并测量不同算法的性能对比
+4. **项目练习**：为特定应用场景选择最优算法
+
+**记住**：算法复杂度分析不仅是理论工具，更是实际工程决策的重要依据！🎯

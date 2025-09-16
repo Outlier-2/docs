@@ -1,0 +1,686 @@
+---
+title: "Lecture 4: 数据库存储 II"
+description: "CMU 15-445 Lecture 4 - 堆文件、页面格式、记录管理、存储开销分析"
+---
+
+# Lecture 4: 数据库存储 II
+
+## 堆文件实现
+
+### 堆文件组织方式
+
+#### 链表式堆文件
+```cpp
+class LinkedListHeapFile {
+private:
+    struct HeaderPage {
+        page_id_t first_free_page;  // 第一个空闲页面
+        page_id_t last_free_page;   // 最后一个空闲页面
+        uint32_t total_pages;       // 总页面数
+    };
+
+    HeaderPage* header_page;
+    DiskManager* disk_manager;
+
+public:
+    bool insert_record(const Record& record, RecordId* out_rid) {
+        // 查找有足够空间的空闲页面
+        page_id_t page_id = find_free_page(record.size());
+        if (page_id == INVALID_PAGE_ID) {
+            // 没有找到，需要分配新页面
+            page_id = allocate_new_page();
+        }
+
+        // 将记录插入页面
+        Page page;
+        disk_manager->read_page(page_id, page.data());
+        bool success = page.insert_record(record, out_rid);
+
+        if (success) {
+            disk_manager->write_page(page_id, page.data());
+            return true;
+        }
+
+        return false;
+    }
+
+private:
+    page_id_t find_free_page(size_t record_size) {
+        page_id_t current = header_page->first_free_page;
+
+        while (current != INVALID_PAGE_ID) {
+            Page page;
+            disk_manager->read_page(current, page.data());
+
+            if (page.get_free_space() >= record_size) {
+                return current;
+            }
+
+            // 移动到下一个空闲页面
+            current = page.get_next_page_id();
+        }
+
+        return INVALID_PAGE_ID;
+    }
+
+    page_id_t allocate_new_page() {
+        page_id_t new_page_id = header_page->total_pages++;
+        Page new_page;
+        new_page.init();
+
+        // 添加到空闲页面链表
+        if (header_page->last_free_page == INVALID_PAGE_ID) {
+            header_page->first_free_page = new_page_id;
+        } else {
+            Page last_page;
+            disk_manager->read_page(header_page->last_free_page, last_page.data());
+            last_page.set_next_page_id(new_page_id);
+            disk_manager->write_page(header_page->last_free_page, last_page.data());
+        }
+
+        header_page->last_free_page = new_page_id;
+        disk_manager->write_page(HEADER_PAGE_ID, (char*)header_page);
+        disk_manager->write_page(new_page_id, new_page.data());
+
+        return new_page_id;
+    }
+};
+```
+
+#### 页面目录式堆文件
+```cpp
+class PageDirectoryHeapFile {
+private:
+    struct DirectoryEntry {
+        page_id_t page_id;
+        uint32_t free_space;
+        bool is_full;
+    };
+
+    vector<DirectoryEntry> directory;
+    DiskManager* disk_manager;
+
+public:
+    bool insert_record(const Record& record, RecordId* out_rid) {
+        // 查找有足够空间的页面
+        for (auto& entry : directory) {
+            if (!entry.is_full && entry.free_space >= record.size()) {
+                Page page;
+                disk_manager->read_page(entry.page_id, page.data());
+
+                if (page.insert_record(record, out_rid)) {
+                    entry.free_space = page.get_free_space();
+                    entry.is_full = (entry.free_space == 0);
+                    disk_manager->write_page(entry.page_id, page.data());
+                    return true;
+                }
+            }
+        }
+
+        // 需要分配新页面
+        return allocate_and_insert(record, out_rid);
+    }
+
+private:
+    bool allocate_and_insert(const Record& record, RecordId* out_rid) {
+        page_id_t new_page_id = directory.size();
+        Page new_page;
+        new_page.init();
+
+        if (new_page.insert_record(record, out_rid)) {
+            DirectoryEntry entry;
+            entry.page_id = new_page_id;
+            entry.free_space = new_page.get_free_space();
+            entry.is_full = (entry.free_space == 0);
+
+            directory.push_back(entry);
+            disk_manager->write_page(new_page_id, new_page.data());
+            return true;
+        }
+
+        return false;
+    }
+};
+```
+
+## 页面格式优化
+
+### 槽位页面格式
+
+#### 改进的槽位设计
+```cpp
+class SlottedPage {
+private:
+    struct Slot {
+        uint32_t offset;    // 记录偏移量
+        uint16_t length;    // 记录长度
+        bool used;          // 是否使用中
+    };
+
+    char data[PAGE_SIZE];
+    uint16_t slot_count;       // 槽位数组大小
+    uint16_t free_space;       // 空闲空间
+    uint16_t free_space_ptr;   // 空闲空间指针
+
+public:
+    bool insert_record(const Record& record, RecordId* out_rid) {
+        size_t needed_space = record.size() + sizeof(Slot);
+
+        if (free_space < needed_space) {
+            return false;  // 空间不足
+        }
+
+        // 找到空闲槽位或分配新槽位
+        uint16_t slot_id = find_free_slot();
+        if (slot_id == INVALID_SLOT_ID) {
+            slot_id = slot_count++;
+        }
+
+        // 在空闲空间区域写入记录
+        uint32_t offset = free_space_ptr - record.size();
+        memcpy(data + offset, record.data(), record.size());
+
+        // 更新槽位信息
+        Slot* slots = get_slots();
+        slots[slot_id].offset = offset;
+        slots[slot_id].length = record.size();
+        slots[slot_id].used = true;
+
+        // 更新页面元数据
+        free_space -= needed_space;
+        free_space_ptr = offset;
+
+        *out_rid = RecordId(get_page_id(), slot_id);
+        return true;
+    }
+
+    bool delete_record(RecordId rid) {
+        if (rid.page_id != get_page_id() || rid.slot_id >= slot_count) {
+            return false;
+        }
+
+        Slot* slots = get_slots();
+        if (!slots[rid.slot_id].used) {
+            return false;  // 记录已删除
+        }
+
+        // 标记槽位为空闲
+        slots[rid.slot_id].used = false;
+
+        // 如果是最后一条记录，可以回收空间
+        if (is_last_record(rid.slot_id)) {
+            compact_space();
+        }
+
+        return true;
+    }
+
+private:
+    uint16_t find_free_slot() {
+        Slot* slots = get_slots();
+        for (uint16_t i = 0; i < slot_count; i++) {
+            if (!slots[i].used) {
+                return i;
+            }
+        }
+        return INVALID_SLOT_ID;
+    }
+
+    void compact_space() {
+        // 空间压缩逻辑
+        Slot* slots = get_slots();
+        uint32_t min_offset = PAGE_SIZE;
+        uint16_t used_count = 0;
+
+        // 找到最左边的记录位置
+        for (uint16_t i = 0; i < slot_count; i++) {
+            if (slots[i].used) {
+                min_offset = min(min_offset, slots[i].offset);
+                used_count++;
+            }
+        }
+
+        if (used_count == 0) {
+            // 没有记录，重置页面
+            slot_count = 0;
+            free_space = PAGE_SIZE - sizeof(uint16_t) * 3;
+            free_space_ptr = PAGE_SIZE;
+            return;
+        }
+
+        // 移动记录到页面末尾
+        uint32_t current_offset = PAGE_SIZE;
+        for (uint16_t i = 0; i < slot_count; i++) {
+            if (slots[i].used) {
+                uint32_t new_offset = current_offset - slots[i].length;
+                if (new_offset != slots[i].offset) {
+                    memmove(data + new_offset, data + slots[i].offset, slots[i].length);
+                    slots[i].offset = new_offset;
+                }
+                current_offset = new_offset;
+            }
+        }
+
+        // 更新空闲空间信息
+        free_space_ptr = current_offset;
+        free_space = current_offset - (slot_count * sizeof(Slot)) - sizeof(uint16_t) * 3;
+    }
+
+    Slot* get_slots() {
+        return reinterpret_cast<Slot*>(data + sizeof(uint16_t) * 3);
+    }
+};
+```
+
+### 记录ID设计
+
+#### 全局唯一记录ID
+```cpp
+class RecordId {
+private:
+    page_id_t page_id;    // 页面ID
+    uint16_t slot_id;     // 槽位ID
+    uint16_t checksum;    // 校验和
+
+public:
+    RecordId(page_id_t page_id, uint16_t slot_id)
+        : page_id(page_id), slot_id(slot_id) {
+        checksum = compute_checksum();
+    }
+
+    bool is_valid() const {
+        return checksum == compute_checksum();
+    }
+
+private:
+    uint16_t compute_checksum() const {
+        // 简单的校验和计算
+        return (page_id & 0xFFFF) ^ (slot_id << 8);
+    }
+};
+```
+
+## 记录管理策略
+
+### 变长记录管理
+
+#### 行偏移表
+```cpp
+class VariableLengthRecordManager {
+private:
+    struct RecordHeader {
+        uint32_t record_id;
+        uint16_t field_count;
+        uint16_t total_size;
+        uint32_t next_version;  // 版本链指针
+    };
+
+    struct FieldDescriptor {
+        uint16_t offset;
+        uint16_t length;
+        uint8_t type;
+        bool is_null;
+    };
+
+public:
+    // 记录序列化
+    void serialize_record(const Record& record, char* buffer, size_t* size) {
+        size_t offset = 0;
+
+        // 写入记录头
+        RecordHeader header;
+        header.record_id = record.get_id();
+        header.field_count = record.get_field_count();
+        header.total_size = 0;  // 稍后计算
+        header.next_version = INVALID_RECORD_ID;
+
+        memcpy(buffer + offset, &header, sizeof(RecordHeader));
+        offset += sizeof(RecordHeader);
+
+        // 写入字段描述符
+        vector<FieldDescriptor> field_descs;
+        for (const auto& field : record.get_fields()) {
+            FieldDescriptor desc;
+            desc.offset = offset;
+            desc.length = field.size();
+            desc.type = field.get_type();
+            desc.is_null = field.is_null();
+
+            field_descs.push_back(desc);
+
+            if (!desc.is_null) {
+                memcpy(buffer + offset, field.data(), desc.length);
+                offset += desc.length;
+            }
+        }
+
+        // 写入字段描述符数组
+        memcpy(buffer + offset, field_descs.data(),
+               field_descs.size() * sizeof(FieldDescriptor));
+        offset += field_descs.size() * sizeof(FieldDescriptor);
+
+        // 更新总大小
+        header.total_size = offset;
+        memcpy(buffer, &header, sizeof(RecordHeader));
+
+        *size = offset;
+    }
+
+    // 记录反序列化
+    unique_ptr<Record> deserialize_record(const char* buffer) {
+        const RecordHeader* header = reinterpret_cast<const RecordHeader*>(buffer);
+        const FieldDescriptor* field_descs =
+            reinterpret_cast<const FieldDescriptor*>(buffer + sizeof(RecordHeader));
+
+        auto record = make_unique<Record>(header->record_id);
+
+        for (uint16_t i = 0; i < header->field_count; i++) {
+            const FieldDescriptor& desc = field_descs[i];
+
+            if (!desc.is_null) {
+                Field field(desc.type, buffer + desc.offset, desc.length);
+                record->add_field(field);
+            } else {
+                record->add_null_field(desc.type);
+            }
+        }
+
+        return record;
+    }
+};
+```
+
+### 记录版本控制
+
+#### 多版本记录管理
+```cpp
+class VersionedRecordManager {
+private:
+    struct VersionChain {
+        RecordId current_version;
+        RecordId oldest_version;
+        uint32_t version_count;
+    };
+
+    unordered_map<record_id_t, VersionChain> version_chains;
+    RecordManager* base_record_manager;
+
+public:
+    bool update_record(RecordId old_rid, const Record& new_record, RecordId* new_rid) {
+        // 创建新版本
+        if (!base_record_manager->insert_record(new_record, new_rid)) {
+            return false;
+        }
+
+        // 更新版本链
+        record_id_t record_id = get_record_id(old_rid);
+        if (version_chains.find(record_id) == version_chains.end()) {
+            // 创建新的版本链
+            VersionChain chain;
+            chain.current_version = *new_rid;
+            chain.oldest_version = old_rid;
+            chain.version_count = 2;
+            version_chains[record_id] = chain;
+        } else {
+            // 追加到现有版本链
+            VersionChain& chain = version_chains[record_id];
+
+            // 在旧记录中设置指向新版本的指针
+            update_version_pointer(old_rid, *new_rid);
+
+            chain.current_version = *new_rid;
+            chain.version_count++;
+        }
+
+        return true;
+    }
+
+    vector<RecordId> get_version_history(record_id_t record_id) {
+        vector<RecordId> versions;
+
+        if (version_chains.find(record_id) != version_chains.end()) {
+            const VersionChain& chain = version_chains[record_id];
+
+            RecordId current = chain.oldest_version;
+            while (current != INVALID_RECORD_ID) {
+                versions.push_back(current);
+                current = get_next_version(current);
+            }
+        }
+
+        return versions;
+    }
+
+private:
+    void update_version_pointer(RecordId rid, RecordId next_version) {
+        // 在记录头中更新版本指针
+        char buffer[PAGE_SIZE];
+        base_record_manager->read_record(rid, buffer);
+
+        RecordHeader* header = reinterpret_cast<RecordHeader*>(buffer);
+        header->next_version = next_version.record_id;
+
+        base_record_manager->update_record(rid, buffer);
+    }
+
+    RecordId get_next_version(RecordId rid) {
+        char buffer[PAGE_SIZE];
+        if (!base_record_manager->read_record(rid, buffer)) {
+            return INVALID_RECORD_ID;
+        }
+
+        const RecordHeader* header = reinterpret_cast<const RecordHeader*>(buffer);
+        return RecordId(header->next_version, 0);  // 简化处理
+    }
+};
+```
+
+## 存储开销分析
+
+### 空间利用率计算
+
+#### 页面空间开销
+```cpp
+class SpaceAnalyzer {
+public:
+    struct PageStats {
+        size_t total_space;
+        size_t used_space;
+        size_t overhead_space;
+        size_t record_count;
+        double utilization;
+    };
+
+    PageStats analyze_page(const Page& page) {
+        PageStats stats;
+        stats.total_space = PAGE_SIZE;
+        stats.record_count = page.get_record_count();
+
+        // 计算元数据开销
+        stats.overhead_space = calculate_metadata_overhead(page);
+
+        // 计算实际记录占用空间
+        stats.used_space = calculate_records_space(page);
+
+        // 计算空间利用率
+        stats.utilization = (double)stats.used_space / stats.total_space;
+
+        return stats;
+    }
+
+    struct FileStats {
+        size_t total_pages;
+        size_t used_pages;
+        size_t total_records;
+        double avg_utilization;
+        double fragmentation_ratio;
+    };
+
+    FileStats analyze_file(const HeapFile& file) {
+        FileStats stats;
+        vector<PageStats> page_stats;
+
+        // 分析每个页面
+        for (size_t i = 0; i < file.get_page_count(); i++) {
+            Page page = file.read_page(i);
+            PageStats page_stat = analyze_page(page);
+            page_stats.push_back(page_stat);
+
+            stats.total_records += page_stat.record_count;
+            if (page_stat.record_count > 0) {
+                stats.used_pages++;
+            }
+        }
+
+        stats.total_pages = file.get_page_count();
+
+        // 计算平均利用率
+        double total_utilization = 0;
+        for (const auto& stat : page_stats) {
+            total_utilization += stat.utilization;
+        }
+        stats.avg_utilization = total_utilization / page_stats.size();
+
+        // 计算碎片率
+        stats.fragmentation_ratio = calculate_fragmentation_ratio(page_stats);
+
+        return stats;
+    }
+
+private:
+    size_t calculate_metadata_overhead(const Page& page) {
+        size_t overhead = 0;
+
+        // 页面头开销
+        overhead += sizeof(uint16_t) * 3;  // slot_count, free_space, free_space_ptr
+
+        // 槽位数组开销
+        overhead += page.get_slot_count() * sizeof(Slot);
+
+        // 内部碎片（记录间的空闲空间）
+        overhead += page.get_internal_fragmentation();
+
+        return overhead;
+    }
+
+    size_t calculate_records_space(const Page& page) {
+        size_t space = 0;
+
+        for (size_t i = 0; i < page.get_record_count(); i++) {
+            Record record = page.get_record(i);
+            space += record.size();
+        }
+
+        return space;
+    }
+
+    double calculate_fragmentation_ratio(const vector<PageStats>& page_stats) {
+        if (page_stats.empty()) return 0.0;
+
+        size_t total_free_space = 0;
+        size_t max_free_space = 0;
+
+        for (const auto& stat : page_stats) {
+            size_t free_space = stat.total_space - stat.used_space - stat.overhead_space;
+            total_free_space += free_space;
+            max_free_space = max(max_free_space, free_space);
+        }
+
+        if (max_free_space == 0) return 0.0;
+
+        // 碎片率 = 1 - (最大连续空闲空间 / 总空闲空间)
+        return 1.0 - (double)max_free_space / total_free_space;
+    }
+};
+```
+
+### 性能优化建议
+
+#### 基于存储特性的优化
+```cpp
+class StorageOptimizer {
+public:
+    struct OptimizationRecommendation {
+        string aspect;
+        string current_issue;
+        string recommendation;
+        double estimated_improvement;
+    };
+
+    vector<OptimizationRecommendation> analyze_and_recommend(
+        const FileStats& stats, const AccessPattern& pattern) {
+
+        vector<OptimizationRecommendation> recommendations;
+
+        // 空间利用率优化
+        if (stats.avg_utilization < 0.6) {
+            OptimizationRecommendation rec;
+            rec.aspect = "空间利用率";
+            rec.current_issue = "平均利用率较低：" + to_string(stats.avg_utilization);
+            rec.recommendation = "考虑重新组织页面或使用压缩";
+            rec.estimated_improvement = 0.3;
+            recommendations.push_back(rec);
+        }
+
+        // 碎片化优化
+        if (stats.fragmentation_ratio > 0.4) {
+            OptimizationRecommendation rec;
+            rec.aspect = "碎片化程度";
+            rec.current_issue = "碎片化严重：" + to_string(stats.fragmentation_ratio);
+            rec.recommendation = "执行页面压缩或重建表";
+            rec.estimated_improvement = 0.25;
+            recommendations.push_back(rec);
+        }
+
+        // 访问模式优化
+        if (pattern.is_sequential && stats.avg_utilization < 0.8) {
+            OptimizationRecommendation rec;
+            rec.aspect = "访问模式";
+            rec.current_issue = "顺序访问但空间利用率低";
+            rec.recommendation = "重新组织记录以提高顺序访问效率";
+            rec.estimated_improvement = 0.2;
+            recommendations.push_back(rec);
+        }
+
+        return recommendations;
+    }
+};
+```
+
+## 实践建议
+
+### 实现要点
+1. **内存管理**：合理管理页面缓冲和记录缓存
+2. **并发控制**：实现适当的锁机制保证数据一致性
+3. **错误处理**：处理磁盘I/O错误和数据损坏情况
+4. **性能监控**：实现存储性能指标收集和分析
+
+### 测试策略
+1. **单元测试**：测试页面格式和记录管理的各个功能
+2. **性能测试**：测试不同存储策略的性能表现
+3. **压力测试**：测试在高负载下的存储系统稳定性
+4. **兼容性测试**：确保不同版本的数据格式兼容性
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持变长记录的槽位页面格式
+2. 设计并实现一个记录版本管理系统
+3. 编写存储空间分析工具，计算碎片化程度和空间利用率
+
+### 思考题
+1. 比较不同堆文件实现方式的优缺点
+2. 分析记录版本控制对存储空间的影响
+3. 讨论如何平衡存储效率和访问性能
+
+## 下节预告
+
+下一讲将探讨**存储模型与压缩**，包括：
+- 行式存储与列式存储的比较
+- 数据压缩算法与技术
+- 存储格式对查询性能的影响
+- 现代数据库的存储架构设计
+
+---
+
+**重要概念**：高效的数据存储是数据库性能的基础，合理的页面格式和记录管理策略能够显著提升系统性能！

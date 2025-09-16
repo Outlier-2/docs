@@ -1,0 +1,861 @@
+---
+title: "Lecture 5: 存储模型与压缩"
+description: "CMU 15-445 Lecture 5 - 行式存储、列式存储、数据压缩技术、存储架构设计"
+---
+
+# Lecture 5: 存储模型与压缩
+
+## 存储模型概述
+
+### 行式存储 vs 列式存储
+
+#### 行式存储 (Row-oriented)
+```
+传统行式存储格式：
++----+-------+------+---------+-------+
+| ID | Name  | Age  | Dept    | Salary|
++----+-------+------+---------+-------+
+| 1  | Alice | 25   | CS      | 50000 |
+| 2  | Bob   | 30   | EE      | 60000 |
+| 3  | Carol | 28   | CS      | 55000 |
++----+-------+------+---------+-------+
+```
+
+**特点**：
+- 一行数据连续存储
+- 适合OLTP工作负载（频繁的增删改查）
+- 查询单行数据效率高
+- 更新操作相对简单
+
+#### 列式存储 (Column-oriented)
+```
+列式存储格式：
+Column IDs:     [1, 2, 3]
+Column Names:   [Alice, Bob, Carol]
+Column Ages:    [25, 30, 28]
+Column Depts:   [CS, EE, CS]
+Column Salaries:[50000, 60000, 55000]
+```
+
+**特点**：
+- 一列数据连续存储
+- 适合OLAP工作负载（数据分析、聚合查询）
+- 压缩效率高
+- 向量化处理友好
+
+## 行式存储实现
+
+### 行式存储架构
+
+#### 行式存储页面设计
+```cpp
+class RowOrientedPage {
+private:
+    struct RowHeader {
+        uint32_t row_id;
+        uint16_t row_length;
+        uint16_t column_count;
+        uint32_t version;
+    };
+
+    char data[PAGE_SIZE];
+    uint32_t row_count;
+    uint32_t free_space_offset;
+    vector<uint32_t> row_offsets;  // 行偏移数组
+
+public:
+    bool insert_row(const Row& row, RowId* out_row_id) {
+        size_t needed_space = sizeof(RowHeader) + row.serialized_size();
+
+        if (free_space_offset + needed_space > PAGE_SIZE) {
+            return false;  // 空间不足
+        }
+
+        // 序列化行数据
+        RowHeader header;
+        header.row_id = row.get_id();
+        header.row_length = row.serialized_size();
+        header.column_count = row.get_column_count();
+        header.version = 1;
+
+        // 写入行头
+        memcpy(data + free_space_offset, &header, sizeof(RowHeader));
+        size_t offset = free_space_offset + sizeof(RowHeader);
+
+        // 写入列数据
+        for (const auto& column : row.get_columns()) {
+            column.serialize(data + offset);
+            offset += column.serialized_size();
+        }
+
+        // 记录行偏移
+        row_offsets.push_back(free_space_offset);
+        free_space_offset += needed_space;
+        row_count++;
+
+        *out_row_id = RowId(get_page_id(), row_count - 1);
+        return true;
+    }
+
+    Row get_row(RowId row_id) {
+        if (row_id.row_index >= row_count) {
+            return Row();  // 无效行ID
+        }
+
+        uint32_t offset = row_offsets[row_id.row_index];
+        const RowHeader* header = reinterpret_cast<const RowHeader*>(data + offset);
+
+        Row row(header->row_id);
+        size_t data_offset = offset + sizeof(RowHeader);
+
+        for (uint16_t i = 0; i < header->column_count; i++) {
+            Column column = Column::deserialize(data + data_offset);
+            row.add_column(column);
+            data_offset += column.serialized_size();
+        }
+
+        return row;
+    }
+
+    bool update_row(RowId row_id, const Row& new_row) {
+        if (row_id.row_index >= row_count) {
+            return false;
+        }
+
+        uint32_t old_offset = row_offsets[row_id.row_index];
+        const RowHeader* old_header = reinterpret_cast<const RowHeader*>(data + old_offset);
+        size_t old_size = sizeof(RowHeader) + old_header->row_length;
+
+        size_t new_size = sizeof(RowHeader) + new_row.serialized_size();
+
+        // 如果新行大小相同，可以就地更新
+        if (new_size == old_size) {
+            return update_row_in_place(row_id, new_row);
+        }
+
+        // 否则需要删除旧行并插入新行
+        delete_row(row_id);
+        return insert_row(new_row, &row_id);
+    }
+
+private:
+    bool update_row_in_place(RowId row_id, const Row& new_row) {
+        uint32_t offset = row_offsets[row_id.row_index];
+
+        // 更新行头
+        RowHeader header;
+        header.row_id = new_row.get_id();
+        header.row_length = new_row.serialized_size();
+        header.column_count = new_row.get_column_count();
+        header.version = get_current_version(row_id) + 1;
+
+        memcpy(data + offset, &header, sizeof(RowHeader));
+        size_t data_offset = offset + sizeof(RowHeader);
+
+        // 更新列数据
+        for (const auto& column : new_row.get_columns()) {
+            column.serialize(data + data_offset);
+            data_offset += column.serialized_size();
+        }
+
+        return true;
+    }
+
+    void delete_row(RowId row_id) {
+        if (row_id.row_index >= row_count) {
+            return;
+        }
+
+        // 简单标记为删除（实际实现可能更复杂）
+        uint32_t offset = row_offsets[row_id.row_index];
+        RowHeader* header = reinterpret_cast<RowHeader*>(data + offset);
+        header->row_id = INVALID_ROW_ID;  // 标记为删除
+
+        row_count--;
+    }
+};
+```
+
+## 列式存储实现
+
+### 列式存储架构
+
+#### 列式页面设计
+```cpp
+class ColumnOrientedPage {
+private:
+    struct ColumnHeader {
+        uint16_t column_id;
+        uint16_t data_type;
+        uint32_t value_count;
+        uint32_t compressed_size;
+        uint8_t compression_type;
+    };
+
+    struct ColumnData {
+        ColumnHeader header;
+        vector<char> data;        // 列数据
+        vector<uint32_t> offsets; // 可变长度数据的偏移量
+        vector<uint8_t> nulls;    // 空值位图
+    };
+
+    vector<ColumnData> columns;
+    uint32_t row_count;
+
+public:
+    bool add_column(uint16_t column_id, DataType type, const vector<Value>& values) {
+        if (values.size() != row_count && row_count != 0) {
+            return false;  // 列长度不匹配
+        }
+
+        ColumnData column_data;
+        column_data.header.column_id = column_id;
+        column_data.header.data_type = static_cast<uint16_t>(type);
+        column_data.header.value_count = values.size();
+
+        // 序列化列数据
+        serialize_column(values, column_data);
+
+        // 应用压缩
+        compress_column(column_data);
+
+        columns.push_back(column_data);
+        if (row_count == 0) {
+            row_count = values.size();
+        }
+
+        return true;
+    }
+
+    vector<Value> get_column(uint16_t column_id) const {
+        for (const auto& column : columns) {
+            if (column.header.column_id == column_id) {
+                return deserialize_column(column);
+            }
+        }
+        return {};
+    }
+
+    Row get_row(uint32_t row_index) const {
+        if (row_index >= row_count) {
+            return Row();
+        }
+
+        Row row(row_index);
+        for (const auto& column : columns) {
+            Value value = get_value_from_column(column, row_index);
+            row.add_value(value);
+        }
+        return row;
+    }
+
+private:
+    void serialize_column(const vector<Value>& values, ColumnData& column_data) {
+        size_t total_size = 0;
+        vector<uint32_t> offsets;
+        vector<uint8_t> null_bitmap;
+
+        // 计算总大小和创建空值位图
+        for (const auto& value : values) {
+            if (value.is_null()) {
+                null_bitmap.push_back(1);
+                offsets.push_back(0);
+            } else {
+                null_bitmap.push_back(0);
+                offsets.push_back(total_size);
+                total_size += value.serialized_size();
+            }
+        }
+
+        // 分配空间并序列化
+        column_data.data.resize(total_size);
+        column_data.offsets = offsets;
+        column_data.nulls = null_bitmap;
+
+        size_t offset = 0;
+        for (size_t i = 0; i < values.size(); i++) {
+            if (!values[i].is_null()) {
+                values[i].serialize(column_data.data.data() + offset);
+                offset += values[i].serialized_size();
+            }
+        }
+
+        column_data.header.compressed_size = total_size;
+        column_data.header.compression_type = 0;  // 无压缩
+    }
+
+    void compress_column(ColumnData& column_data) {
+        // 简单的行程长度编码示例
+        if (can_run_length_encode(column_data)) {
+            apply_run_length_encoding(column_data);
+            column_data.header.compression_type = 1;  // RLE
+        }
+        // 可以添加其他压缩算法
+    }
+
+    bool can_run_length_encode(const ColumnData& column_data) const {
+        // 检查是否适合RLE压缩
+        if (column_data.header.data_type != static_cast<uint16_t>(DataType::INTEGER)) {
+            return false;
+        }
+
+        // 简单检查是否有足够的重复值
+        const int* values = reinterpret_cast<const int*>(column_data.data.data());
+        size_t value_count = column_data.data.size() / sizeof(int);
+
+        size_t consecutive_count = 1;
+        for (size_t i = 1; i < value_count; i++) {
+            if (values[i] == values[i-1]) {
+                consecutive_count++;
+                if (consecutive_count >= 3) {  // 至少3个重复值才值得压缩
+                    return true;
+                }
+            } else {
+                consecutive_count = 1;
+            }
+        }
+
+        return false;
+    }
+
+    void apply_run_length_encoding(ColumnData& column_data) {
+        vector<char> compressed;
+        const int* values = reinterpret_cast<const int*>(column_data.data.data());
+        size_t value_count = column_data.data.size() / sizeof(int);
+
+        size_t i = 0;
+        while (i < value_count) {
+            int current_value = values[i];
+            size_t count = 1;
+
+            while (i + count < value_count && values[i + count] == current_value) {
+                count++;
+            }
+
+            // 写入值和计数
+            compressed.insert(compressed.end(),
+                            reinterpret_cast<const char*>(&current_value),
+                            reinterpret_cast<const char*>(&current_value) + sizeof(int));
+            compressed.insert(compressed.end(),
+                            reinterpret_cast<const char*>(&count),
+                            reinterpret_cast<const char*>(&count) + sizeof(size_t));
+
+            i += count;
+        }
+
+        column_data.data = compressed;
+        column_data.header.compressed_size = compressed.size();
+    }
+};
+```
+
+## 数据压缩技术
+
+### 字典压缩
+
+#### 字典编码实现
+```cpp
+class DictionaryCompressor {
+private:
+    struct DictionaryEntry {
+        uint32_t id;
+        vector<char> value;
+        uint32_t reference_count;
+    };
+
+    vector<DictionaryEntry> dictionary;
+    unordered_map<string, uint32_t> value_to_id;
+
+public:
+    vector<uint32_t> compress_column(const vector<string>& values) {
+        vector<uint32_t> compressed;
+        compressed.reserve(values.size());
+
+        for (const auto& value : values) {
+            uint32_t id = get_or_add_value(value);
+            compressed.push_back(id);
+        }
+
+        return compressed;
+    }
+
+    vector<string> decompress_column(const vector<uint32_t>& compressed) {
+        vector<string> decompressed;
+        decompressed.reserve(compressed.size());
+
+        for (uint32_t id : compressed) {
+            if (id < dictionary.size()) {
+                const string& value = get_string_value(dictionary[id].value);
+                decompressed.push_back(value);
+            }
+        }
+
+        return decompressed;
+    }
+
+    double get_compression_ratio() const {
+        size_t original_size = 0;
+        size_t compressed_size = 0;
+
+        for (const auto& entry : dictionary) {
+            original_size += entry.value.size();
+            compressed_size += sizeof(uint32_t);
+        }
+
+        if (original_size == 0) return 1.0;
+        return static_cast<double>(compressed_size) / original_size;
+    }
+
+private:
+    uint32_t get_or_add_value(const string& value) {
+        auto it = value_to_id.find(value);
+        if (it != value_to_id.end()) {
+            dictionary[it->second].reference_count++;
+            return it->second;
+        }
+
+        // 添加新值到字典
+        uint32_t new_id = dictionary.size();
+        DictionaryEntry entry;
+        entry.id = new_id;
+        entry.value.assign(value.begin(), value.end());
+        entry.reference_count = 1;
+
+        dictionary.push_back(entry);
+        value_to_id[value] = new_id;
+
+        return new_id;
+    }
+
+    string get_string_value(const vector<char>& data) {
+        return string(data.begin(), data.end());
+    }
+};
+```
+
+### 位图压缩
+
+#### 位图索引压缩
+```cpp
+class BitmapCompressor {
+public:
+    struct CompressedBitmap {
+        vector<uint64_t> bitmap_words;  // 位图数据
+        vector<uint32_t> run_lengths;   // 行程长度
+        bool is_compressed;
+    };
+
+    CompressedBitmap compress_bitmap(const vector<bool>& bitmap) {
+        CompressedBitmap result;
+
+        // 简单的位图压缩：将布尔值转换为位图
+        size_t word_count = (bitmap.size() + 63) / 64;
+        result.bitmap_words.resize(word_count, 0);
+
+        for (size_t i = 0; i < bitmap.size(); i++) {
+            if (bitmap[i]) {
+                size_t word_index = i / 64;
+                size_t bit_index = i % 64;
+                result.bitmap_words[word_index] |= (1ULL << bit_index);
+            }
+        }
+
+        // 检查是否可以应用行程长度编码
+        if (can_apply_rle(bitmap)) {
+            result.run_lengths = compute_run_lengths(bitmap);
+            result.is_compressed = true;
+        } else {
+            result.is_compressed = false;
+        }
+
+        return result;
+    }
+
+    vector<bool> decompress_bitmap(const CompressedBitmap& compressed) {
+        vector<bool> result;
+
+        if (compressed.is_compressed) {
+            // 使用行程长度解码
+            return decode_rle(compressed.run_lengths);
+        } else {
+            // 使用位图解码
+            return decode_bitmap(compressed.bitmap_words);
+        }
+    }
+
+private:
+    bool can_apply_rle(const vector<bool>& bitmap) const {
+        // 检查是否有足够的连续相同值
+        size_t consecutive_count = 1;
+        for (size_t i = 1; i < bitmap.size(); i++) {
+            if (bitmap[i] == bitmap[i-1]) {
+                consecutive_count++;
+                if (consecutive_count >= 8) {
+                    return true;
+                }
+            } else {
+                consecutive_count = 1;
+            }
+        }
+        return false;
+    }
+
+    vector<uint32_t> compute_run_lengths(const vector<bool>& bitmap) const {
+        vector<uint32_t> run_lengths;
+        if (bitmap.empty()) return run_lengths;
+
+        bool current_value = bitmap[0];
+        uint32_t count = 1;
+
+        for (size_t i = 1; i < bitmap.size(); i++) {
+            if (bitmap[i] == current_value) {
+                count++;
+            } else {
+                run_lengths.push_back(count);
+                current_value = bitmap[i];
+                count = 1;
+            }
+        }
+        run_lengths.push_back(count);  // 添加最后一个行程
+
+        return run_lengths;
+    }
+
+    vector<bool> decode_rle(const vector<uint32_t>& run_lengths) const {
+        vector<bool> result;
+        bool value = false;  // 交替开始
+
+        for (uint32_t length : run_lengths) {
+            for (uint32_t i = 0; i < length; i++) {
+                result.push_back(value);
+            }
+            value = !value;  // 切换值
+        }
+
+        return result;
+    }
+
+    vector<bool> decode_bitmap(const vector<uint64_t>& bitmap_words) const {
+        vector<bool> result;
+        result.reserve(bitmap_words.size() * 64);
+
+        for (uint64_t word : bitmap_words) {
+            for (int i = 0; i < 64; i++) {
+                result.push_back((word >> i) & 1);
+            }
+        }
+
+        return result;
+    }
+};
+```
+
+## 存储架构设计
+
+### 混合存储架构
+
+#### PAX (Partition Attributes Across) 架构
+```cpp
+class PAXStorage {
+private:
+    struct PAXPage {
+        struct ColumnGroup {
+            uint16_t column_ids[4];  // 最多4列一组
+            vector<char> column_data;
+            vector<uint8_t> null_bitmap;
+        };
+
+        vector<ColumnGroup> column_groups;
+        uint32_t mini_page_size;  // 每个mini-page的行数
+    };
+
+    vector<PAXPage> pages;
+    vector<uint16_t> column_mapping;  // 列到组的映射
+
+public:
+    bool insert_row(const Row& row) {
+        // 找到合适的页面或创建新页面
+        PAXPage* target_page = find_suitable_page(row);
+        if (!target_page) {
+            target_page = create_new_page();
+        }
+
+        return insert_into_pax_page(target_page, row);
+    }
+
+    vector<ColumnData> scan_columns(const vector<uint16_t>& column_ids) {
+        vector<ColumnData> result;
+
+        // 按列组扫描，提高缓存局部性
+        for (const auto& page : pages) {
+            for (const auto& group : page.column_groups) {
+                for (uint16_t col_id : column_ids) {
+                    if (is_column_in_group(col_id, group)) {
+                        ColumnData col_data = extract_column_from_group(group, col_id);
+                        result.push_back(col_data);
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+private:
+    PAXPage* find_suitable_page(const Row& row) {
+        // 简化实现：查找有空间的页面
+        for (auto& page : pages) {
+            if (has_space_for_row(page, row)) {
+                return &page;
+            }
+        }
+        return nullptr;
+    }
+
+    PAXPage* create_new_page() {
+        PAXPage new_page;
+        new_page.mini_page_size = 128;  // 每个mini-page 128行
+        pages.push_back(new_page);
+        return &pages.back();
+    }
+
+    bool insert_into_pax_page(PAXPage* page, const Row& row) {
+        // 将行数据分配到对应的列组
+        for (const auto& column : row.get_columns()) {
+            uint16_t col_id = column.get_id();
+            ColumnGroup* target_group = find_column_group(page, col_id);
+
+            if (!target_group) {
+                target_group = create_column_group(page, col_id);
+            }
+
+            // 将列值添加到组数据中
+            append_to_column_group(target_group, column);
+        }
+
+        return true;
+    }
+
+    ColumnGroup* find_column_group(PAXPage* page, uint16_t column_id) {
+        for (auto& group : page->column_groups) {
+            for (uint16_t col_id : group.column_ids) {
+                if (col_id == column_id) {
+                    return &group;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    bool is_column_in_group(uint16_t column_id, const ColumnGroup& group) const {
+        for (uint16_t col_id : group.column_ids) {
+            if (col_id == column_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+```
+
+### 存储格式选择策略
+
+#### 自适应存储引擎
+```cpp
+class AdaptiveStorageEngine {
+public:
+    enum class StorageFormat {
+        ROW_STORE,      // 行式存储
+        COLUMN_STORE,   // 列式存储
+        PAX_STORE,      // PAX存储
+        HYBRID_STORE    // 混合存储
+    };
+
+    struct WorkloadCharacteristics {
+        double read_write_ratio;        // 读写比例
+        double scan_point_query_ratio;  // 扫描vs点查询比例
+        double update_frequency;        // 更新频率
+        size_t avg_row_size;            // 平均行大小
+        size_t column_count;            // 列数
+    };
+
+    StorageFormat recommend_format(const WorkloadCharacteristics& workload) {
+        // 基于工作负载特征推荐存储格式
+        if (workload.read_write_ratio > 10.0) {  // 读密集型
+            if (workload.scan_point_query_ratio > 5.0) {  // 扫描密集型
+                if (workload.column_count > 20) {
+                    return StorageFormat::COLUMN_STORE;
+                } else {
+                    return StorageFormat::PAX_STORE;
+                }
+            } else {  // 点查询密集型
+                return StorageFormat::ROW_STORE;
+            }
+        } else if (workload.read_write_ratio < 0.5) {  // 写密集型
+            return StorageFormat::ROW_STORE;
+        } else {  // 混合负载
+            return StorageFormat::HYBRID_STORE;
+        }
+    }
+
+    void reorganize_storage(StorageFormat new_format) {
+        // 根据新格式重新组织数据
+        switch (new_format) {
+            case StorageFormat::ROW_STORE:
+                convert_to_row_store();
+                break;
+            case StorageFormat::COLUMN_STORE:
+                convert_to_column_store();
+                break;
+            case StorageFormat::PAX_STORE:
+                convert_to_pax_store();
+                break;
+            case StorageFormat::HYBRID_STORE:
+                convert_to_hybrid_store();
+                break;
+        }
+    }
+
+private:
+    void convert_to_row_store() {
+        // 行式存储转换逻辑
+        // 将列式数据转换为行式格式
+    }
+
+    void convert_to_column_store() {
+        // 列式存储转换逻辑
+        // 将行式数据转换为列式格式
+    }
+
+    void convert_to_pax_store() {
+        // PAX存储转换逻辑
+        // 重新组织数据为PAX格式
+    }
+
+    void convert_to_hybrid_store() {
+        // 混合存储转换逻辑
+        // 根据访问模式为不同表选择不同格式
+    }
+};
+```
+
+## 性能分析与优化
+
+### 存储格式性能对比
+
+#### 性能基准测试
+```cpp
+class StorageBenchmark {
+public:
+    struct BenchmarkResult {
+        string storage_format;
+        double scan_throughput;     // 扫描吞吐量 (MB/s)
+        double point_query_latency; // 点查询延迟 (ms)
+        double insert_throughput;   // 插入吞吐量 (rows/s)
+        double update_latency;      // 更新延迟 (ms)
+        double compression_ratio;   // 压缩率
+        double memory_usage;        // 内存使用量 (MB)
+    };
+
+    vector<BenchmarkResult> benchmark_storage_formats(
+        const vector<StorageFormat>& formats,
+        const vector<Workload>& workloads) {
+
+        vector<BenchmarkResult> results;
+
+        for (const auto& format : formats) {
+            BenchmarkResult result;
+            result.storage_format = get_format_name(format);
+
+            // 创建测试数据集
+            Dataset dataset = create_test_dataset(workloads);
+
+            // 初始化存储引擎
+            unique_ptr<StorageEngine> engine = create_storage_engine(format);
+
+            // 运行基准测试
+            result.scan_throughput = benchmark_scan(engine, dataset);
+            result.point_query_latency = benchmark_point_queries(engine, dataset);
+            result.insert_throughput = benchmark_inserts(engine, dataset);
+            result.update_latency = benchmark_updates(engine, dataset);
+            result.compression_ratio = benchmark_compression(engine, dataset);
+            result.memory_usage = benchmark_memory_usage(engine, dataset);
+
+            results.push_back(result);
+        }
+
+        return results;
+    }
+
+private:
+    double benchmark_scan(unique_ptr<StorageEngine>& engine, const Dataset& dataset) {
+        auto start = high_resolution_clock::now();
+
+        // 执行全表扫描
+        auto scanner = engine->create_scanner();
+        size_t total_bytes = 0;
+        while (scanner->has_next()) {
+            Row row = scanner->next();
+            total_bytes += row.serialized_size();
+        }
+
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<milliseconds>(end - start);
+
+        return (total_bytes / (1024.0 * 1024.0)) / (duration.count() / 1000.0);
+    }
+
+    double benchmark_point_queries(unique_ptr<StorageEngine>& engine, const Dataset& dataset) {
+        vector<RowId> query_ids = generate_random_ids(dataset, 1000);
+
+        auto start = high_resolution_clock::now();
+
+        for (RowId id : query_ids) {
+            Row row = engine->get_row(id);
+        }
+
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<milliseconds>(end - start);
+
+        return duration.count() / (double)query_ids.size();
+    }
+};
+```
+
+## 实践建议
+
+### 存储引擎开发
+1. **模块化设计**：将存储格式与存储引擎解耦
+2. **插件化架构**：支持动态加载不同的存储格式
+3. **性能监控**：实时监控存储性能指标
+4. **自适应优化**：根据工作负载自动调整存储策略
+
+### 压缩算法选择
+1. **CPU vs 空间权衡**：考虑压缩/解压缩开销
+2. **数据特征分析**：根据数据分布选择合适算法
+3. **访问模式适配**：考虑查询模式对压缩的影响
+4. **硬件特性利用**：利用SIMD指令加速压缩
+
+## 课后练习
+
+### 编程题
+1. 实现一个简单的列式存储引擎，支持基本的插入和查询操作
+2. 设计并实现字典压缩算法，应用于字符串类型数据
+3. 实现PAX存储架构，比较其与行式和列式存储的性能差异
+
+### 思考题
+1. 分析不同存储格式在各种工作负载下的适用场景
+2. 讨论压缩算法对查询性能的影响
+3. 如何设计一个自适应的存储引擎，能够根据工作负载动态调整存储格式？
+
+## 下节预告
+
+下一讲将深入探讨**内存管理**，包括：
+- 缓冲池管理策略
+- 内存分配与回收
+- 页面替换算法
+- 内存优化技术
+
+---
+
+**核心要点**：选择合适的存储格式和压缩策略是构建高性能数据库系统的关键，需要综合考虑工作负载特征和硬件特性！

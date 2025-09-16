@@ -1,0 +1,1303 @@
+---
+title: "第5讲：指令集架构"
+description: "ISA设计原则、寻址模式、指令格式和汇编语言"
+---
+
+# 第5讲：指令集架构
+
+## 概述
+
+本讲深入探讨指令集架构(ISA)的设计原则和实现方法。ISA是软硬件之间的接口，定义了处理器能够理解和执行的指令集合，是计算机体系结构的核心。
+
+## ISA基本概念
+
+### ISA的层次结构
+
+指令集架构位于硬件和软件的交界处：
+
+```
+应用程序
+    ↓
+编译器/汇编器
+    ↓
+指令集架构 (ISA)
+    ↓
+微架构实现
+    ↓
+硬件电路
+```
+
+### ISA的分类
+
+#### 按指令长度分类
+
+```c
+#include <stdint.h>
+#include <stdio.h>
+
+// 指令长度类型
+typedef enum {
+    FIXED_LENGTH,    // 定长指令
+    VARIABLE_LENGTH  // 变长指令
+} InstructionLength;
+
+// 指令格式
+typedef struct {
+    uint32_t opcode;          // 操作码
+    uint32_t operands[3];     // 操作数
+    uint32_t length;          // 指令长度
+    InstructionLength type;  // 指令类型
+} Instruction;
+
+// MIPS定长指令示例 (32位)
+typedef union {
+    uint32_t raw;
+    struct {
+        uint32_t opcode : 6;
+        uint32_t rs : 5;
+        uint32_t rt : 5;
+        uint32_t rd : 5;
+        uint32_t shamt : 5;
+        uint32_t funct : 6;
+    } R_type;
+    struct {
+        uint32_t opcode : 6;
+        uint32_t rs : 5;
+        uint32_t rt : 5;
+        uint32_t immediate : 16;
+    } I_type;
+    struct {
+        uint32_t opcode : 6;
+        uint32_t address : 26;
+    } J_type;
+} MIPS_Instruction;
+
+// 指令类型演示
+void instruction_type_demo() {
+    printf("指令集架构分类演示:\n");
+    printf("====================\n");
+
+    // 定长指令示例
+    MIPS_Instruction add_instr = {
+        .R_type = {
+            .opcode = 0,    // R类型
+            .rs = 1,        // 源寄存器1
+            .rt = 2,        // 源寄存器2
+            .rd = 3,        // 目标寄存器
+            .shamt = 0,     // 移位量
+            .funct = 32     // ADD操作
+        }
+    };
+
+    printf("MIPS R类型指令 (32位):\n");
+    printf("操作码: %d, rs: %d, rt: %d, rd: %d\n",
+           add_instr.R_type.opcode, add_instr.R_type.rs,
+           add_instr.R_type.rt, add_instr.R_type.rd);
+    printf("二进制: 0x%08X\n", add_instr.raw);
+    printf("\n");
+
+    // 变长指令示例 (x86)
+    printf("x86变长指令特点:\n");
+    printf("- 指令长度从1到15字节不等\n");
+    printf("- 操作码长度可变\n");
+    printf("- 前缀字节可改变指令行为\n");
+    printf("- 更高的代码密度\n");
+}
+```
+
+#### 按操作数数量分类
+
+```python
+class ISAClassification:
+    """ISA分类体系"""
+
+    def __init__(self):
+        self.architectures = {
+            'stack': {
+                'name': '堆栈架构',
+                'operands': 0,
+                'example': 'Java虚拟机',
+                'advantages': ['指令简单', '代码紧凑'],
+                'disadvantages': ['访问内存频繁', '性能较低']
+            },
+            'accumulator': {
+                'name': '累加器架构',
+                'operands': 1,
+                'example': 'Intel 8080',
+                'advantages': ['硬件简单', '指令短'],
+                'disadvantages': ['频繁访问累加器', '并行性差']
+            },
+            'register_memory': {
+                'name': '寄存器-内存架构',
+                'operands': 2,
+                'example': 'Intel x86',
+                'advantages': ['灵活的寻址', '代码密度高'],
+                'disadvantages': ['指令长度可变', '译码复杂']
+            },
+            'register_register': {
+                'name': '寄存器-寄存器架构',
+                'operands': 3,
+                'example': 'MIPS, ARM, RISC-V',
+                'advantages': ['指令简单', '流水线效率高'],
+                'disadvantages': ['代码密度低', '指令数量多']
+            }
+        }
+
+    def compare_architectures(self):
+        """比较不同架构"""
+        print("ISA架构比较:")
+        print("============")
+        print("架构类型 | 操作数数量 | 典型代表 | 代码密度 | 执行效率")
+        print("-------------------------------------------------")
+
+        for key, arch in self.architectures.items():
+            density = self._evaluate_code_density(arch['name'])
+            efficiency = self._evaluate_efficiency(arch['name'])
+            print(f"{arch['name']:12} | {arch['operands']:9d} | {arch['example']:8s} | {density:8s} | {efficiency:8s}")
+
+    def _evaluate_code_density(self, arch_name):
+        """评估代码密度"""
+        if arch_name in ['寄存器-内存架构', '堆栈架构']:
+            return "高"
+        elif arch_name == '累加器架构':
+            return "中"
+        else:
+            return "低"
+
+    def _evaluate_efficiency(self, arch_name):
+        """评估执行效率"""
+        if arch_name == '寄存器-寄存器架构':
+            return "高"
+        elif arch_name in ['寄存器-内存架构', '累加器架构']:
+            return "中"
+        else:
+            return "低"
+
+# 架构比较演示
+def architecture_demo():
+    classifier = ISAClassification()
+    classifier.compare_architectures()
+```
+
+## 寻址模式
+
+### 常见寻址模式
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// 寻址模式类型
+typedef enum {
+    IMMEDIATE,      // 立即寻址
+    DIRECT,         // 直接寻址
+    INDIRECT,        // 间接寻址
+    REGISTER,        // 寄存器寻址
+    REGISTER_INDIRECT, // 寄存器间接寻址
+    DISPLACEMENT,    // 位移寻址
+    STACK,           // 堆栈寻址
+    PC_RELATIVE      // PC相对寻址
+} AddressingMode;
+
+// 模拟内存系统
+typedef struct {
+    uint32_t memory[1024];     // 内存数组
+    uint32_t registers[32];     // 寄存器组
+    uint32_t pc;                // 程序计数器
+    uint32_t sp;                // 堆栈指针
+} CPU;
+
+// 初始化CPU
+void cpu_init(CPU *cpu) {
+    for (int i = 0; i < 1024; i++) {
+        cpu->memory[i] = i * 4;  // 简单的内存模式
+    }
+    for (int i = 0; i < 32; i++) {
+        cpu->registers[i] = 0;
+    }
+    cpu->pc = 0;
+    cpu->sp = 1000;  // 堆栈从地址1000开始
+}
+
+// 立即寻址
+uint32_t immediate_addressing(uint32_t immediate) {
+    return immediate;  // 直接返回立即数
+}
+
+// 直接寻址
+uint32_t direct_addressing(CPU *cpu, uint32_t address) {
+    return cpu->memory[address];  // 直接访问内存地址
+}
+
+// 间接寻址
+uint32_t indirect_addressing(CPU *cpu, uint32_t address) {
+    uint32_t effective_addr = cpu->memory[address];  // 获取有效地址
+    return cpu->memory[effective_addr];  // 访问有效地址
+}
+
+// 寄存器寻址
+uint32_t register_addressing(CPU *cpu, uint8_t reg_num) {
+    return cpu->registers[reg_num];  // 直接访问寄存器
+}
+
+// 寄存器间接寻址
+uint32_t register_indirect_addressing(CPU *cpu, uint8_t reg_num) {
+    uint32_t address = cpu->registers[reg_num];  // 从寄存器获取地址
+    return cpu->memory[address];  // 访问内存
+}
+
+// 位移寻址
+uint32_t displacement_addressing(CPU *cpu, uint8_t reg_num, int32_t displacement) {
+    uint32_t base_addr = cpu->registers[reg_num];
+    uint32_t effective_addr = base_addr + displacement;
+    return cpu->memory[effective_addr];
+}
+
+// 堆栈寻址
+uint32_t stack_addressing(CPU *cpu) {
+    return cpu->memory[cpu->sp];  // 访问栈顶
+}
+
+// PC相对寻址
+uint32_t pc_relative_addressing(CPU *cpu, int32_t offset) {
+    uint32_t effective_addr = cpu->pc + offset;
+    return cpu->memory[effective_addr];
+}
+
+// 寻址模式演示
+void addressing_mode_demo() {
+    printf("寻址模式演示:\n");
+    printf("=============\n");
+
+    CPU cpu;
+    cpu_init(&cpu);
+
+    // 设置一些初始值
+    cpu.memory[100] = 0x12345678;
+    cpu.memory[200] = 100;  // 间接寻址测试
+    cpu.registers[1] = 50;
+    cpu.memory[50] = 0xABCDEF00;
+    cpu.memory[60] = 0x11223344;  // 位移寻址测试
+
+    printf("1. 立即寻址: 0x%X\n", immediate_addressing(0x1234));
+    printf("2. 直接寻址 (地址100): 0x%X\n", direct_addressing(&cpu, 100));
+    printf("3. 间接寻址 (地址200): 0x%X\n", indirect_addressing(&cpu, 200));
+    printf("4. 寄存器寻址 (R1): 0x%X\n", register_addressing(&cpu, 1));
+    printf("5. 寄存器间接寻址 (R1): 0x%X\n", register_indirect_addressing(&cpu, 1));
+    printf("6. 位移寻址 (R1 + 10): 0x%X\n", displacement_addressing(&cpu, 1, 10));
+    printf("7. 堆栈寻址: 0x%X\n", stack_addressing(&cpu));
+
+    cpu.pc = 80;
+    printf("8. PC相对寻址 (PC + 20): 0x%X\n", pc_relative_addressing(&cpu, 20));
+}
+```
+
+### 寻址模式应用
+
+```python
+class AddressingModeApplications:
+    """寻址模式应用示例"""
+
+    def __init__(self):
+        self.memory = [i * 4 for i in range(1024)]
+        self.registers = [0] * 32
+        self.pc = 0
+        self.sp = 1000
+
+    def array_access_example(self):
+        """数组访问示例"""
+        print("数组访问示例:")
+        print("=============")
+
+        # 假设数组从地址500开始，每个元素4字节
+        array_base = 500
+        index = 3
+
+        # 使用位移寻址访问数组元素
+        element_addr = array_base + index * 4
+        element_value = self.memory[element_addr]
+
+        print(f"数组基地址: {array_base}")
+        print(f"索引: {index}")
+        print(f"元素地址: {element_addr}")
+        print(f"元素值: {element_value}")
+
+        # 寄存器+位移寻址
+        self.registers[5] = array_base  # 基地址存入R5
+        displacement = index * 4
+        effective_addr = self.registers[5] + displacement
+        value = self.memory[effective_addr]
+
+        print(f"寄存器寻址访问: R5 + {displacement} = {effective_addr}")
+        print(f"值: {value}")
+
+    def function_call_example(self):
+        """函数调用示例"""
+        print("\n函数调用示例:")
+        print("===============")
+
+        # 函数调用前的堆栈操作
+        print("调用前:")
+        print(f"SP: {self.sp}")
+
+        # 压入返回地址
+        return_addr = 0x200
+        self.sp -= 4
+        self.memory[self.sp] = return_addr
+        print(f"压入返回地址: SP={self.sp}, 值=0x{return_addr:08X}")
+
+        # 压入参数
+        param1 = 42
+        self.sp -= 4
+        self.memory[self.sp] = param1
+        print(f"压入参数: SP={self.sp}, 值={param1}")
+
+        # 函数调用 (跳转到函数地址)
+        function_addr = 0x300
+        print(f"跳转到函数地址: 0x{function_addr:08X}")
+
+        # 函数内部 (使用堆栈寻址访问参数)
+        print("\n函数内部:")
+        param_from_stack = self.memory[self.sp]
+        return_addr_from_stack = self.memory[self.sp + 4]
+        print(f"从堆栈获取参数: {param_from_stack}")
+        print(f"从堆栈获取返回地址: 0x{return_addr_from_stack:08X}")
+
+    def branch_instruction_example(self):
+        """分支指令示例"""
+        print("\n分支指令示例:")
+        print("===============")
+
+        # 条件分支
+        self.registers[1] = 10
+        self.registers[2] = 20
+        self.pc = 100
+
+        print(f"当前PC: {self.pc}")
+        print(f"R1 = {self.registers[1]}, R2 = {self.registers[2]}")
+
+        # 比较指令
+        if self.registers[1] < self.registers[2]:
+            # 小于分支
+            branch_offset = 50
+            target_addr = self.pc + branch_offset
+            print(f"条件满足，跳转到: {target_addr}")
+        else:
+            print("条件不满足，顺序执行")
+
+# 寻址模式应用演示
+def addressing_application_demo():
+    app = AddressingModeApplications()
+    app.array_access_example()
+    app.function_call_example()
+    app.branch_instruction_example()
+```
+
+## 指令格式设计
+
+### MIPS指令格式
+
+```c
+#include <stdint.h>
+#include <stdio.h>
+
+// MIPS指令类型
+typedef enum {
+    R_TYPE,  // 寄存器类型
+    I_TYPE,  // 立即数类型
+    J_TYPE   // 跳转类型
+} MIPS_Instruction_Type;
+
+// MIPS指令编码
+typedef struct {
+    MIPS_Instruction_Type type;
+    uint8_t opcode;
+    uint8_t rs;      // 源寄存器1
+    uint8_t rt;      // 源寄存器2/目标寄存器
+    uint8_t rd;      // 目标寄存器
+    uint8_t shamt;   // 移位量
+    uint8_t funct;   // 功能码
+    uint16_t immediate; // 立即数
+    uint32_t address;  // 跳转地址
+} MIPS_Instruction;
+
+// MIPS操作码定义
+#define MIPS_OPCODE_RTYPE 0x00
+#define MIPS_OPCODE_ADDI  0x08
+#define MIPS_OPCODE_LW    0x23
+#define MIPS_OPCODE_SW    0x2B
+#define MIPS_OPCODE_BEQ   0x04
+#define MIPS_OPCODE_J     0x02
+
+// MIPS功能码定义
+#define MIPS_FUNCT_ADD  0x20
+#define MIPS_FUNCT_SUB  0x22
+#define MIPS_FUNCT_AND  0x24
+#define MIPS_FUNCT_OR   0x25
+#define MIPS_FUNCT_SLL  0x00
+
+// 汇编MIPS指令
+uint32_t assemble_mips_instruction(MIPS_Instruction *instr) {
+    uint32_t machine_code = 0;
+
+    switch (instr->type) {
+        case R_TYPE:
+            machine_code = (instr->opcode << 26) |
+                          (instr->rs << 21) |
+                          (instr->rt << 16) |
+                          (instr->rd << 11) |
+                          (instr->shamt << 6) |
+                          instr->funct;
+            break;
+
+        case I_TYPE:
+            machine_code = (instr->opcode << 26) |
+                          (instr->rs << 21) |
+                          (instr->rt << 16) |
+                          (instr->immediate & 0xFFFF);
+            break;
+
+        case J_TYPE:
+            machine_code = (instr->opcode << 26) |
+                          (instr->address & 0x03FFFFFF);
+            break;
+    }
+
+    return machine_code;
+}
+
+// 反汇编MIPS指令
+void disassemble_mips_instruction(uint32_t machine_code) {
+    uint8_t opcode = (machine_code >> 26) & 0x3F;
+
+    printf("机器码: 0x%08X\n", machine_code);
+
+    switch (opcode) {
+        case MIPS_OPCODE_RTYPE:
+            {
+                uint8_t rs = (machine_code >> 21) & 0x1F;
+                uint8_t rt = (machine_code >> 16) & 0x1F;
+                uint8_t rd = (machine_code >> 11) & 0x1F;
+                uint8_t shamt = (machine_code >> 6) & 0x1F;
+                uint8_t funct = machine_code & 0x3F;
+
+                switch (funct) {
+                    case MIPS_FUNCT_ADD:
+                        printf("ADD $%d, $%d, $%d\n", rd, rs, rt);
+                        break;
+                    case MIPS_FUNCT_SUB:
+                        printf("SUB $%d, $%d, $%d\n", rd, rs, rt);
+                        break;
+                    case MIPS_FUNCT_AND:
+                        printf("AND $%d, $%d, $%d\n", rd, rs, rt);
+                        break;
+                    case MIPS_FUNCT_OR:
+                        printf("OR $%d, $%d, $%d\n", rd, rs, rt);
+                        break;
+                    case MIPS_FUNCT_SLL:
+                        printf("SLL $%d, $%d, %d\n", rd, rt, shamt);
+                        break;
+                    default:
+                        printf("未知R类型指令\n");
+                }
+            }
+            break;
+
+        case MIPS_OPCODE_ADDI:
+            {
+                uint8_t rs = (machine_code >> 21) & 0x1F;
+                uint8_t rt = (machine_code >> 16) & 0x1F;
+                int16_t immediate = machine_code & 0xFFFF;
+                printf("ADDI $%d, $%d, %d\n", rt, rs, immediate);
+            }
+            break;
+
+        case MIPS_OPCODE_LW:
+            {
+                uint8_t rs = (machine_code >> 21) & 0x1F;
+                uint8_t rt = (machine_code >> 16) & 0x1F;
+                int16_t offset = machine_code & 0xFFFF;
+                printf("LW $%d, %d($%d)\n", rt, offset, rs);
+            }
+            break;
+
+        case MIPS_OPCODE_SW:
+            {
+                uint8_t rs = (machine_code >> 21) & 0x1F;
+                uint8_t rt = (machine_code >> 16) & 0x1F;
+                int16_t offset = machine_code & 0xFFFF;
+                printf("SW $%d, %d($%d)\n", rt, offset, rs);
+            }
+            break;
+
+        case MIPS_OPCODE_BEQ:
+            {
+                uint8_t rs = (machine_code >> 21) & 0x1F;
+                uint8_t rt = (machine_code >> 16) & 0x1F;
+                int16_t offset = machine_code & 0xFFFF;
+                printf("BEQ $%d, $%d, %d\n", rs, rt, offset);
+            }
+            break;
+
+        case MIPS_OPCODE_J:
+            {
+                uint32_t address = machine_code & 0x03FFFFFF;
+                printf("J 0x%08X\n", address << 2);
+            }
+            break;
+
+        default:
+            printf("未知指令\n");
+    }
+}
+
+// MIPS指令演示
+void mips_instruction_demo() {
+    printf("MIPS指令格式演示:\n");
+    printf("==================\n");
+
+    // R类型指令示例
+    MIPS_Instruction add_instr = {
+        .type = R_TYPE,
+        .opcode = MIPS_OPCODE_RTYPE,
+        .rs = 1,
+        .rt = 2,
+        .rd = 3,
+        .shamt = 0,
+        .funct = MIPS_FUNCT_ADD
+    };
+
+    uint32_t add_machine_code = assemble_mips_instruction(&add_instr);
+    printf("ADD指令:\n");
+    disassemble_mips_instruction(add_machine_code);
+    printf("\n");
+
+    // I类型指令示例
+    MIPS_Instruction addi_instr = {
+        .type = I_TYPE,
+        .opcode = MIPS_OPCODE_ADDI,
+        .rs = 1,
+        .rt = 2,
+        .immediate = 100
+    };
+
+    uint32_t addi_machine_code = assemble_mips_instruction(&addi_instr);
+    printf("ADDI指令:\n");
+    disassemble_mips_instruction(addi_machine_code);
+    printf("\n");
+
+    // J类型指令示例
+    MIPS_Instruction j_instr = {
+        .type = J_TYPE,
+        .opcode = MIPS_OPCODE_J,
+        .address = 0x1000 >> 2
+    };
+
+    uint32_t j_machine_code = assemble_mips_instruction(&j_instr);
+    printf("J指令:\n");
+    disassemble_mips_instruction(j_machine_code);
+}
+```
+
+## RISC vs CISC
+
+### 特性对比
+
+```python
+class RISC_vs_CISC:
+    """RISC与CISC对比"""
+
+    def __init__(self):
+        self.comparison = {
+            'instruction_set': {
+                'risc': '简化指令集',
+                'cisc': '复杂指令集'
+            },
+            'instruction_format': {
+                'risc': '定长格式',
+                'cisc': '变长格式'
+            },
+            'addressing_modes': {
+                'risc': '少量寻址模式',
+                'cisc': '丰富寻址模式'
+            },
+            'register_usage': {
+                'risc': '大量通用寄存器',
+                'cisc': '少量专用寄存器'
+            },
+            'control_unit': {
+                'risc': '硬连线控制',
+                'cisc': '微程序控制'
+            },
+            'pipelining': {
+                'risc': '易于流水线化',
+                'cisc': '流水线化困难'
+            },
+            'code_density': {
+                'risc': '较低',
+                'cisc': '较高'
+            },
+            'performance': {
+                'risc': '简单指令快速',
+                'cisc': '复杂指令功能强大'
+            }
+        }
+
+    def compare_characteristics(self):
+        """对比特性"""
+        print("RISC vs CISC 特性对比:")
+        print("======================")
+        print("特性\t\tRISC\t\t\tCISC")
+        print("----------------------------------------")
+
+        for key, value in self.comparison.items():
+            print(f"{key:15s}\t{value['risc']:15s}\t{value['cisc']:15s}")
+
+    def analyze_performance(self, program_type):
+        """性能分析"""
+        print(f"\n{program_type} 程序性能分析:")
+        print("======================")
+
+        if program_type == "计算密集型":
+            print("RISC优势:")
+            print("- 简单指令执行速度快")
+            print("- 流水线效率高")
+            print("- 寄存器数量多，减少内存访问")
+            print("\nCISC劣势:")
+            print("- 复杂指令译码时间长")
+            print("- 流水线冲突多")
+
+        elif program_type == "代码密度敏感型":
+            print("CISC优势:")
+            print("- 代码密度高，节省内存")
+            print("- 复杂指令功能强大")
+            print("- 程序体积小")
+            print("\nRISC劣势:")
+            print("- 指令数量多，程序体积大")
+            print("- 内存访问频繁")
+
+        elif program_type == "实时系统":
+            print("RISC优势:")
+            print("- 指令执行时间可预测")
+            print("- 中断响应时间短")
+            print("- 硬件结构简单")
+            print("\nCISC劣势:")
+            print("- 指令执行时间变化大")
+            print("- 中断处理复杂")
+
+    def modern_trends(self):
+        """现代发展趋势"""
+        print("\n现代发展趋势:")
+        print("==============")
+        print("1. RISC和CISC相互融合")
+        print("   - RISC增加复杂指令")
+        print("   - CISC采用RISC技术")
+        print("2. 专用指令集发展")
+        print("   - GPU指令集")
+        print("   - AI加速器指令集")
+        print("3. 开源指令集兴起")
+        print("   - RISC-V的普及")
+        print("   - 社区驱动的创新")
+
+# RISC vs CISC对比演示
+def risc_cisc_demo():
+    comparison = RISC_vs_CISC()
+    comparison.compare_characteristics()
+    comparison.analyze_performance("计算密集型")
+    comparison.analyze_performance("代码密度敏感型")
+    comparison.modern_trends()
+```
+
+## 汇编语言基础
+
+### 基本语法
+
+```python
+class Assembler:
+    """简单汇编器"""
+
+    def __init__(self):
+        self.symbols = {}  # 符号表
+        self.instructions = []  # 指令列表
+        self.data_section = []  # 数据段
+        self.text_section = []  # 代码段
+
+    def add_symbol(self, name, value):
+        """添加符号"""
+        self.symbols[name] = value
+
+    def parse_instruction(self, line):
+        """解析指令行"""
+        line = line.strip()
+        if not line or line.startswith('#'):
+            return None
+
+        # 处理标签
+        if line.endswith(':'):
+            label = line[:-1]
+            self.add_symbol(label, len(self.instructions))
+            return None
+
+        # 分解指令
+        parts = line.split()
+        if not parts:
+            return None
+
+        opcode = parts[0].upper()
+        operands = parts[1:] if len(parts) > 1 else []
+
+        return {
+            'opcode': opcode,
+            'operands': operands,
+            'line': line
+        }
+
+    def assemble_program(self, source_code):
+        """汇编程序"""
+        lines = source_code.split('\n')
+
+        # 第一遍：收集符号
+        for line in lines:
+            parsed = self.parse_instruction(line)
+            if parsed and ':' in line:
+                # 这是标签
+                label = line.split(':')[0]
+                self.add_symbol(label, len(self.instructions))
+
+        # 第二遍：生成指令
+        for line in lines:
+            parsed = self.parse_instruction(line)
+            if parsed and not line.endswith(':'):
+                instruction = self.assemble_instruction(parsed)
+                if instruction:
+                    self.instructions.append(instruction)
+
+        return self.instructions
+
+    def assemble_instruction(self, instr):
+        """汇编单条指令"""
+        opcode = instr['opcode']
+        operands = instr['operands']
+
+        # 简化的指令汇编
+        if opcode == 'ADD':
+            if len(operands) == 3:
+                return {'type': 'ADD', 'rd': operands[0], 'rs': operands[1], 'rt': operands[2]}
+        elif opcode == 'SUB':
+            if len(operands) == 3:
+                return {'type': 'SUB', 'rd': operands[0], 'rs': operands[1], 'rt': operands[2]}
+        elif opcode == 'LW':
+            if len(operands) == 2:
+                return {'type': 'LW', 'rt': operands[0], 'address': operands[1]}
+        elif opcode == 'SW':
+            if len(operands) == 2:
+                return {'type': 'SW', 'rt': operands[0], 'address': operands[1]}
+        elif opcode == 'BEQ':
+            if len(operands) == 3:
+                return {'type': 'BEQ', 'rs': operands[0], 'rt': operands[1], 'label': operands[2]}
+        elif opcode == 'J':
+            if len(operands) == 1:
+                return {'type': 'J', 'label': operands[0]}
+
+        return None
+
+# 汇编语言演示
+def assembly_demo():
+    print("汇编语言演示:")
+    printf("=============")
+
+    assembler = Assembler()
+
+    # 示例程序：计算数组元素和
+    source_code = """
+        # 数据段
+        .data
+array:  .word 1, 2, 3, 4, 5
+sum:    .word 0
+
+        # 代码段
+        .text
+main:
+        LA      $t0, array      # 加载数组地址
+        LI      $t1, 5          # 数组长度
+        LI      $t2, 0          # 索引
+        LI      $t3, 0          # 总和
+
+loop:
+        BEQ     $t2, $t1, end   # 如果索引等于长度，结束
+        SLL     $t4, $t2, 2     # 索引*4 (字偏移)
+        ADD     $t5, $t0, $t4   # 计算元素地址
+        LW      $t6, 0($t5)     # 加载元素
+        ADD     $t3, $t3, $t6   # 累加
+        ADDI    $t2, $t2, 1     # 索引+1
+        J       loop            # 继续循环
+
+end:
+        SW      $t3, sum        # 保存结果
+        JR      $ra             # 返回
+    """
+
+    instructions = assembler.assemble_program(source_code)
+
+    print("汇编结果:")
+    print("--------")
+    for i, instr in enumerate(instructions):
+        print(f"{i:2d}: {instr}")
+
+    print(f"\n符号表:")
+    print("------")
+    for symbol, value in assembler.symbols.items():
+        print(f"{symbol}: {value}")
+```
+
+## 实验项目：简单汇编器
+
+### 项目概述
+
+创建一个简单的MIPS汇编器，能够：
+1. 解析汇编源代码
+2. 处理标签和符号
+3. 生成机器码
+4. 错误检查和报告
+
+### 完整实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <ctype.h>
+
+#define MAX_LINE_LENGTH 256
+#define MAX_SYMBOLS 100
+#define MAX_INSTRUCTIONS 1000
+#define MAX_OPERANDS 3
+
+typedef struct {
+    char name[32];
+    uint32_t address;
+} Symbol;
+
+typedef struct {
+    char opcode[16];
+    char operands[MAX_OPERANDS][32];
+    int operand_count;
+    uint32_t address;
+    uint32_t machine_code;
+} Instruction;
+
+typedef struct {
+    Symbol symbols[MAX_SYMBOLS];
+    Instruction instructions[MAX_INSTRUCTIONS];
+    int symbol_count;
+    int instruction_count;
+    uint32_t current_address;
+} Assembler;
+
+// 初始化汇编器
+void assembler_init(Assembler *assembler) {
+    assembler->symbol_count = 0;
+    assembler->instruction_count = 0;
+    assembler->current_address = 0x00400000;  // MIPS标准起始地址
+}
+
+// 添加符号
+int add_symbol(Assembler *assembler, const char *name) {
+    if (assembler->symbol_count >= MAX_SYMBOLS) {
+        return -1;
+    }
+
+    strncpy(assembler->symbols[assembler->symbol_count].name, name, 31);
+    assembler->symbols[assembler->symbol_count].name[31] = '\0';
+    assembler->symbols[assembler->symbol_count].address = assembler->current_address;
+    assembler->symbol_count++;
+
+    return 0;
+}
+
+// 查找符号
+Symbol* find_symbol(Assembler *assembler, const char *name) {
+    for (int i = 0; i < assembler->symbol_count; i++) {
+        if (strcmp(assembler->symbols[i].name, name) == 0) {
+            return &assembler->symbols[i];
+        }
+    }
+    return NULL;
+}
+
+// 寄存器名称到编号转换
+int register_to_number(const char *reg_name) {
+    if (reg_name[0] != '$') return -1;
+
+    // 数字寄存器 $0 - $31
+    if (isdigit(reg_name[1])) {
+        int reg_num = atoi(reg_name + 1);
+        if (reg_num >= 0 && reg_num <= 31) {
+            return reg_num;
+        }
+    }
+
+    // 标准寄存器名称
+    struct {
+        const char *name;
+        int number;
+    } reg_map[] = {
+        {"$zero", 0}, {"$at", 1}, {"$v0", 2}, {"$v1", 3},
+        {"$a0", 4}, {"$a1", 5}, {"$a2", 6}, {"$a3", 7},
+        {"$t0", 8}, {"$t1", 9}, {"$t2", 10}, {"$t3", 11},
+        {"$t4", 12}, {"$t5", 13}, {"$t6", 14}, {"$t7", 15},
+        {"$s0", 16}, {"$s1", 17}, {"$s2", 18}, {"$s3", 19},
+        {"$s4", 20}, {"$s5", 21}, {"$s6", 22}, {"$s7", 23},
+        {"$t8", 24}, {"$t9", 25}, {"$k0", 26}, {"$k1", 27},
+        {"$gp", 28}, {"$sp", 29}, {"$fp", 30}, {"$ra", 31}
+    };
+
+    for (int i = 0; i < sizeof(reg_map) / sizeof(reg_map[0]); i++) {
+        if (strcmp(reg_name, reg_map[i].name) == 0) {
+            return reg_map[i].number;
+        }
+    }
+
+    return -1;
+}
+
+// 操作码到机器码转换
+uint8_t opcode_to_machine_code(const char *opcode) {
+    struct {
+        const char *name;
+        uint8_t code;
+    } opcode_map[] = {
+        {"ADD", 0x00}, {"SUB", 0x00}, {"AND", 0x00}, {"OR", 0x00},
+        {"ADDI", 0x08}, {"SUBI", 0x08}, {"ANDI", 0x0C}, {"ORI", 0x0D},
+        {"LW", 0x23}, {"SW", 0x2B},
+        {"BEQ", 0x04}, {"BNE", 0x05},
+        {"J", 0x02}, {"JAL", 0x03},
+        {"SLL", 0x00}, {"SRL", 0x00}
+    };
+
+    for (int i = 0; i < sizeof(opcode_map) / sizeof(opcode_map[0]); i++) {
+        if (strcmp(opcode, opcode_map[i].name) == 0) {
+            return opcode_map[i].code;
+        }
+    }
+
+    return 0xFF;  // 无效操作码
+}
+
+// 功能码到机器码转换
+uint8_t funct_to_machine_code(const char *opcode) {
+    struct {
+        const char *name;
+        uint8_t code;
+    } funct_map[] = {
+        {"ADD", 0x20}, {"SUB", 0x22}, {"AND", 0x24}, {"OR", 0x25},
+        {"SLL", 0x00}, {"SRL", 0x02}
+    };
+
+    for (int i = 0; i < sizeof(funct_map) / sizeof(funct_map[0]); i++) {
+        if (strcmp(opcode, funct_map[i].name) == 0) {
+            return funct_map[i].code;
+        }
+    }
+
+    return 0xFF;  // 无效功能码
+}
+
+// 解析操作数
+void parse_operands(const char *operand_str, char operands[MAX_OPERANDS][32]) {
+    char temp[MAX_LINE_LENGTH];
+    strncpy(temp, operand_str, MAX_LINE_LENGTH - 1);
+    temp[MAX_LINE_LENGTH - 1] = '\0';
+
+    char *token = strtok(temp, ", ");
+    int count = 0;
+
+    while (token != NULL && count < MAX_OPERANDS) {
+        // 去除空白字符
+        while (isspace(*token)) token++;
+
+        // 复制操作数
+        strncpy(operands[count], token, 31);
+        operands[count][31] = '\0';
+
+        // 去除末尾空白
+        char *end = operands[count] + strlen(operands[count]) - 1;
+        while (end > operands[count] && isspace(*end)) end--;
+        *(end + 1) = '\0';
+
+        count++;
+        token = strtok(NULL, ", ");
+    }
+}
+
+// 生成机器码
+uint32_t generate_machine_code(Assembler *assembler, Instruction *instr) {
+    const char *opcode = instr->opcode;
+    uint8_t op = opcode_to_machine_code(opcode);
+
+    if (op == 0xFF) {
+        return 0;  // 无效指令
+    }
+
+    // R类型指令
+    if (strcmp(opcode, "ADD") == 0 || strcmp(opcode, "SUB") == 0 ||
+        strcmp(opcode, "AND") == 0 || strcmp(opcode, "OR") == 0) {
+        int rs = register_to_number(instr->operands[1]);
+        int rt = register_to_number(instr->operands[2]);
+        int rd = register_to_number(instr->operands[0]);
+        uint8_t funct = funct_to_machine_code(opcode);
+
+        return (op << 26) | (rs << 21) | (rt << 16) | (rd << 11) | funct;
+    }
+
+    // I类型指令
+    else if (strcmp(opcode, "ADDI") == 0 || strcmp(opcode, "LW") == 0 || strcmp(opcode, "SW") == 0) {
+        if (strcmp(opcode, "ADDI") == 0) {
+            int rs = register_to_number(instr->operands[1]);
+            int rt = register_to_number(instr->operands[0]);
+            int immediate = atoi(instr->operands[2]);
+            return (op << 26) | (rs << 21) | (rt << 16) | (immediate & 0xFFFF);
+        } else {
+            // LW/SW指令解析 (如：lw $t0, 4($t1))
+            char rt_str[32], offset_str[32], base_str[32];
+            sscanf(instr->operands[1], "%[^'(](%[^')])", offset_str, base_str);
+
+            int rt = register_to_number(instr->operands[0]);
+            int base = register_to_number(base_str);
+            int offset = atoi(offset_str);
+
+            return (op << 26) | (base << 21) | (rt << 16) | (offset & 0xFFFF);
+        }
+    }
+
+    // J类型指令
+    else if (strcmp(opcode, "J") == 0) {
+        Symbol *symbol = find_symbol(assembler, instr->operands[0]);
+        if (symbol) {
+            uint32_t address = symbol->address;
+            return (op << 26) | ((address >> 2) & 0x03FFFFFF);
+        }
+    }
+
+    return 0;
+}
+
+// 解析汇编行
+int parse_assembly_line(Assembler *assembler, const char *line) {
+    char temp[MAX_LINE_LENGTH];
+    strncpy(temp, line, MAX_LINE_LENGTH - 1);
+    temp[MAX_LINE_LENGTH - 1] = '\0';
+
+    // 去除注释
+    char *comment = strchr(temp, '#');
+    if (comment) *comment = '\0';
+
+    // 去除前后空白
+    char *start = temp;
+    while (isspace(*start)) start++;
+    char *end = start + strlen(start) - 1;
+    while (end > start && isspace(*end)) end--;
+    *(end + 1) = '\0';
+
+    // 空行
+    if (strlen(start) == 0) {
+        return 0;
+    }
+
+    // 处理标签
+    if (end[0] == ':') {
+        *end = '\0';
+        add_symbol(assembler, start);
+        return 0;
+    }
+
+    // 解析指令
+    char opcode[16];
+    char operands[MAX_LINE_LENGTH - 16] = {0};
+
+    // 分离操作码和操作数
+    char *space = strchr(start, ' ');
+    if (space) {
+        int opcode_len = space - start;
+        strncpy(opcode, start, opcode_len);
+        opcode[opcode_len] = '\0';
+        strcpy(operands, space + 1);
+    } else {
+        strcpy(opcode, start);
+    }
+
+    // 添加指令
+    if (assembler->instruction_count < MAX_INSTRUCTIONS) {
+        Instruction *instr = &assembler->instructions[assembler->instruction_count];
+        strcpy(instr->opcode, opcode);
+        parse_operands(operands, instr->operands);
+        instr->operand_count = 0;
+
+        // 计算操作数数量
+        for (int i = 0; i < MAX_OPERANDS; i++) {
+            if (strlen(instr->operands[i]) > 0) {
+                instr->operand_count++;
+            }
+        }
+
+        instr->address = assembler->current_address;
+        instr->machine_code = generate_machine_code(assembler, instr);
+
+        assembler->instruction_count++;
+        assembler->current_address += 4;
+
+        return 1;
+    }
+
+    return -1;
+}
+
+// 汇编源文件
+int assemble_file(Assembler *assembler, const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("无法打开文件");
+        return -1;
+    }
+
+    char line[MAX_LINE_LENGTH];
+    int line_number = 0;
+
+    while (fgets(line, MAX_LINE_LENGTH, file)) {
+        line_number++;
+        int result = parse_assembly_line(assembler, line);
+        if (result < 0) {
+            printf("错误：第%d行解析失败\n", line_number);
+            fclose(file);
+            return -1;
+        }
+    }
+
+    fclose(file);
+    return 0;
+}
+
+// 输出汇编结果
+void output_assembly_result(Assembler *assembler) {
+    printf("汇编结果:\n");
+    printf("========\n\n");
+
+    printf("符号表:\n");
+    printf("------\n");
+    for (int i = 0; i < assembler->symbol_count; i++) {
+        printf("%-20s 0x%08X\n", assembler->symbols[i].name, assembler->symbols[i].address);
+    }
+
+    printf("\n机器码:\n");
+    printf("-------\n");
+    for (int i = 0; i < assembler->instruction_count; i++) {
+        Instruction *instr = &assembler->instructions[i];
+        printf("0x%08X: 0x%08X  %-8s", instr->address, instr->machine_code, instr->opcode);
+
+        for (int j = 0; j < instr->operand_count; j++) {
+            printf(" %s", instr->operands[j]);
+        }
+        printf("\n");
+    }
+}
+
+// 主函数
+int main() {
+    printf("简单MIPS汇编器\n");
+    printf("==============\n\n");
+
+    // 示例汇编代码
+    const char *test_code =
+        "# 简单测试程序\n"
+        "main:\n"
+        "   ADDI $t0, $zero, 10\n"
+        "   ADDI $t1, $zero, 20\n"
+        "   ADD  $t2, $t0, $t1\n"
+        "   SUB  $t3, $t1, $t0\n"
+        "end:\n"
+        "   J    end\n";
+
+    printf("源代码:\n");
+    printf("--------\n");
+    printf("%s\n", test_code);
+
+    Assembler assembler;
+    assembler_init(&assembler);
+
+    // 解析代码
+    char *code_copy = strdup(test_code);
+    char *line = strtok(code_copy, "\n");
+    int line_number = 0;
+
+    while (line) {
+        line_number++;
+        int result = parse_assembly_line(&assembler, line);
+        if (result < 0) {
+            printf("错误：第%d行解析失败\n", line_number);
+            free(code_copy);
+            return 1;
+        }
+        line = strtok(NULL, "\n");
+    }
+
+    free(code_copy);
+
+    // 输出结果
+    output_assembly_result(&assembler);
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **ISA设计原则**：
+   - 什么是正交性原则？如何应用在ISA设计中？
+   - 比较不同指令格式的优缺点
+
+2. **寻址模式**：
+   - 为什么需要多种寻址模式？
+   - 分析不同寻址模式的适用场景
+
+3. **RISC vs CISC**：
+   - 现代处理器架构中RISC和CISC的界限如何模糊？
+   - 分析ARM和x86架构的特点
+
+4. **指令集扩展**：
+   - SIMD指令集的作用和原理
+   - 专用指令集（如GPU指令集）的设计考虑
+
+### 编程练习
+
+1. **完整汇编器**：扩展简单汇编器，支持更多指令
+
+2. **反汇编器**：实现机器码到汇编代码的转换
+
+3. **模拟器**：创建MIPS指令集模拟器
+
+4. **优化器**：实现简单的代码优化
+
+### 实验挑战
+
+1. **自定义ISA**：设计一个简单的指令集架构
+
+2. **编译器前端**：实现高级语言到汇编代码的编译
+
+3. **性能分析**：比较不同ISA的代码效率
+
+## 扩展阅读
+
+- **教材章节**：*Computer Organization and Design* 第2章
+- **在线资源**：
+  - [MIPS32 Architecture Reference](https://www.mips.com/products/architectures/mips32/)
+  - [RISC-V Specification](https://riscv.org/technical/specifications/)
+- **推荐视频**：
+  - [Instruction Set Architecture (YouTube)](https://www.youtube.com/watch?v=6o1_6F8S6eI)
+  - [RISC vs CISC (YouTube)](https://www.youtube.com/watch?v=YiY5CzHbL6Y)
+
+---
+
+*下一讲将深入探讨处理器设计，包括数据通路、控制单元和单周期处理器的实现。*

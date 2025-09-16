@@ -1,0 +1,2188 @@
+---
+title: "L08 - 最小生成树"
+description: "深入学习最小生成树算法，包括Kruskal、Prim和Borůvka算法，掌握图论中的核心优化技术"
+date: "2024-01-08"
+category: "算法"
+difficulty: "中等"
+tags: ["图算法", "最小生成树", "Kruskal", "Prim", "Borůvka", "优化算法"]
+duration: "3小时"
+prerequisites: ["L06-图算法基础", "L05-哈希表"]
+next: ["L09-动态规划"]
+math: true
+interactive: true
+---
+
+import { CodeBlock } from '@/src/components/algorithm/CodeBlock';
+import { AlgorithmVisualizer } from '@/src/components/algorithm/AlgorithmVisualizer';
+import { ArrayVisualizer } from '@/src/components/algorithm/ArrayVisualizer';
+import { ComplexityAnalyzer } from '@/src/components/algorithm/ComplexityAnalyzer';
+import { TreeVisualizer } from '@/src/components/algorithm/TreeVisualizer';
+import { ExerciseBlock } from '@/src/components/algorithm/ExerciseBlock';
+
+# L08 - 最小生成树
+
+## 学习目标
+
+通过本课程，你将：
+
+- 🔍 **掌握最小生成树的基本概念和性质**，理解生成树、切割、安全边等核心概念
+- 🧮 **深入理解Kruskal、Prim和Borůvka算法的原理**，掌握三种经典算法的实现
+- ⚡ **学会处理带权无向图的最小生成树问题**，包括次小生成树和动态MST
+- 🌐 **能够应用最小生成树解决实际问题**，如网络设计、聚类分析、电路设计等
+
+## 最小生成树基础
+
+### 基本概念
+
+**最小生成树**是图论中的经典问题，在现实世界中有广泛应用：
+
+#### 核心定义
+
+- **生成树(Spanning Tree)**: 包含图中所有顶点的无环连通子图
+- **最小生成树(MST)**: 权重之和最小的生成树
+- **切割(Cut)**: 将顶点集分成两个不交子集的划分
+- **安全边(Safe Edge)**: 连接不同切割子集的最小权重边
+
+#### 数学性质
+
+<AlgorithmVisualizer
+  title="最小生成树性质"
+  algorithm="mst-properties"
+  steps={[
+    {
+      title: "唯一性",
+      content: "一个连通图的最小生成树权重是唯一的",
+      formula: "T_1 = T_2 ⇔ w(T_1) = w(T_2)"
+    },
+    {
+      title: "边数",
+      content: "最小生成树包含V-1条边（V为顶点数）",
+      formula: "|E(T)| = |V| - 1"
+    },
+    {
+      title: "无环性",
+      content: "最小生成树是无环的连通图",
+      formula: "T 是连通的 ∧ T 不包含环"
+    },
+    {
+      title: "最小性",
+      content: "在所有生成树中权重最小",
+      formula: "∀ T' ∈ S, w(T) ≤ w(T')"
+    }
+  ]}
+/>
+
+### 重要定理
+
+**Kruskal算法正确性证明**：通过贪心策略选择最小权重边，使用并查集避免形成环
+
+**Prim算法正确性证明**：从任意顶点开始，每次选择连接当前树与外部顶点的最小权重边
+
+## Python实现详解
+
+### 1. 无向加权图数据结构
+
+<CodeBlock
+  title="无向加权图实现"
+  code={`from typing import List, Dict, Tuple, Set, Optional
+import heapq
+from collections import defaultdict
+
+class UndirectedWeightedGraph:
+    """无向加权图
+
+    时间复杂度分析：
+    - add_vertex: O(1)
+    - add_edge: O(1)
+    - remove_edge: O(deg(v)) 度相关
+    - get_neighbors: O(1)
+    - is_connected: O(V + E)
+    """
+
+    def __init__(self):
+        self.vertices = set()
+        self.edges = []
+        self.adjacency_list = defaultdict(list)
+
+    def add_vertex(self, vertex) -> None:
+        """添加顶点
+
+        Args:
+            vertex: 顶点标识符
+        """
+        self.vertices.add(vertex)
+
+    def add_edge(self, u, v, weight: float) -> None:
+        """添加边
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+        """
+        self.add_vertex(u)
+        self.add_vertex(v)
+        self.edges.append((u, v, weight))
+        self.adjacency_list[u].append((v, weight))
+        self.adjacency_list[v].append((u, weight))
+
+    def remove_edge(self, u, v, weight: float) -> None:
+        """删除边
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+        """
+        self.edges.remove((u, v, weight))
+        self.adjacency_list[u].remove((v, weight))
+        self.adjacency_list[v].remove((u, weight))
+
+    def get_vertices(self) -> Set:
+        """获取所有顶点
+
+        Returns:
+            顶点集合
+        """
+        return self.vertices
+
+    def get_edges(self) -> List[Tuple]:
+        """获取所有边
+
+        Returns:
+            边列表 [(u, v, weight)]
+        """
+        return self.edges
+
+    def get_neighbors(self, vertex) -> List[Tuple]:
+        """获取邻居
+
+        Args:
+            vertex: 目标顶点
+
+        Returns:
+            邻居列表 [(neighbor, weight)]
+        """
+        return self.adjacency_list.get(vertex, [])
+
+    def get_total_weight(self) -> float:
+        """计算图的总权重
+
+        Returns:
+            总权重（无向图每条边被计算两次，需除以2）
+        """
+        return sum(weight for _, _, weight in self.edges) / 2
+
+    def is_connected(self) -> bool:
+        """检查图是否连通
+
+        Returns:
+            是否连通
+        """
+        if not self.vertices:
+            return True
+
+        visited = set()
+        stack = [next(iter(self.vertices))]
+
+        while stack:
+            current = stack.pop()
+            if current not in visited:
+                visited.add(current)
+                for neighbor, _ in self.get_neighbors(current):
+                    if neighbor not in visited:
+                        stack.append(neighbor)
+
+        return len(visited) == len(self.vertices)
+
+    def __str__(self) -> str:
+        """字符串表示
+
+        Returns:
+            图的字符串表示
+        """
+        result = []
+        for vertex in self.vertices:
+            neighbors = self.get_neighbors(vertex)
+            result.append(f"{vertex}: {neighbors}")
+        return "\\n".join(result)`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. Kruskal算法
+
+<CodeBlock
+  title="Kruskal算法实现"
+  code={`class UnionFind:
+    """并查集数据结构
+
+    支持路径压缩和按秩合并，时间复杂度近乎O(1)
+    """
+
+    def __init__(self, vertices):
+        self.parent = {vertex: vertex for vertex in vertices}
+        self.rank = {vertex: 0 for vertex in vertices}
+
+    def find(self, vertex):
+        """查找根节点（路径压缩）
+
+        Args:
+            vertex: 目标顶点
+
+        Returns:
+            根节点
+        """
+        if self.parent[vertex] != vertex:
+            self.parent[vertex] = self.find(self.parent[vertex])
+        return self.parent[vertex]
+
+    def union(self, vertex1, vertex2) -> bool:
+        """合并两个集合（按秩合并）
+
+        Args:
+            vertex1: 第一个顶点
+            vertex2: 第二个顶点
+
+        Returns:
+            是否成功合并
+        """
+        root1 = self.find(vertex1)
+        root2 = self.find(vertex2)
+
+        if root1 == root2:
+            return False  # 已经在同一集合
+
+        if self.rank[root1] < self.rank[root2]:
+            self.parent[root1] = root2
+        elif self.rank[root1] > self.rank[root2]:
+            self.parent[root2] = root1
+        else:
+            self.parent[root2] = root1
+            self.rank[root1] += 1
+
+        return True
+
+def kruskal_mst(graph: UndirectedWeightedGraph) -> Tuple[List[Tuple], float]:
+    """Kruskal算法求最小生成树
+
+    算法步骤：
+    1. 按权重升序排序所有边
+    2. 初始化并查集
+    3. 依次选择最小权重边，若不形成环则加入MST
+
+    时间复杂度: O(E log E) = O(E log V)
+    空间复杂度: O(V)
+
+    Args:
+        graph: 无向加权图
+
+    Returns:
+        (MST边列表, 总权重)
+
+    Raises:
+        ValueError: 图不连通时抛出
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    # 按权重排序边
+    edges = sorted(graph.get_edges(), key=lambda x: x[2])
+    union_find = UnionFind(graph.get_vertices())
+    mst_edges = []
+    total_weight = 0
+
+    for u, v, weight in edges:
+        if union_find.find(u) != union_find.find(v):
+            union_find.union(u, v)
+            mst_edges.append((u, v, weight))
+            total_weight += weight
+
+            # 提前终止条件
+            if len(mst_edges) == len(graph.get_vertices()) - 1:
+                break
+
+    return mst_edges, total_weight
+
+def kruskal_with_detailed_logging(graph: UndirectedWeightedGraph) -> Tuple[List[Tuple], float, List[str]]:
+    """带详细日志的Kruskal算法
+
+    用于算法演示和调试
+
+    Args:
+        graph: 无向加权图
+
+    Returns:
+        (MST边列表, 总权重, 执行日志)
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    edges = sorted(graph.get_edges(), key=lambda x: x[2])
+    union_find = UnionFind(graph.get_vertices())
+    mst_edges = []
+    total_weight = 0
+    logs = []
+
+    logs.append(f"开始Kruskal算法，共有{len(edges)}条边，{len(graph.get_vertices())}个顶点")
+
+    for i, (u, v, weight) in enumerate(edges):
+        logs.append(f"处理第{i+1}条边: ({u}, {v}, {weight})")
+
+        root_u = union_find.find(u)
+        root_v = union_find.find(v)
+
+        if root_u != root_v:
+            union_find.union(u, v)
+            mst_edges.append((u, v, weight))
+            total_weight += weight
+            logs.append(f"  ✓ 加入MST，当前权重: {total_weight}")
+        else:
+            logs.append(f"  ✗ 跳过，会形成环")
+
+        if len(mst_edges) == len(graph.get_vertices()) - 1:
+            logs.append(f"完成！MST包含{len(mst_edges)}条边，总权重: {total_weight}")
+            break
+
+    return mst_edges, total_weight, logs`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 3. Prim算法
+
+<CodeBlock
+  title="Prim算法实现"
+  code={`def prim_mst(graph: UndirectedWeightedGraph, start_vertex=None) -> Tuple[List[Tuple], float]:
+    """Prim算法求最小生成树
+
+    算法步骤：
+    1. 从任意顶点开始
+    2. 维护已访问顶点集合
+    3. 使用优先队列选择连接已访问和未访问顶点的最小权重边
+
+    时间复杂度: O(E log V) 使用优先队列
+    空间复杂度: O(V)
+
+    Args:
+        graph: 无向加权图
+        start_vertex: 起始顶点（可选）
+
+    Returns:
+        (MST边列表, 总权重)
+
+    Raises:
+        ValueError: 图不连通时抛出
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    vertices = graph.get_vertices()
+    if not vertices:
+        return [], 0
+
+    # 选择起始顶点
+    if start_vertex is None:
+        start_vertex = next(iter(vertices))
+
+    # 初始化
+    mst_edges = []
+    total_weight = 0
+    visited = set()
+    min_heap = []
+
+    # 添加起始顶点的所有边
+    visited.add(start_vertex)
+    for neighbor, weight in graph.get_neighbors(start_vertex):
+        heapq.heappush(min_heap, (weight, start_vertex, neighbor))
+
+    while min_heap and len(visited) < len(vertices):
+        weight, u, v = heapq.heappop(min_heap)
+
+        if v not in visited:
+            visited.add(v)
+            mst_edges.append((u, v, weight))
+            total_weight += weight
+
+            # 添加新顶点的边
+            for neighbor, edge_weight in graph.get_neighbors(v):
+                if neighbor not in visited:
+                    heapq.heappush(min_heap, (edge_weight, v, neighbor))
+
+    return mst_edges, total_weight
+
+def prim_lazy_mst(graph: UndirectedWeightedGraph, start_vertex=None) -> Tuple[List[Tuple], float]:
+    """延迟Prim算法（避免重复边）
+
+    优化版本，避免堆中存储大量无效边
+
+    Args:
+        graph: 无向加权图
+        start_vertex: 起始顶点（可选）
+
+    Returns:
+        (MST边列表, 总权重)
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    vertices = graph.get_vertices()
+    if not vertices:
+        return [], 0
+
+    if start_vertex is None:
+        start_vertex = next(iter(vertices))
+
+    mst_edges = []
+    total_weight = 0
+    visited = set()
+    min_heap = []
+
+    visited.add(start_vertex)
+
+    def add_edges(vertex):
+        """添加顶点的所有边到堆中"""
+        for neighbor, weight in graph.get_neighbors(vertex):
+            if neighbor not in visited:
+                heapq.heappush(min_heap, (weight, vertex, neighbor))
+
+    add_edges(start_vertex)
+
+    while min_heap and len(visited) < len(vertices):
+        # 找到有效的最小边
+        while min_heap:
+            weight, u, v = heapq.heappop(min_heap)
+            if v not in visited:
+                break
+        else:
+            break
+
+        visited.add(v)
+        mst_edges.append((u, v, weight))
+        total_weight += weight
+        add_edges(v)
+
+    return mst_edges, total_weight
+
+def prim_with_detailed_logging(graph: UndirectedWeightedGraph, start_vertex=None) -> Tuple[List[Tuple], float, List[str]]:
+    """带详细日志的Prim算法
+
+    Args:
+        graph: 无向加权图
+        start_vertex: 起始顶点（可选）
+
+    Returns:
+        (MST边列表, 总权重, 执行日志)
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    vertices = graph.get_vertices()
+    if not vertices:
+        return [], 0, ["空图"]
+
+    if start_vertex is None:
+        start_vertex = next(iter(vertices))
+
+    mst_edges = []
+    total_weight = 0
+    visited = set()
+    min_heap = []
+    logs = []
+
+    visited.add(start_vertex)
+    logs.append(f"从顶点 {start_vertex} 开始Prim算法")
+
+    def add_edges_with_logging(vertex):
+        """添加顶点的所有边到堆中，带日志"""
+        logs.append(f"添加顶点 {vertex} 的边:")
+        for neighbor, weight in graph.get_neighbors(vertex):
+            if neighbor not in visited:
+                heapq.heappush(min_heap, (weight, vertex, neighbor))
+                logs.append(f"  - 边({vertex}, {neighbor}, {weight})")
+
+    add_edges_with_logging(start_vertex)
+
+    while min_heap and len(visited) < len(vertices):
+        # 找到有效的最小边
+        while min_heap:
+            weight, u, v = heapq.heappop(min_heap)
+            if v not in visited:
+                break
+        else:
+            break
+
+        visited.add(v)
+        mst_edges.append((u, v, weight))
+        total_weight += weight
+        logs.append(f"选择边({u}, {v}, {weight}), 当前总权重: {total_weight}")
+        logs.append(f"已访问顶点: {visited}")
+
+        add_edges_with_logging(v)
+
+    logs.append(f"完成！MST包含{len(mst_edges)}条边，总权重: {total_weight}")
+    return mst_edges, total_weight, logs`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 4. Borůvka算法
+
+<CodeBlock
+  title="Borůvka算法实现"
+  code={`def boruvka_mst(graph: UndirectedWeightedGraph) -> Tuple[List[Tuple], float]:
+    """Borůvka算法求最小生成树
+
+    算法特点：
+    1. 适合并行化处理
+    2. 分轮次处理，每轮为每个组件找到最小出边
+    3. 历史上最早的MST算法之一
+
+    时间复杂度: O(E log V)
+    适合并行化
+
+    Args:
+        graph: 无向加权图
+
+    Returns:
+        (MST边列表, 总权重)
+
+    Raises:
+        ValueError: 图不连通时抛出
+    """
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    vertices = graph.get_vertices()
+    mst_edges = []
+    total_weight = 0
+
+    # 初始化每个顶点为独立组件
+    component = {vertex: vertex for vertex in vertices}
+    component_size = {vertex: 1 for vertex in vertices}
+
+    def find(vertex):
+        """查找组件（带路径压缩）"""
+        while component[vertex] != vertex:
+            component[vertex] = component[component[vertex]]
+            vertex = component[vertex]
+        return vertex
+
+    def union(vertex1, vertex2):
+        """合并组件（按大小合并）"""
+        root1 = find(vertex1)
+        root2 = find(vertex2)
+
+        if root1 == root2:
+            return False
+
+        if component_size[root1] < component_size[root2]:
+            component[root1] = root2
+            component_size[root2] += component_size[root1]
+        else:
+            component[root2] = root1
+            component_size[root1] += component_size[root2]
+
+        return True
+
+    # 最多进行log V轮
+    round_num = 0
+    while len(mst_edges) < len(vertices) - 1:
+        round_num += 1
+
+        # 为每个组件找到最小出边
+        min_edges = {}
+
+        for u, v, weight in graph.get_edges():
+            root_u = find(u)
+            root_v = find(v)
+
+            if root_u != root_v:
+                if root_u not in min_edges or weight < min_edges[root_u][2]:
+                    min_edges[root_u] = (u, v, weight)
+
+                if root_v not in min_edges or weight < min_edges[root_v][2]:
+                    min_edges[root_v] = (v, u, weight)
+
+        # 添加最小边到MST
+        edges_added = 0
+        for component_root, edge in min_edges.items():
+            u, v, weight = edge
+            if find(u) != find(v):
+                union(u, v)
+                mst_edges.append(edge)
+                total_weight += weight
+                edges_added += 1
+
+        if edges_added == 0:
+            break
+
+    return mst_edges, total_weight
+
+def boruvka_parallel_version(graph: UndirectedWeightedGraph, num_threads=4) -> Tuple[List[Tuple], float]:
+    """并行Borůvka算法
+
+    利用Borůvka算法的并行特性
+
+    Args:
+        graph: 无向加权图
+        num_threads: 线程数
+
+    Returns:
+        (MST边列表, 总权重)
+    """
+    import concurrent.futures
+
+    if not graph.is_connected():
+        raise ValueError("图不连通，无法生成最小生成树")
+
+    vertices = graph.get_vertices()
+    mst_edges = []
+    total_weight = 0
+
+    # 初始化组件
+    component = {vertex: vertex for vertex in vertices}
+    component_size = {vertex: 1 for vertex in vertices}
+
+    def find(vertex):
+        """查找组件"""
+        while component[vertex] != vertex:
+            component[vertex] = component[component[vertex]]
+            vertex = component[vertex]
+        return vertex
+
+    def union(vertex1, vertex2):
+        """合并组件"""
+        root1 = find(vertex1)
+        root2 = find(vertex2)
+
+        if root1 == root2:
+            return False
+
+        if component_size[root1] < component_size[root2]:
+            component[root1] = root2
+            component_size[root2] += component_size[root1]
+        else:
+            component[root2] = root1
+            component_size[root1] += component_size[root2]
+
+        return True
+
+    def find_min_edges_for_component(component_roots):
+        """为指定组件找最小出边"""
+        local_min_edges = {}
+        for root in component_roots:
+            min_edge = None
+            min_weight = float('inf')
+
+            for u, v, weight in graph.get_edges():
+                root_u = find(u)
+                root_v = find(v)
+
+                if root_u == root and root_u != root_v:
+                    if weight < min_weight:
+                        min_weight = weight
+                        min_edge = (u, v, weight)
+                elif root_v == root and root_u != root_v:
+                    if weight < min_weight:
+                        min_weight = weight
+                        min_edge = (v, u, weight)
+
+            if min_edge:
+                local_min_edges[root] = min_edge
+
+        return local_min_edges
+
+    # 并行Borůvka
+    round_num = 0
+    while len(mst_edges) < len(vertices) - 1:
+        round_num += 1
+
+        # 分割组件到不同线程
+        current_components = set(find(v) for v in vertices)
+        component_list = list(current_components)
+
+        # 分配组件到线程
+        components_per_thread = len(component_list) // num_threads
+        component_chunks = [component_list[i:i + components_per_thread]
+                           for i in range(0, len(component_list), components_per_thread)]
+
+        # 并行查找最小边
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(find_min_edges_for_component, chunk)
+                      for chunk in component_chunks]
+            results = [future.result() for future in concurrent.futures.as_completed(futures)]
+
+        # 合并结果
+        min_edges = {}
+        for local_min_edges in results:
+            min_edges.update(local_min_edges)
+
+        # 添加边到MST
+        edges_added = 0
+        for component_root, edge in min_edges.items():
+            u, v, weight = edge
+            if find(u) != find(v):
+                union(u, v)
+                mst_edges.append(edge)
+                total_weight += weight
+                edges_added += 1
+
+        if edges_added == 0:
+            break
+
+    return mst_edges, total_weight`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 算法比较与性能分析
+
+<ComplexityAnalyzer
+  algorithms={[
+    {
+      name: "Kruskal算法",
+      timeComplexity: "O(E log E)",
+      spaceComplexity: "O(V)",
+      bestCase: "O(E log E)",
+      worstCase: "O(E log E)",
+      averageCase: "O(E log E)",
+      description: "适合稀疏图，实现简单，需要排序和并查集"
+    },
+    {
+      name: "Prim算法",
+      timeComplexity: "O(E log V)",
+      spaceComplexity: "O(V)",
+      bestCase: "O(E log V)",
+      worstCase: "O(E log V)",
+      averageCase: "O(E log V)",
+      description: "适合稠密图，使用优先队列，需要图结构"
+    },
+    {
+      name: "Borůvka算法",
+      timeComplexity: "O(E log V)",
+      spaceComplexity: "O(V)",
+      bestCase: "O(E log V)",
+      worstCase: "O(E log V)",
+      averageCase: "O(E log V)",
+      description: "适合并行化，分轮次处理，历史最早算法"
+    }
+  ]}
+/>
+
+### 算法选择策略
+
+<AlgorithmVisualizer
+  title="MST算法选择策略"
+  algorithm="algorithm-selection"
+  steps={[
+    {
+      title: "图的类型",
+      content: "判断图是稀疏还是稠密",
+      conditions: ["E ≈ V", "E ≈ V²", "E >> V log V"]
+    },
+    {
+      title: "内存限制",
+      content: "考虑内存使用限制",
+      conditions: ["内存充足", "内存有限", "需要并行化"]
+    },
+    {
+      title: "算法选择",
+      content: "根据条件选择合适算法",
+      results: {
+        "稀疏图": "Kruskal算法",
+        "稠密图": "Prim算法",
+        "需要并行": "Borůvka算法"
+      }
+    }
+  ]}
+/>
+
+## 高级MST算法
+
+### 1. 次小生成树
+
+<CodeBlock
+  title="次小生成树算法"
+  code={`def find_max_edge_on_path(graph: UndirectedWeightedGraph, mst_edges: List[Tuple], u: str, v: str) -> float:
+    """在MST中查找u到v路径上的最大边权重
+
+    算法步骤：
+    1. 构建MST的邻接表
+    2. 使用BFS查找u到v的路径
+    3. 记录路径上的最大权重
+
+    Args:
+        graph: 原始图
+        mst_edges: MST边列表
+        u: 起始顶点
+        v: 目标顶点
+
+    Returns:
+        路径上的最大边权重
+    """
+    # 构建MST的邻接表
+    mst_graph = defaultdict(list)
+    for edge_u, edge_v, weight in mst_edges:
+        mst_graph[edge_u].append((edge_v, weight))
+        mst_graph[edge_v].append((edge_u, weight))
+
+    # BFS查找路径
+    parent = {}
+    max_weight = {}
+    queue = [u]
+    parent[u] = None
+    max_weight[u] = 0
+
+    while queue:
+        current = queue.pop(0)
+        if current == v:
+            break
+
+        for neighbor, weight in mst_graph[current]:
+            if neighbor not in parent:
+                parent[neighbor] = current
+                max_weight[neighbor] = max(max_weight[current], weight)
+                queue.append(neighbor)
+
+    return max_weight.get(v, 0)
+
+def second_best_mst(graph: UndirectedWeightedGraph) -> Tuple[List[Tuple], float]:
+    """次小生成树算法
+
+    算法思路：
+    1. 首先计算最小生成树
+    2. 尝试用每条非MST边替换MST中的一条边
+    3. 选择权重最小的替代方案
+
+    时间复杂度: O(E * V)
+
+    Args:
+        graph: 无向加权图
+
+    Returns:
+        (次小生成树边列表, 总权重)
+    """
+    # 首先计算最小生成树
+    mst_edges, mst_weight = kruskal_mst(graph)
+
+    best_second_weight = float('inf')
+    best_second_edges = []
+
+    # 尝试替换每条非MST边
+    non_mst_edges = [edge for edge in graph.get_edges() if edge not in mst_edges]
+
+    for new_u, new_v, new_weight in non_mst_edges:
+        # 在MST中查找new_u到new_v路径上的最大边
+        max_edge_weight = find_max_edge_on_path(graph, mst_edges, new_u, new_v)
+
+        # 计算新树的总权重
+        new_weight_total = mst_weight - max_edge_weight + new_weight
+
+        if new_weight_total < best_second_weight:
+            best_second_weight = new_weight_total
+
+            # 构建新的边集
+            temp_edges = mst_edges.copy()
+            # 移除最大边
+            for i, (u, v, weight) in enumerate(temp_edges):
+                if weight == max_edge_weight:
+                    del temp_edges[i]
+                    break
+            # 添加新边
+            temp_edges.append((new_u, new_v, new_weight))
+            best_second_edges = temp_edges
+
+    return best_second_edges, best_second_weight
+
+def kth_best_mst(graph: UndirectedWeightedGraph, k: int = 3) -> List[Tuple[List[Tuple], float]]:
+    """第k小生成树算法
+
+    找到权重第k小的生成树
+
+    Args:
+        graph: 无向加权图
+        k: 要求的排名
+
+    Returns:
+        生成树列表，按权重升序排列
+    """
+    if k <= 0:
+        return []
+
+    # 使用优先队列维护候选生成树
+    heap = []
+
+    # 首先计算最小生成树
+    mst_edges, mst_weight = kruskal_mst(graph)
+    heapq.heappush(heap, (mst_weight, 0, mst_edges))
+
+    result = []
+    used_trees = set()
+
+    while heap and len(result) < k:
+        weight, generation, edges = heapq.heappop(heap)
+
+        # 检查是否已经使用过
+        edges_tuple = tuple(sorted(edges))
+        if edges_tuple in used_trees:
+            continue
+
+        used_trees.add(edges_tuple)
+        result.append((edges, weight))
+
+        # 生成下一代的候选树
+        if generation < k:  # 限制生成深度
+            candidates = _generate_candidate_trees(graph, edges, weight)
+            for candidate_weight, candidate_edges in candidates:
+                candidate_tuple = tuple(sorted(candidate_edges))
+                if candidate_tuple not in used_trees:
+                    heapq.heappush(heap, (candidate_weight, generation + 1, candidate_edges))
+
+    return result
+
+def _generate_candidate_trees(graph: UndirectedWeightedGraph, base_edges: List[Tuple], base_weight: float) -> List[Tuple[float, List[Tuple]]]:
+    """生成候选生成树
+
+    通过边替换生成新的生成树
+
+    Args:
+        graph: 原始图
+        base_edges: 基础生成树边
+        base_weight: 基础生成树权重
+
+    Returns:
+        候选生成树列表 [(权重, 边列表)]
+    """
+    candidates = []
+    non_mst_edges = [edge for edge in graph.get_edges() if edge not in base_edges]
+
+    for new_u, new_v, new_weight in non_mst_edges:
+        # 找到可替换的边
+        max_edge_weight = find_max_edge_on_path(graph, base_edges, new_u, new_v)
+
+        if max_edge_weight < new_weight:  # 只有当能改进时才替换
+            new_tree_weight = base_weight - max_edge_weight + new_weight
+
+            # 构建新树
+            new_edges = []
+            max_edge_removed = False
+            for edge in base_edges:
+                if edge[2] == max_edge_weight and not max_edge_removed:
+                    max_edge_removed = True
+                else:
+                    new_edges.append(edge)
+            new_edges.append((new_u, new_v, new_weight))
+
+            candidates.append((new_tree_weight, new_edges))
+
+    return candidates`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 动态最小生成树
+
+<CodeBlock
+  title="动态最小生成树算法"
+  code={`class DynamicMST:
+    """动态最小生成树
+
+    支持边的动态增删和权重更新
+
+    操作时间复杂度：
+    - 初始化: O(E log E)
+    - 添加边: O(V) 平均情况
+    - 删除边: O(E log E) 最坏情况
+    - 更新权重: O(V) 平均情况
+    """
+
+    def __init__(self, graph: UndirectedWeightedGraph):
+        self.graph = graph
+        self.mst_edges = []
+        self.total_weight = 0
+        self.edge_weight_map = {}
+
+    def initialize(self) -> None:
+        """初始化MST
+
+        构建初始的最小生成树
+        """
+        self.mst_edges, self.total_weight = kruskal_mst(self.graph)
+        self._build_edge_weight_map()
+
+    def _build_edge_weight_map(self) -> None:
+        """构建边权重映射
+
+        快速查找边的权重
+        """
+        self.edge_weight_map = {(u, v): weight for u, v, weight in self.graph.get_edges()}
+
+    def add_edge(self, u, v, weight: float) -> None:
+        """添加边
+
+        如果新边能改进MST，则更新MST
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+        """
+        self.graph.add_edge(u, v, weight)
+        self.edge_weight_map[(u, v)] = weight
+        self.edge_weight_map[(v, u)] = weight
+
+        # 如果新边能改进MST，则更新
+        if self._can_improve_mst(u, v, weight):
+            self._update_mst_with_new_edge(u, v, weight)
+
+    def remove_edge(self, u, v, weight: float) -> None:
+        """删除边
+
+        如果删除的是MST边，需要重新计算MST
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+        """
+        self.graph.remove_edge(u, v, weight)
+        del self.edge_weight_map[(u, v)]
+        del self.edge_weight_map[(v, u)]
+
+        # 如果删除的是MST边，需要重新计算
+        if (u, v, weight) in self.mst_edges or (v, u, weight) in self.mst_edges:
+            self._recalculate_mst()
+
+    def update_edge_weight(self, u, v, old_weight: float, new_weight: float) -> None:
+        """更新边权重
+
+        智能更新：只有影响MST时才重新计算
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            old_weight: 旧权重
+            new_weight: 新权重
+        """
+        self.graph.remove_edge(u, v, old_weight)
+        self.graph.add_edge(u, v, new_weight)
+        self.edge_weight_map[(u, v)] = new_weight
+        self.edge_weight_map[(v, u)] = new_weight
+
+        if (u, v, old_weight) in self.mst_edges or (v, u, old_weight) in self.mst_edges:
+            if new_weight > old_weight:
+                # 权重增加，可能不再是MST
+                self._recalculate_mst()
+            else:
+                # 权重减少，保持原MST（因为已经是更小的权重）
+                pass
+        else:
+            # 非MST边权重减少，可能成为更好的选择
+            if new_weight < old_weight and self._can_improve_mst(u, v, new_weight):
+                self._update_mst_with_new_edge(u, v, new_weight)
+
+    def _can_improve_mst(self, u, v, weight: float) -> bool:
+        """检查新边是否能改进MST
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+
+        Returns:
+            是否能改进MST
+        """
+        if not self.mst_edges:
+            return True
+
+        # 在MST中查找u到v路径上的最大边
+        max_weight = find_max_edge_on_path(self.graph, self.mst_edges, u, v)
+        return weight < max_weight
+
+    def _update_mst_with_new_edge(self, u, v, weight: float) -> None:
+        """用新边更新MST
+
+        Args:
+            u: 起始顶点
+            v: 目标顶点
+            weight: 边权重
+        """
+        # 找到并移除路径上的最大边
+        max_weight = find_max_edge_on_path(self.graph, self.mst_edges, u, v)
+
+        for i, (edge_u, edge_v, edge_weight) in enumerate(self.mst_edges):
+            if edge_weight == max_weight:
+                del self.mst_edges[i]
+                break
+
+        # 添加新边
+        self.mst_edges.append((u, v, weight))
+        self.total_weight = self.total_weight - max_weight + weight
+
+    def _recalculate_mst(self) -> None:
+        """重新计算MST
+
+        当MST结构发生重大变化时重新计算
+        """
+        self.mst_edges, self.total_weight = kruskal_mst(self.graph)
+
+    def get_mst_weight(self) -> float:
+        """获取当前MST权重
+
+        Returns:
+            当前MST总权重
+        """
+        return self.total_weight
+
+    def get_mst_edges(self) -> List[Tuple]:
+        """获取当前MST边
+
+        Returns:
+            当前MST边列表
+        """
+        return self.mst_edges.copy()
+
+    def get_operations_stats(self) -> Dict[str, int]:
+        """获取操作统计信息
+
+        Returns:
+            各类操作的统计
+        """
+        return {
+            'total_operations': getattr(self, '_total_ops', 0),
+            'add_operations': getattr(self, '_add_ops', 0),
+            'remove_operations': getattr(self, '_remove_ops', 0),
+            'update_operations': getattr(self, '_update_ops', 0),
+            'recalculate_count': getattr(self, '_recalc_count', 0)
+        }`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 实际应用场景
+
+### 1. 网络设计优化
+
+<CodeBlock
+  title="网络设计器实现"
+  code={`class NetworkDesigner:
+    """网络设计器
+
+    应用最小生成树算法优化网络布线成本
+    适用于通信网络、电力网络、交通网络等
+    """
+
+    def __init__(self):
+        self.network_graph = UndirectedWeightedGraph()
+        self.cities = {}
+        self.optimization_history = []
+
+    def add_city(self, city_id: str, name: str, x_coord: float, y_coord: float) -> None:
+        """添加城市节点
+
+        Args:
+            city_id: 城市唯一标识
+            name: 城市名称
+            x_coord: X坐标
+            y_coord: Y坐标
+        """
+        self.cities[city_id] = {
+            'name': name,
+            'x': x_coord,
+            'y': y_coord,
+            'population': 0,
+            'importance': 1.0
+        }
+        self.network_graph.add_vertex(city_id)
+
+    def set_city_properties(self, city_id: str, population: int = None, importance: float = None) -> None:
+        """设置城市属性
+
+        Args:
+            city_id: 城市标识
+            population: 人口数量
+            importance: 重要程度（0-1）
+        """
+        if city_id in self.cities:
+            if population is not None:
+                self.cities[city_id]['population'] = population
+            if importance is not None:
+                self.cities[city_id]['importance'] = importance
+
+    def calculate_distance(self, city1_id: str, city2_id: str) -> float:
+        """计算城市间欧氏距离
+
+        Args:
+            city1_id: 第一个城市标识
+            city2_id: 第二个城市标识
+
+        Returns:
+            两城市间距离
+        """
+        city1 = self.cities[city1_id]
+        city2 = self.cities[city2_id]
+        return ((city1['x'] - city2['x'])**2 + (city1['y'] - city2['y'])**2)**0.5
+
+    def add_connection(self, city1_id: str, city2_id: str,
+                      cost_per_unit: float = 1.0,
+                      difficulty_factor: float = 1.0) -> None:
+        """添加城市间连接
+
+        Args:
+            city1_id: 第一个城市标识
+            city2_id: 第二个城市标识
+            cost_per_unit: 单位距离成本
+            difficulty_factor: 地形难度系数
+        """
+        distance = self.calculate_distance(city1_id, city2_id)
+
+        # 考虑城市重要性和地形因素
+        importance_adjustment = (self.cities[city1_id]['importance'] +
+                               self.cities[city2_id]['importance']) / 2
+        total_cost = distance * cost_per_unit * difficulty_factor / importance_adjustment
+
+        self.network_graph.add_edge(city1_id, city2_id, total_cost)
+
+    def design_optimal_network(self, algorithm: str = 'kruskal') -> Dict:
+        """设计最优网络
+
+        Args:
+            algorithm: 使用的MST算法 ('kruskal', 'prim', 'boruvka')
+
+        Returns:
+            网络设计结果
+        """
+        # 选择算法
+        if algorithm == 'kruskal':
+            mst_edges, total_cost = kruskal_mst(self.network_graph)
+        elif algorithm == 'prim':
+            mst_edges, total_cost = prim_mst(self.network_graph)
+        elif algorithm == 'boruvka':
+            mst_edges, total_cost = boruvka_mst(self.network_graph)
+        else:
+            raise ValueError(f"不支持的算法: {algorithm}")
+
+        # 构建网络设计结果
+        network_design = []
+        for u, v, cost in mst_edges:
+            network_design.append({
+                'from': self.cities[u]['name'],
+                'to': self.cities[v]['name'],
+                'cost': cost,
+                'distance': self.calculate_distance(u, v),
+                'from_importance': self.cities[u]['importance'],
+                'to_importance': self.cities[v]['importance']
+            })
+
+        result = {
+            'algorithm': algorithm,
+            'total_cost': total_cost,
+            'total_distance': sum(item['distance'] for item in network_design),
+            'connections': network_design,
+            'cities_connected': len(self.cities),
+            'average_connection_cost': total_cost / len(network_design) if network_design else 0
+        }
+
+        self.optimization_history.append(result)
+        return result
+
+    def design_redundant_network(self, redundancy_level: int = 1) -> Dict:
+        """设计冗余网络
+
+        使用次小生成树提供冗余连接
+
+        Args:
+            redundancy_level: 冗余级别（1-额外一条路径，2-额外两条路径等）
+
+        Returns:
+            冗余网络设计结果
+        """
+        # 主网络
+        primary_result = self.design_optimal_network()
+
+        # 冗余网络
+        backup_networks = []
+        current_graph = UndirectedWeightedGraph()
+
+        # 复制原始图
+        for vertex in self.network_graph.get_vertices():
+            current_graph.add_vertex(vertex)
+        for edge in self.network_graph.get_edges():
+            current_graph.add_edge(*edge)
+
+        # 移除主网络边
+        for u, v, cost in primary_result['connections']:
+            for edge in current_graph.get_edges():
+                if (edge[0] == u and edge[1] == v) or (edge[0] == v and edge[1] == u):
+                    current_graph.remove_edge(*edge)
+                    break
+
+        # 构建冗余网络
+        for i in range(redundancy_level):
+            if current_graph.is_connected():
+                backup_edges, backup_cost = kruskal_mst(current_graph)
+                backup_design = []
+
+                for u, v, cost in backup_edges:
+                    backup_design.append({
+                        'from': self.cities[u]['name'],
+                        'to': self.cities[v]['name'],
+                        'cost': cost,
+                        'distance': self.calculate_distance(u, v)
+                    })
+                    # 移除已使用的边
+                    for edge in current_graph.get_edges():
+                        if (edge[0] == u and edge[1] == v) or (edge[0] == v and edge[1] == u):
+                            current_graph.remove_edge(*edge)
+                            break
+
+                backup_networks.append({
+                    'backup_level': i + 1,
+                    'cost': backup_cost,
+                    'connections': backup_design
+                })
+            else:
+                break
+
+        return {
+            'primary_network': primary_result,
+            'backup_networks': backup_networks,
+            'total_redundancy_cost': sum(net['cost'] for net in backup_networks),
+            'reliability_score': self._calculate_reliability_score(primary_result, backup_networks)
+        }
+
+    def _calculate_reliability_score(self, primary: Dict, backups: List[Dict]) -> float:
+        """计算网络可靠性评分
+
+        Args:
+            primary: 主网络
+            backups: 备份网络列表
+
+        Returns:
+            可靠性评分 (0-1)
+        """
+        base_reliability = 0.95  # 主网络基础可靠性
+        backup_bonus = 0.03 * len(backups)  # 每个备份网络提升3%
+
+        return min(base_reliability + backup_bonus, 0.99)
+
+    def compare_algorithms(self) -> Dict:
+        """比较不同算法的性能
+
+        Returns:
+            各算法的比较结果
+        """
+        algorithms = ['kruskal', 'prim', 'boruvka']
+        results = {}
+
+        for algo in algorithms:
+            import time
+            start_time = time.time()
+            try:
+                result = self.design_optimal_network(algo)
+                end_time = time.time()
+                results[algo] = {
+                    'success': True,
+                    'cost': result['total_cost'],
+                    'time': end_time - start_time,
+                    'connections': len(result['connections'])
+                }
+            except Exception as e:
+                results[algo] = {
+                    'success': False,
+                    'error': str(e)
+                }
+
+        return {
+            'comparison': results,
+            'recommendation': self._recommend_algorithm(results)
+        }
+
+    def _recommend_algorithm(self, results: Dict) -> str:
+        """推荐最适合的算法
+
+        Args:
+            results: 各算法结果
+
+        Returns:
+            推荐的算法名称
+        """
+        successful = {k: v for k, v in results.items() if v['success']}
+
+        if not successful:
+            return 'none'
+
+        # 根据网络规模推荐
+        num_vertices = len(self.cities)
+        num_edges = len(self.network_graph.get_edges())
+
+        if num_edges > num_vertices * 2:  # 稠密图
+            return 'prim'
+        elif num_vertices > 1000:  # 大规模图
+            return 'boruvka'
+        else:  # 一般情况
+            return 'kruskal'`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+### 2. 聚类分析应用
+
+<CodeBlock
+  title="基于MST的聚类算法"
+  code={`class MSTCluster:
+    """基于最小生成树的聚类算法
+
+    通过构建数据点间的相似度图，然后使用MST进行聚类
+    适用于发现自然的数据分组结构
+    """
+
+    def __init__(self, data_points: List[List[float]],
+                 distance_metric: str = 'euclidean'):
+        """初始化聚类器
+
+        Args:
+            data_points: 数据点列表，每个点是一个向量
+            distance_metric: 距离度量方式 ('euclidean', 'manhattan', 'cosine')
+        """
+        self.data_points = data_points
+        self.distance_metric = distance_metric
+        self.graph = self._build_similarity_graph()
+        self.clustering_history = []
+
+    def _build_similarity_graph(self) -> UndirectedWeightedGraph:
+        """构建相似度图
+
+        每个数据点作为顶点，点间距离作为边权重
+
+        Returns:
+            相似度图
+        """
+        graph = UndirectedWeightedGraph()
+
+        # 添加顶点
+        for i, point in enumerate(self.data_points):
+            graph.add_vertex(f"P{i}")
+
+        # 添加边（使用指定距离度量）
+        for i in range(len(self.data_points)):
+            for j in range(i + 1, len(self.data_points)):
+                distance = self._calculate_distance(
+                    self.data_points[i],
+                    self.data_points[j]
+                )
+                graph.add_edge(f"P{i}", f"P{j}", distance)
+
+        return graph
+
+    def _calculate_distance(self, point1: List[float], point2: List[float]) -> float:
+        """计算两点间距离
+
+        Args:
+            point1: 第一个点
+            point2: 第二个点
+
+        Returns:
+            距离值
+        """
+        if self.distance_metric == 'euclidean':
+            return sum((a - b)**2 for a, b in zip(point1, point2))**0.5
+        elif self.distance_metric == 'manhattan':
+            return sum(abs(a - b) for a, b in zip(point1, point2))
+        elif self.distance_metric == 'cosine':
+            dot_product = sum(a * b for a, b in zip(point1, point2))
+            norm1 = sum(a**2 for a in point1)**0.5
+            norm2 = sum(b**2 for b in point2)**0.5
+            if norm1 == 0 or norm2 == 0:
+                return 1.0
+            return 1.0 - dot_product / (norm1 * norm2)
+        else:
+            raise ValueError(f"不支持的距离度量: {self.distance_metric}")
+
+    def cluster(self, n_clusters: int,
+                method: str = 'cut_max_edges') -> List[List[int]]:
+        """聚类到指定数量
+
+        Args:
+            n_clusters: 目标聚类数量
+            method: 聚类方法 ('cut_max_edges', 'cut_threshold')
+
+        Returns:
+            聚类结果列表，每个子列表包含数据点索引
+        """
+        # 构建MST
+        mst_edges, _ = kruskal_mst(self.graph)
+
+        if method == 'cut_max_edges':
+            return self._cluster_by_cutting_edges(mst_edges, n_clusters)
+        elif method == 'cut_threshold':
+            return self._cluster_by_threshold(mst_edges, n_clusters)
+        else:
+            raise ValueError(f"不支持的聚类方法: {method}")
+
+    def _cluster_by_cutting_edges(self, mst_edges: List[Tuple],
+                                 n_clusters: int) -> List[List[int]]:
+        """通过切断最大边进行聚类
+
+        移除MST中权重最大的n_clusters-1条边
+
+        Args:
+            mst_edges: MST边列表
+            n_clusters: 目标聚类数量
+
+        Returns:
+            聚类结果
+        """
+        # 按权重排序边（降序）
+        sorted_edges = sorted(mst_edges, key=lambda x: x[2], reverse=True)
+
+        # 移除权重最大的n_clusters-1条边
+        temp_graph = UndirectedWeightedGraph()
+        for vertex in self.graph.get_vertices():
+            temp_graph.add_vertex(vertex)
+
+        # 添加剩余的边
+        edges_to_keep = sorted_edges[n_clusters-1:] if n_clusters > 1 else sorted_edges
+        for u, v, weight in edges_to_keep:
+            temp_graph.add_edge(u, v, weight)
+
+        # 找到连通分量
+        components = self._find_connected_components(temp_graph)
+
+        # 转换为数据点索引
+        result = []
+        for component in components:
+            indices = [int(point[1:]) for point in component]
+            result.append(indices)
+
+        # 记录聚类历史
+        self.clustering_history.append({
+            'method': 'cut_max_edges',
+            'n_clusters': n_clusters,
+            'clusters': len(components),
+            'cut_edges': n_clusters - 1
+        })
+
+        return result
+
+    def _cluster_by_threshold(self, mst_edges: List[Tuple],
+                             n_clusters: int) -> List[List[int]]:
+        """通过阈值进行聚类
+
+        动态找到合适的切断阈值
+
+        Args:
+            mst_edges: MST边列表
+            n_clusters: 目标聚类数量
+
+        Returns:
+            聚类结果
+        """
+        # 使用二分查找找到合适的阈值
+        weights = [weight for _, _, weight in mst_edges]
+        weights.sort()
+
+        left, right = 0, len(weights) - 1
+        best_threshold = weights[-1]
+
+        while left <= right:
+            mid = (left + right) // 2
+            threshold = weights[mid]
+
+            # 临时图：只保留权重小于阈值的边
+            temp_graph = UndirectedWeightedGraph()
+            for vertex in self.graph.get_vertices():
+                temp_graph.add_vertex(vertex)
+
+            for u, v, weight in mst_edges:
+                if weight <= threshold:
+                    temp_graph.add_edge(u, v, weight)
+
+            components = self._find_connected_components(temp_graph)
+
+            if len(components) >= n_clusters:
+                best_threshold = threshold
+                right = mid - 1
+            else:
+                left = mid + 1
+
+        # 使用最佳阈值进行最终聚类
+        final_graph = UndirectedWeightedGraph()
+        for vertex in self.graph.get_vertices():
+            final_graph.add_vertex(vertex)
+
+        for u, v, weight in mst_edges:
+            if weight <= best_threshold:
+                final_graph.add_edge(u, v, weight)
+
+        components = self._find_connected_components(final_graph)
+
+        # 转换为数据点索引
+        result = []
+        for component in components:
+            indices = [int(point[1:]) for point in component]
+            result.append(indices)
+
+        self.clustering_history.append({
+            'method': 'cut_threshold',
+            'n_clusters': n_clusters,
+            'clusters': len(components),
+            'threshold': best_threshold
+        })
+
+        return result
+
+    def _find_connected_components(self, graph: UndirectedWeightedGraph) -> List[List[str]]:
+        """查找连通分量
+
+        Args:
+            graph: 图对象
+
+        Returns:
+            连通分量列表
+        """
+        visited = set()
+        components = []
+
+        def dfs(vertex: str, component: List[str]) -> None:
+            """深度优先搜索"""
+            visited.add(vertex)
+            component.append(vertex)
+            for neighbor, _ in graph.get_neighbors(vertex):
+                if neighbor not in visited:
+                    dfs(neighbor, component)
+
+        for vertex in graph.get_vertices():
+            if vertex not in visited:
+                component = []
+                dfs(vertex, component)
+                components.append(component)
+
+        return components
+
+    def find_optimal_clusters(self, max_clusters: int = 10) -> Dict:
+        """找到最优聚类数量
+
+        使用肘部法则和轮廓系数评估
+
+        Args:
+            max_clusters: 最大聚类数量
+
+        Returns:
+            最优聚类分析结果
+        """
+        results = []
+
+        for k in range(2, min(max_clusters + 1, len(self.data_points))):
+            # 执行聚类
+            clusters = self.cluster(k)
+
+            # 计算评估指标
+            silhouette_score = self._calculate_silhouette_score(clusters)
+            within_cluster_variance = self._calculate_within_cluster_variance(clusters)
+
+            results.append({
+                'k': k,
+                'silhouette_score': silhouette_score,
+                'within_cluster_variance': within_cluster_variance,
+                'clusters': clusters
+            })
+
+        # 找到最优k值
+        optimal_k = self._find_elbow_point(results)
+
+        return {
+            'optimal_k': optimal_k,
+            'analysis': results,
+            'recommendation': f"建议聚类数量: {optimal_k}"
+        }
+
+    def _calculate_silhouette_score(self, clusters: List[List[int]]) -> float:
+        """计算轮廓系数
+
+        Args:
+            clusters: 聚类结果
+
+        Returns:
+            轮廓系数 (-1到1)
+        """
+        total_score = 0
+        total_points = 0
+
+        for cluster_idx, cluster in enumerate(clusters):
+            for point_idx in cluster:
+                # 计算点与其所在簇的紧密度
+                if len(cluster) > 1:
+                    a = sum(self._calculate_distance(
+                        self.data_points[point_idx],
+                        self.data_points[other_idx]
+                    ) for other_idx in cluster if other_idx != point_idx) / (len(cluster) - 1)
+                else:
+                    a = 0
+
+                # 计算点与其他簇的分离度
+                b = float('inf')
+                for other_cluster_idx, other_cluster in enumerate(clusters):
+                    if other_cluster_idx != cluster_idx:
+                        other_cluster_distance = sum(self._calculate_distance(
+                            self.data_points[point_idx],
+                            self.data_points[other_idx]
+                        ) for other_idx in other_cluster) / len(other_cluster)
+                        b = min(b, other_cluster_distance)
+
+                if max(a, b) > 0:
+                    silhouette = (b - a) / max(a, b)
+                    total_score += silhouette
+                    total_points += 1
+
+        return total_score / total_points if total_points > 0 else 0
+
+    def _calculate_within_cluster_variance(self, clusters: List[List[int]]) -> float:
+        """计算簇内方差
+
+        Args:
+            clusters: 聚类结果
+
+        Returns:
+            簇内总方差
+        """
+        total_variance = 0
+
+        for cluster in clusters:
+            if len(cluster) > 1:
+                # 计算簇中心
+                centroid = [0.0] * len(self.data_points[cluster[0]])
+                for point_idx in cluster:
+                    for i, coord in enumerate(self.data_points[point_idx]):
+                        centroid[i] += coord
+                centroid = [coord / len(cluster) for coord in centroid]
+
+                # 计算簇内方差
+                cluster_variance = 0
+                for point_idx in cluster:
+                    distance = self._calculate_distance(
+                        self.data_points[point_idx],
+                        centroid
+                    )
+                    cluster_variance += distance ** 2
+
+                total_variance += cluster_variance
+
+        return total_variance
+
+    def _find_elbow_point(self, results: List[Dict]) -> int:
+        """使用肘部法则找到最优k值
+
+        Args:
+            results: 聚类分析结果
+
+        Returns:
+            最优k值
+        """
+        if len(results) < 3:
+            return 2
+
+        # 计算二次差分
+        variances = [r['within_cluster_variance'] for r in results]
+        second_diffs = []
+
+        for i in range(1, len(variances) - 1):
+            second_diff = abs(variances[i-1] - 2*variances[i] + variances[i+1])
+            second_diffs.append(second_diff)
+
+        # 找到最大二次差分点
+        max_diff_idx = second_diffs.index(max(second_diffs))
+        return results[max_diff_idx + 1]['k']
+
+    def visualize_clusters(self, clusters: List[List[int]]) -> str:
+        """生成聚类可视化描述
+
+        Args:
+            clusters: 聚类结果
+
+        Returns:
+            可视化描述字符串
+        """
+        description = []
+        description.append(f"聚类结果: {len(clusters)} 个簇")
+
+        for i, cluster in enumerate(clusters):
+            cluster_size = len(cluster)
+            if cluster_size > 0:
+                # 计算簇的中心点
+                centroid = [0.0] * len(self.data_points[cluster[0]])
+                for point_idx in cluster:
+                    for j, coord in enumerate(self.data_points[point_idx]):
+                        centroid[j] += coord
+                centroid = [coord / cluster_size for coord in centroid]
+
+                # 计算簇的半径
+                max_distance = max(
+                    self._calculate_distance(self.data_points[point_idx], centroid)
+                    for point_idx in cluster
+                )
+
+                description.append(f"簇 {i+1}: {cluster_size} 个点")
+                description.append(f"  中心: {[round(x, 2) for x in centroid]}")
+                description.append(f"  半径: {round(max_distance, 2)}")
+
+        return "\\n".join(description)`}
+  language="python"
+  editable={true}
+  showLineNumbers={true}
+/>
+
+## 交互式演示
+
+### Kruskal算法步骤演示
+
+<AlgorithmVisualizer
+  title="Kruskal算法交互式演示"
+  algorithm="kruskal-demo"
+  steps={[
+    {
+      title: "初始化",
+      content: "创建并查集结构，每个顶点都是独立的集合",
+      code: "union_find = UnionFind(vertices)"
+    },
+    {
+      title: "边排序",
+      content: "按权重升序排序所有边",
+      code: "edges = sorted(graph.get_edges(), key=lambda x: x[2])"
+    },
+    {
+      title: "贪心选择",
+      content: "依次选择最小权重边，若不形成环则加入MST",
+      code: "if union_find.find(u) != union_find.find(v):\\n    union_find.union(u, v)\\n    mst_edges.append((u, v, weight))"
+    },
+    {
+      title: "完成条件",
+      content: "当MST包含V-1条边时算法完成",
+      code: "if len(mst_edges) == len(vertices) - 1:\\n    break"
+    }
+  ]}
+/>
+
+### 算法性能比较
+
+<ComplexityAnalyzer
+  title="三种MST算法性能对比"
+  description="在不同图规模下比较Kruskal、Prim和Borůvka算法的性能"
+  data={[
+    {
+      size: "50顶点, 100边",
+      kruskal: 0.0012,
+      prim: 0.0008,
+      boruvka: 0.0015
+    },
+    {
+      size: "100顶点, 300边",
+      kruskal: 0.0034,
+      prim: 0.0021,
+      boruvka: 0.0038
+    },
+    {
+      size: "500顶点, 1500边",
+      kruskal: 0.028,
+      prim: 0.015,
+      boruvka: 0.032
+    },
+    {
+      size: "1000顶点, 5000边",
+      kruskal: 0.089,
+      prim: 0.042,
+      boruvka: 0.095
+    }
+  ]}
+/>
+
+## 实战练习
+
+### 练习1：实现网络优化器
+
+<ExerciseBlock
+  title="网络优化器实现"
+  description="实现一个网络优化器，使用最小生成树算法优化城市间的连接成本。"
+  difficulty="中等"
+  type="coding"
+  initialCode={`# TODO: 实现网络优化器类
+class NetworkOptimizer:
+    def __init__(self):
+        self.cities = {}
+        self.connections = []
+
+    def add_city(self, name, x, y, population=0):
+        # 添加城市到网络
+        pass
+
+    def add_connection(self, city1, city2, cost_per_km):
+        # 添加城市间连接
+        pass
+
+    def optimize_network(self, budget_limit=None):
+        # 使用MST算法优化网络，考虑预算限制
+        pass`}
+  expectedOutput="返回优化后的网络设计方案，包括连接列表和总成本"
+  solution={`class NetworkOptimizer:
+    def __init__(self):
+        self.cities = {}
+        self.connections = []
+        self.graph = UndirectedWeightedGraph()
+
+    def add_city(self, name, x, y, population=0):
+        self.cities[name] = {'x': x, 'y': y, 'population': population}
+        self.graph.add_vertex(name)
+
+    def add_connection(self, city1, city2, cost_per_km):
+        city1_info = self.cities[city1]
+        city2_info = self.cities[city2]
+        distance = ((city1_info['x'] - city2_info['x'])**2 +
+                   (city1_info['y'] - city2_info['y'])**2)**0.5
+        total_cost = distance * cost_per_km
+        self.graph.add_edge(city1, city2, total_cost)
+        self.connections.append((city1, city2, total_cost))
+
+    def optimize_network(self, budget_limit=None):
+        # 使用Kruskal算法找到最小生成树
+        mst_edges, total_cost = kruskal_mst(self.graph)
+
+        if budget_limit and total_cost > budget_limit:
+            # 如果超出预算，需要调整策略
+            return self._optimize_with_budget(budget_limit)
+
+        return {
+            'connections': mst_edges,
+            'total_cost': total_cost,
+            'within_budget': budget_limit is None or total_cost <= budget_limit
+        }
+
+    def _optimize_with_budget(self, budget_limit):
+        # 预算限制下的优化策略
+        sorted_edges = sorted(self.connections, key=lambda x: x[2])
+        selected_edges = []
+        total_cost = 0
+        union_find = UnionFind(self.cities.keys())
+
+        for edge in sorted_edges:
+            if total_cost + edge[2] <= budget_limit:
+                if union_find.find(edge[0]) != union_find.find(edge[1]):
+                    union_find.union(edge[0], edge[1])
+                    selected_edges.append(edge)
+                    total_cost += edge[2]
+
+        return {
+            'connections': selected_edges,
+            'total_cost': total_cost,
+            'within_budget': True,
+            'note': f'预算限制下的部分优化，连接了{len(selected_edges)}个城市'
+        }`}
+/>
+
+### 练习2：聚类分析器
+
+<ExerciseBlock
+  title="聚类分析器实现"
+  description="实现一个基于MST的数据聚类分析器，能够自动确定最优聚类数量。"
+  difficulty="困难"
+  type="coding"
+  initialCode={`# TODO: 实现MST聚类分析器
+class MSTClusterAnalyzer:
+    def __init__(self, data_points):
+        self.data_points = data_points
+        self.distance_matrix = self._compute_distance_matrix()
+
+    def _compute_distance_matrix(self):
+        # 计算点间距离矩阵
+        pass
+
+    def find_optimal_clusters(self, max_k=10):
+        # 使用肘部法则找到最优聚类数量
+        pass
+
+    def cluster_data(self, k):
+        # 将数据聚类为k个簇
+        pass`}
+  expectedOutput="返回聚类结果和最优聚类数量分析"
+  solution={`class MSTClusterAnalyzer:
+    def __init__(self, data_points):
+        self.data_points = data_points
+        self.distance_matrix = self._compute_distance_matrix()
+        self.clustering_history = []
+
+    def _compute_distance_matrix(self):
+        n = len(self.data_points)
+        matrix = [[0] * n for _ in range(n)]
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                distance = sum((a - b)**2 for a, b in
+                              zip(self.data_points[i], self.data_points[j]))**0.5
+                matrix[i][j] = matrix[j][i] = distance
+
+        return matrix
+
+    def find_optimal_clusters(self, max_k=10):
+        # 计算不同k值的聚类质量
+        k_values = range(2, min(max_k + 1, len(self.data_points)))
+        variances = []
+
+        for k in k_values:
+            clusters = self.cluster_data(k)
+            variance = self._compute_within_cluster_variance(clusters)
+            variances.append(variance)
+
+        # 使用肘部法则
+        optimal_k = self._find_elbow_point(k_values, variances)
+
+        return {
+            'optimal_k': optimal_k,
+            'variances': list(zip(k_values, variances)),
+            'elbow_analysis': self._analyze_elbow(k_values, variances)
+        }
+
+    def cluster_data(self, k):
+        # 构建完全图
+        graph = UndirectedWeightedGraph()
+        for i in range(len(self.data_points)):
+            graph.add_vertex(str(i))
+
+        for i in range(len(self.data_points)):
+            for j in range(i + 1, len(self.data_points)):
+                graph.add_edge(str(i), str(j), self.distance_matrix[i][j])
+
+        # 构建MST
+        mst_edges, _ = kruskal_mst(graph)
+
+        # 移除k-1条最长的边
+        sorted_edges = sorted(mst_edges, key=lambda x: x[2], reverse=True)
+        edges_to_keep = sorted_edges[k-1:] if k > 1 else sorted_edges
+
+        # 构建聚类图
+        cluster_graph = UndirectedWeightedGraph()
+        for i in range(len(self.data_points)):
+            cluster_graph.add_vertex(str(i))
+
+        for u, v, weight in edges_to_keep:
+            cluster_graph.add_edge(u, v, weight)
+
+        # 找到连通分量
+        return self._find_connected_components(cluster_graph)
+
+    def _compute_within_cluster_variance(self, clusters):
+        total_variance = 0
+        for cluster in clusters:
+            if len(cluster) > 1:
+                # 计算簇中心
+                centroid = [0] * len(self.data_points[int(cluster[0])])
+                for point_str in cluster:
+                    point_idx = int(point_str)
+                    for i, coord in enumerate(self.data_points[point_idx]):
+                        centroid[i] += coord
+                centroid = [coord / len(cluster) for coord in centroid]
+
+                # 计算方差
+                cluster_variance = 0
+                for point_str in cluster:
+                    point_idx = int(point_str)
+                    distance = sum((a - b)**2 for a, b in
+                                 zip(self.data_points[point_idx], centroid))**0.5
+                    cluster_variance += distance ** 2
+                total_variance += cluster_variance
+
+        return total_variance
+
+    def _find_elbow_point(self, k_values, variances):
+        if len(variances) < 3:
+            return k_values[0]
+
+        # 计算角度变化
+        angles = []
+        for i in range(1, len(variances) - 1):
+            v1 = variances[i-1] - variances[i]
+            v2 = variances[i] - variances[i+1]
+            if v1 > 0 and v2 > 0:
+                angle = abs(v2 - v1) / ((v1 + v2) / 2)
+                angles.append(angle)
+            else:
+                angles.append(0)
+
+        # 找到最大角度变化点
+        if angles:
+            max_angle_idx = angles.index(max(angles))
+            return k_values[max_angle_idx + 1]
+
+        return k_values[0]
+
+    def _find_connected_components(self, graph):
+        visited = set()
+        components = []
+
+        def dfs(vertex, component):
+            visited.add(vertex)
+            component.append(vertex)
+            for neighbor, _ in graph.get_neighbors(vertex):
+                if neighbor not in visited:
+                    dfs(neighbor, component)
+
+        for vertex in graph.get_vertices():
+            if vertex not in visited:
+                component = []
+                dfs(vertex, component)
+                components.append(component)
+
+        return components`}
+/>
+
+## 总结与要点
+
+### 核心概念回顾
+
+1. **最小生成树定义**: 包含所有顶点的无环连通子图，且权重和最小
+2. **切割性质**: 任何切割的最小权重边都属于某个MST
+3. **三种经典算法**: Kruskal（适合稀疏图）、Prim（适合稠密图）、Borůvka（适合并行）
+4. **应用领域**: 网络设计、聚类分析、电路设计、图像分割等
+
+### 算法选择指南
+
+- **Kruskal算法**: 实现简单，适合边数相对较少的稀疏图
+- **Prim算法**: 使用优先队列，适合边数较多的稠密图
+- **Borůvka算法**: 分轮次处理，天然适合并行化实现
+
+### 实际应用要点
+
+- 考虑网络的冗余性和可靠性设计
+- 在聚类分析中结合轮廓系数等评估指标
+- 动态图环境下的MST维护策略
+- 大规模图处理的优化和并行化
+
+## 进一步学习
+
+### 相关算法
+
+- **Steiner树问题**: 允许添加额外顶点的最小生成树
+- **度约束最小生成树**: 限制顶点度数的MST变种
+- **随机最小生成树**: 带随机性的MST算法
+- **多维MST**: 多目标优化的最小生成树
+
+### 推荐资源
+
+1. **算法导论** - 第23章：最小生成树
+2. **网络流理论** - 相关优化问题
+3. **聚类分析** - 数据挖掘中的应用
+4. **并行算法设计** - 大规模图处理技术
+
+---
+
+## 课程导航
+
+**上一课**: [L07 - 最短路径算法](/mit6006-algorithms/lectures/L07-shortest-path-algorithms)
+**下一课**: [L09 - 动态规划](/mit6006-algorithms/lectures/L09-dynamic-programming)
+**课程主页**: [MIT 6.006 算法导论](/mit6006-algorithms)

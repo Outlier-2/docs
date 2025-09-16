@@ -1,0 +1,1120 @@
+---
+title: "Lecture 9: 索引并发控制"
+description: "CMU 15-445 Lecture 9 - B+树并发控制、锁协议、乐观并发控制、性能优化"
+---
+
+# Lecture 9: 索引并发控制
+
+## 并发控制概述
+
+### B+树并发挑战
+
+B+树在并发环境下面临的主要挑战：
+
+1. **结构修改**：插入和删除可能导致节点分裂和合并
+2. **一致性问题**：多个事务同时访问可能导致数据不一致
+3. **性能影响**：锁机制可能影响查询性能
+4. **死锁处理**：复杂的锁模式可能导致死锁
+
+### 并发控制目标
+- **正确性**：保证数据一致性和索引完整性
+- **高性能**：最小化锁开销，最大化并发性
+- **可扩展性**：支持大量并发事务
+- **公平性**：避免事务饥饿
+
+## B+树锁协议
+
+### 基本锁模式
+
+#### 锁类型定义
+```cpp
+class BPlusTreeLockManager {
+public:
+    enum class LockType {
+        NONE,
+        SHARED,        // 共享锁（读锁）
+        EXCLUSIVE,     // 排他锁（写锁）
+        INTENTION_SHARED,    // 意向共享锁
+        INTENTION_EXCLUSIVE, // 意向排他锁
+        SHARED_INTENTION_EXCLUSIVE  // 共享意向排他锁
+    };
+
+    struct LockRequest {
+        TransactionId transaction_id;
+        LockType lock_type;
+        chrono::system_clock::time_point granted_time;
+        bool is_granted;
+    };
+
+    struct LockEntry {
+        void* resource_id;  // 锁对象（节点或页面）
+        vector<LockRequest> requests;
+        LockType current_mode;
+        size_t holder_count;
+    };
+
+private:
+    unordered_map<void*, LockEntry> lock_table;
+    mutex table_mutex;
+    DeadlockDetector deadlock_detector;
+
+public:
+    bool acquire_lock(TransactionId txn_id, void* resource_id, LockType requested_type) {
+        lock_guard<mutex> lock(table_mutex);
+
+        LockEntry& entry = lock_table[resource_id];
+
+        // 检查是否已经持有兼容的锁
+        if (has_compatible_lock(txn_id, entry, requested_type)) {
+            grant_lock(txn_id, entry, requested_type);
+            return true;
+        }
+
+        // 检查锁兼容性
+        if (is_lock_compatible(entry.current_mode, requested_type)) {
+            grant_lock(txn_id, entry, requested_type);
+            return true;
+        }
+
+        // 锁冲突，需要等待
+        return add_to_wait_queue(txn_id, entry, requested_type);
+    }
+
+    bool release_lock(TransactionId txn_id, void* resource_id) {
+        lock_guard<mutex> lock(table_mutex);
+
+        auto it = lock_table.find(resource_id);
+        if (it == lock_table.end()) {
+            return false;
+        }
+
+        LockEntry& entry = it->second;
+        return release_lock_from_entry(txn_id, entry);
+    }
+
+    vector<void*> get_held_locks(TransactionId txn_id) const {
+        vector<void*> held_locks;
+        for (const auto& [resource_id, entry] : lock_table) {
+            for (const auto& request : entry.requests) {
+                if (request.transaction_id == txn_id && request.is_granted) {
+                    held_locks.push_back(resource_id);
+                    break;
+                }
+            }
+        }
+        return held_locks;
+    }
+
+    bool check_deadlock(TransactionId txn_id) const {
+        return deadlock_detector.detect_deadlock(txn_id, get_lock_graph());
+    }
+
+private:
+    bool has_compatible_lock(TransactionId txn_id, const LockEntry& entry, LockType requested_type) {
+        for (const auto& request : entry.requests) {
+            if (request.transaction_id == txn_id && request.is_granted) {
+                return is_lock_upgrade_compatible(request.lock_type, requested_type);
+            }
+        }
+        return false;
+    }
+
+    bool is_lock_compatible(LockType current_mode, LockType requested_type) {
+        // 锁兼容性矩阵
+        static const bool compatibility_matrix[6][6] = {
+        /*                NONE,   S,      X,      IS,     IX,     SIX */
+        /* NONE     */ { true,  true,   true,   true,   true,   true  },
+        /* S        */ { true,  true,   false,  true,   false,  false },
+        /* X        */ { true,  false,  false,  false,  false,  false },
+        /* IS       */ { true,  true,   false,  true,   true,   true  },
+        /* IX       */ { true,  false,  false,  true,   true,   false },
+        /* SIX      */ { true,  false,  false,  true,   false,  false }
+        };
+
+        return compatibility_matrix[static_cast<int>(current_mode)][static_cast<int>(requested_type)];
+    }
+
+    bool is_lock_upgrade_compatible(LockType held_type, LockType requested_type) {
+        // 锁升级规则
+        switch (held_type) {
+            case LockType::SHARED:
+                return requested_type == LockType::SHARED ||
+                       requested_type == LockType::SHARED_INTENTION_EXCLUSIVE;
+            case LockType::INTENTION_SHARED:
+                return requested_type == LockType::SHARED_INTENTION_EXCLUSIVE;
+            case LockType::INTENTION_EXCLUSIVE:
+                return requested_type == LockType::EXCLUSIVE;
+            default:
+                return held_type == requested_type;
+        }
+    }
+
+    void grant_lock(TransactionId txn_id, LockEntry& entry, LockType lock_type) {
+        // 移除该事务的现有请求
+        auto it = remove_if(entry.requests.begin(), entry.requests.end(),
+            [txn_id](const LockRequest& req) {
+                return req.transaction_id == txn_id;
+            });
+        entry.requests.erase(it, entry.requests.end());
+
+        // 添加新的授权请求
+        LockRequest request;
+        request.transaction_id = txn_id;
+        request.lock_type = lock_type;
+        request.is_granted = true;
+        request.granted_time = chrono::system_clock::now();
+
+        entry.requests.push_back(request);
+        entry.current_mode = lock_type;
+        entry.holder_count++;
+
+        // 检查等待队列中的其他请求
+        check_wait_queue(entry);
+    }
+
+    bool add_to_wait_queue(TransactionId txn_id, LockEntry& entry, LockType requested_type) {
+        LockRequest request;
+        request.transaction_id = txn_id;
+        request.lock_type = requested_type;
+        request.is_granted = false;
+
+        entry.requests.push_back(request);
+
+        // 检查是否会造成死锁
+        if (check_deadlock(txn_id)) {
+            // 回滚请求
+            entry.requests.pop_back();
+            return false;
+        }
+
+        return true;  // 需要等待
+    }
+
+    bool release_lock_from_entry(TransactionId txn_id, LockEntry& entry) {
+        auto it = find_if(entry.requests.begin(), entry.requests.end(),
+            [txn_id](const LockRequest& req) {
+                return req.transaction_id == txn_id && req.is_granted;
+            });
+
+        if (it == entry.requests.end()) {
+            return false;
+        }
+
+        entry.requests.erase(it);
+        entry.holder_count--;
+
+        // 重新计算当前锁模式
+        update_current_lock_mode(entry);
+
+        // 检查等待队列
+        check_wait_queue(entry);
+
+        // 如果没有请求了，清理条目
+        if (entry.requests.empty()) {
+            lock_table.erase(&entry - &*lock_table.begin());
+        }
+
+        return true;
+    }
+
+    void update_current_lock_mode(LockEntry& entry) {
+        if (entry.requests.empty()) {
+            entry.current_mode = LockType::NONE;
+            return;
+        }
+
+        // 找到最强的已授权锁模式
+        LockType strongest = LockType::NONE;
+        for (const auto& request : entry.requests) {
+            if (request.is_granted && is_stronger_lock(request.lock_type, strongest)) {
+                strongest = request.lock_type;
+            }
+        }
+
+        entry.current_mode = strongest;
+    }
+
+    void check_wait_queue(LockEntry& entry) {
+        if (entry.requests.empty()) return;
+
+        // 尝试授权等待队列中的请求
+        for (auto& request : entry.requests) {
+            if (!request.is_granted) {
+                if (is_lock_compatible(entry.current_mode, request.lock_type)) {
+                    grant_lock(request.transaction_id, entry, request.lock_type);
+                }
+            }
+        }
+    }
+
+    bool is_stronger_lock(LockType type1, LockType type2) {
+        // 定义锁的强度关系
+        static const int strength[] = {
+            0,  // NONE
+            1,  // SHARED
+            5,  // EXCLUSIVE
+            2,  // INTENTION_SHARED
+            4,  // INTENTION_EXCLUSIVE
+            3   // SHARED_INTENTION_EXCLUSIVE
+        };
+
+        return strength[static_cast<int>(type1)] > strength[static_cast<int>(type2)];
+    }
+
+    vector<pair<TransactionId, TransactionId>> get_lock_graph() const {
+        vector<pair<TransactionId, TransactionId>> wait_for_graph;
+
+        for (const auto& [resource_id, entry] : lock_table) {
+            vector<TransactionId> granted_txns;
+            vector<TransactionId> waiting_txns;
+
+            for (const auto& request : entry.requests) {
+                if (request.is_granted) {
+                    granted_txns.push_back(request.transaction_id);
+                } else {
+                    waiting_txns.push_back(request.transaction_id);
+                }
+            }
+
+            // 构建等待关系图
+            for (TransactionId waiting_txn : waiting_txns) {
+                for (TransactionId granted_txn : granted_txns) {
+                    if (is_lock_conflict(granted_txn, waiting_txn, entry)) {
+                        wait_for_graph.emplace_back(waiting_txn, granted_txn);
+                    }
+                }
+            }
+        }
+
+        return wait_for_graph;
+    }
+
+    bool is_lock_conflict(TransactionId txn1, TransactionId txn2, const LockEntry& entry) {
+        LockType type1 = LockType::NONE, type2 = LockType::NONE;
+
+        for (const auto& request : entry.requests) {
+            if (request.transaction_id == txn1 && request.is_granted) {
+                type1 = request.lock_type;
+            }
+            if (request.transaction_id == txn2 && !request.is_granted) {
+                type2 = request.lock_type;
+            }
+        }
+
+        return !is_lock_compatible(type1, type2);
+    }
+};
+```
+
+### B+树爬升协议
+
+#### 乐观爬升算法
+```cpp
+class BPlusTreeCrawler {
+private:
+    BPlusTree* tree;
+    BPlusTreeLockManager* lock_manager;
+
+public:
+    struct PathInfo {
+        vector<Node*> path_nodes;
+        vector<LockType> lock_types;
+        TransactionId transaction_id;
+        bool is_read_only;
+    };
+
+    bool optimistic_traverse(TransactionId txn_id, const Key& key, bool for_update) {
+        PathInfo path_info;
+        path_info.transaction_id = txn_id;
+        path_info.is_read_only = !for_update;
+
+        Node* current = tree->get_root();
+
+        // 乐观爬升：先获取意向锁
+        while (current->is_internal()) {
+            if (!acquire_intention_lock(txn_id, current, path_info)) {
+                release_path_locks(path_info);
+                return false;
+            }
+
+            size_t child_index = find_child_index(current, key);
+            current = current->children[child_index];
+        }
+
+        // 到达叶子节点，获取适当的锁
+        LockType final_lock_type = for_update ? LockType::EXCLUSIVE : LockType::SHARED;
+        if (!acquire_final_lock(txn_id, current, final_lock_type, path_info)) {
+            release_path_locks(path_info);
+            return false;
+        }
+
+        // 检查结构是否被修改
+        if (path_was_modified(path_info)) {
+            release_path_locks(path_info);
+            return false;  // 重试
+        }
+
+        // 成功获取所有锁
+        return true;
+    }
+
+    bool conservative_traverse(TransactionId txn_id, const Key& key, bool for_update) {
+        PathInfo path_info;
+        path_info.transaction_id = txn_id;
+
+        Node* current = tree->get_root();
+
+        // 保守爬升：获取更强的锁
+        while (current->is_internal()) {
+            LockType lock_type = for_update ? LockType::INTENTION_EXCLUSIVE : LockType::INTENTION_SHARED;
+            if (!lock_manager->acquire_lock(txn_id, current, lock_type)) {
+                release_path_locks(path_info);
+                return false;
+            }
+
+            path_info.path_nodes.push_back(current);
+            path_info.lock_types.push_back(lock_type);
+
+            size_t child_index = find_child_index(current, key);
+            current = current->children[child_index];
+        }
+
+        // 获取叶子节点的最终锁
+        LockType final_lock_type = for_update ? LockType::EXCLUSIVE : LockType::SHARED;
+        if (!lock_manager->acquire_lock(txn_id, current, final_lock_type)) {
+            release_path_locks(path_info);
+            return false;
+        }
+
+        path_info.path_nodes.push_back(current);
+        path_info.lock_types.push_back(final_lock_type);
+
+        return true;
+    }
+
+private:
+    bool acquire_intention_lock(TransactionId txn_id, Node* node, PathInfo& path_info) {
+        LockType lock_type = path_info.is_read_only ?
+            LockType::INTENTION_SHARED : LockType::INTENTION_EXCLUSIVE;
+
+        if (lock_manager->acquire_lock(txn_id, node, lock_type)) {
+            path_info.path_nodes.push_back(node);
+            path_info.lock_types.push_back(lock_type);
+            return true;
+        }
+
+        return false;
+    }
+
+    bool acquire_final_lock(TransactionId txn_id, Node* node, LockType lock_type, PathInfo& path_info) {
+        if (lock_manager->acquire_lock(txn_id, node, lock_type)) {
+            path_info.path_nodes.push_back(node);
+            path_info.lock_types.push_back(lock_type);
+            return true;
+        }
+
+        return false;
+    }
+
+    void release_path_locks(PathInfo& path_info) {
+        for (size_t i = 0; i < path_info.path_nodes.size(); i++) {
+            lock_manager->release_lock(path_info.transaction_id, path_info.path_nodes[i]);
+        }
+        path_info.path_nodes.clear();
+        path_info.lock_types.clear();
+    }
+
+    bool path_was_modified(const PathInfo& path_info) {
+        for (Node* node : path_info.path_nodes) {
+            if (node->was_modified_after(path_info.transaction_id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    size_t find_child_index(Node* node, const Key& key) {
+        size_t index = 0;
+        while (index < node->key_count && key >= node->keys[index]) {
+            index++;
+        }
+        return index;
+    }
+};
+```
+
+## 乐观并发控制
+
+### B+树乐观并发控制
+
+#### 乐观读验证
+```cpp
+class OptimisticBPlusTree {
+private:
+    struct ReadSet {
+        struct ReadEntry {
+            Node* node;
+            uint64_t version;  // 节点版本号
+        };
+
+        vector<ReadEntry> entries;
+        TransactionId transaction_id;
+
+        void add_read(Node* node) {
+            entries.push_back({node, node->get_version()});
+        }
+
+        bool validate() const {
+            for (const auto& entry : entries) {
+                if (entry.node->get_version() != entry.version) {
+                    return false;  // 节点被修改
+                }
+            }
+            return true;
+        }
+    };
+
+    struct WriteSet {
+        struct WriteEntry {
+            Node* node;
+            Key key;
+            Value old_value;
+            Value new_value;
+            OperationType operation;  // INSERT, UPDATE, DELETE
+        };
+
+        vector<WriteEntry> entries;
+        TransactionId transaction_id;
+
+        void add_insert(Node* node, const Key& key, const Value& value) {
+            entries.push_back({node, key, Value(), value, OperationType::INSERT});
+        }
+
+        void add_update(Node* node, const Key& key, const Value& old_val, const Value& new_val) {
+            entries.push_back({node, key, old_val, new_val, OperationType::UPDATE});
+        }
+
+        void add_delete(Node* node, const Key& key, const Value& old_val) {
+            entries.push_back({node, key, old_val, Value(), OperationType::DELETE});
+        }
+    };
+
+    struct TransactionContext {
+        TransactionId transaction_id;
+        ReadSet read_set;
+        WriteSet write_set;
+        chrono::system_clock::time_point start_time;
+        TransactionState state;
+    };
+
+    unordered_map<TransactionId, unique_ptr<TransactionContext>> active_transactions;
+    mutex transaction_mutex;
+    VersionManager* version_manager;
+
+public:
+    bool begin_transaction(TransactionId txn_id) {
+        lock_guard<mutex> lock(transaction_mutex);
+
+        if (active_transactions.find(txn_id) != active_transactions.end()) {
+            return false;  // 事务已存在
+        }
+
+        auto context = make_unique<TransactionContext>();
+        context->transaction_id = txn_id;
+        context->start_time = chrono::system_clock::now();
+        context->state = TransactionState::ACTIVE;
+
+        active_transactions[txn_id] = move(context);
+        return true;
+    }
+
+    bool optimistic_read(TransactionId txn_id, const Key& key, Value* value) {
+        auto it = active_transactions.find(txn_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        TransactionContext* context = it->second.get();
+
+        // 执行读取操作
+        Node* leaf = find_leaf_node(key);
+        Value result;
+        if (!find_in_node(leaf, key, &result)) {
+            return false;
+        }
+
+        *value = result;
+
+        // 记录读取集
+        context->read_set.add_read(leaf);
+        context->read_set.add_read(find_path_to_leaf(key));
+
+        return true;
+    }
+
+    bool optimistic_write(TransactionId txn_id, const Key& key, const Value& value) {
+        auto it = active_transactions.find(txn_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        TransactionContext* context = it->second.get();
+
+        // 检查是否需要更新或插入
+        Node* leaf = find_leaf_node(key);
+        Value old_value;
+
+        if (find_in_node(leaf, key, &old_value)) {
+            // 更新操作
+            context->write_set.add_update(leaf, key, old_value, value);
+        } else {
+            // 插入操作
+            context->write_set.add_insert(leaf, key, value);
+        }
+
+        return true;
+    }
+
+    bool commit_transaction(TransactionId txn_id) {
+        auto it = active_transactions.find(txn_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        TransactionContext* context = it->second.get();
+
+        // 验证阶段
+        if (!context->read_set.validate()) {
+            // 验证失败，中止事务
+            abort_transaction(txn_id);
+            return false;
+        }
+
+        // 写入阶段
+        if (!apply_write_set(context->write_set)) {
+            abort_transaction(txn_id);
+            return false;
+        }
+
+        // 提交成功
+        context->state = TransactionState::COMMITTED;
+        active_transactions.erase(it);
+        return true;
+    }
+
+    bool abort_transaction(TransactionId txn_id) {
+        auto it = active_transactions.find(txn_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        TransactionContext* context = it->second.get();
+        context->state = TransactionState::ABORTED;
+
+        // 不需要撤销写操作，因为验证失败时没有实际写入
+        active_transactions.erase(it);
+        return true;
+    }
+
+private:
+    bool apply_write_set(const WriteSet& write_set) {
+        // 按顺序应用写操作
+        for (const auto& entry : write_set.entries) {
+            switch (entry.operation) {
+                case OperationType::INSERT:
+                    if (!insert_in_node(entry.node, entry.key, entry.new_value)) {
+                        return false;
+                    }
+                    break;
+                case OperationType::UPDATE:
+                    if (!update_in_node(entry.node, entry.key, entry.new_value)) {
+                        return false;
+                    }
+                    break;
+                case OperationType::DELETE:
+                    if (!delete_from_node(entry.node, entry.key)) {
+                        return false;
+                    }
+                    break;
+            }
+        }
+        return true;
+    }
+
+    vector<Node*> find_path_to_leaf(const Key& key) {
+        vector<Node*> path;
+        Node* current = get_root();
+
+        while (current->is_internal()) {
+            path.push_back(current);
+            size_t child_index = find_child_index(current, key);
+            current = current->children[child_index];
+        }
+
+        path.push_back(current);
+        return path;
+    }
+};
+```
+
+### 多版本并发控制
+
+#### MVCC B+树实现
+```cpp
+class MvccBPlusTree {
+private:
+    struct VersionedValue {
+        Value value;
+        uint64_t commit_ts;
+        TransactionId creator_txn;
+        TransactionId deleter_txn;
+        bool is_deleted;
+
+        VersionedValue(const Value& val, uint64_t ts, TransactionId txn)
+            : value(val), commit_ts(ts), creator_txn(txn), deleter_txn(0), is_deleted(false) {}
+    };
+
+    struct VersionedNode {
+        vector<Key> keys;
+        vector<vector<VersionedValue>> versioned_values;  // 每个键对应多个版本
+        Node* next;
+        Node* parent;
+        bool is_leaf;
+        uint64_t last_modified_ts;
+
+        vector<VersionedValue>& get_versioned_values(size_t index) {
+            return versioned_values[index];
+        }
+
+        const VersionedValue* get_visible_version(size_t index, uint64_t read_ts) const {
+            const auto& versions = versioned_values[index];
+
+            // 按提交时间戳降序查找第一个可见的版本
+            for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
+                if (it->commit_ts <= read_ts && !it->is_deleted) {
+                    return &(*it);
+                }
+            }
+
+            return nullptr;
+        }
+
+        void add_version(size_t index, const VersionedValue& version) {
+            versioned_values[index].push_back(version);
+            last_modified_ts = version.commit_ts;
+        }
+    };
+
+    TransactionManager* txn_manager;
+    TimestampOracle* timestamp_oracle;
+
+public:
+    bool mvcc_read(TransactionId txn_id, const Key& key, Value* value) {
+        uint64_t read_ts = txn_manager->get_read_timestamp(txn_id);
+        VersionedNode* leaf = find_leaf_node(key);
+
+        // 在叶子节点中查找键
+        for (size_t i = 0; i < leaf->keys.size(); i++) {
+            if (leaf->keys[i] == key) {
+                const VersionedValue* version = leaf->get_visible_version(i, read_ts);
+                if (version) {
+                    *value = version->value;
+                    return true;
+                }
+                return false;  // 键存在但被删除或不可见
+            }
+        }
+
+        return false;  // 键不存在
+    }
+
+    bool mvcc_write(TransactionId txn_id, const Key& key, const Value& value) {
+        uint64_t write_ts = timestamp_oracle->get_timestamp();
+        VersionedNode* leaf = find_leaf_node(key);
+
+        // 查找键的位置
+        size_t key_index = 0;
+        while (key_index < leaf->keys.size() && leaf->keys[key_index] < key) {
+            key_index++;
+        }
+
+        if (key_index < leaf->keys.size() && leaf->keys[key_index] == key) {
+            // 更新现有键
+            return update_existing_key(leaf, key_index, txn_id, value, write_ts);
+        } else {
+            // 插入新键
+            return insert_new_key(leaf, key_index, txn_id, value, write_ts);
+        }
+    }
+
+    bool mvcc_delete(TransactionId txn_id, const Key& key) {
+        uint64_t delete_ts = timestamp_oracle->get_timestamp();
+        VersionedNode* leaf = find_leaf_node(key);
+
+        // 查找键的位置
+        for (size_t i = 0; i < leaf->keys.size(); i++) {
+            if (leaf->keys[i] == key) {
+                // 标记最新版本为已删除
+                auto& versions = leaf->versioned_values[i];
+                if (!versions.empty()) {
+                    VersionedValue& latest = versions.back();
+                    latest.is_deleted = true;
+                    latest.deleter_txn = txn_id;
+                    latest.commit_ts = delete_ts;
+                    leaf->last_modified_ts = delete_ts;
+                    return true;
+                }
+            }
+        }
+
+        return false;  // 键不存在
+    }
+
+    bool commit_transaction(TransactionId txn_id) {
+        uint64_t commit_ts = timestamp_oracle->get_timestamp();
+
+        // 验证事务的写操作
+        if (!validate_writes(txn_id, commit_ts)) {
+            return false;  // 写-写冲突
+        }
+
+        // 更新提交时间戳
+        update_commit_timestamps(txn_id, commit_ts);
+
+        // 清理过期版本
+        cleanup_old_versions(commit_ts);
+
+        return true;
+    }
+
+private:
+    bool update_existing_key(VersionedNode* leaf, size_t key_index,
+                           TransactionId txn_id, const Value& value, uint64_t write_ts) {
+        // 创建新版本
+        VersionedValue new_version(value, write_ts, txn_id);
+        leaf->add_version(key_index, new_version);
+
+        // 检查是否需要节点分裂
+        if (leaf->versioned_values[key_index].size() > MAX_VERSIONS_PER_KEY) {
+            return cleanup_versions(leaf, key_index);
+        }
+
+        return true;
+    }
+
+    bool insert_new_key(VersionedNode* leaf, size_t insert_pos,
+                      TransactionId txn_id, const Value& value, uint64_t write_ts) {
+        // 插入新键和版本
+        leaf->keys.insert(leaf->keys.begin() + insert_pos, key);
+        vector<VersionedValue> versions;
+        versions.emplace_back(value, write_ts, txn_id);
+        leaf->versioned_values.insert(leaf->versioned_values.begin() + insert_pos, versions);
+
+        // 检查是否需要节点分裂
+        if (leaf->keys.size() > MAX_KEYS_PER_NODE) {
+            return split_node(leaf);
+        }
+
+        return true;
+    }
+
+    bool validate_writes(TransactionId txn_id, uint64_t commit_ts) {
+        // 获取事务的写集
+        auto write_set = txn_manager->get_write_set(txn_id);
+
+        for (const auto& write_op : write_set) {
+            VersionedNode* node = write_op.node;
+            size_t key_index = write_op.key_index;
+
+            // 检查是否有其他事务的并发写
+            const auto& versions = node->versioned_values[key_index];
+            for (const auto& version : versions) {
+                if (version.creator_txn != txn_id &&
+                    version.commit_ts > txn_manager->get_start_timestamp(txn_id) &&
+                    version.commit_ts < commit_ts) {
+                    return false;  // 写-写冲突
+                }
+            }
+        }
+
+        return true;
+    }
+
+    void cleanup_old_versions(uint64_t oldest_active_ts) {
+        // 清理比最旧活动事务更早的版本
+        // 实现版本清理逻辑
+    }
+};
+```
+
+## 并发性能优化
+
+### 锁消除技术
+
+#### 无锁B+树操作
+```cpp
+class LockFreeBPlusTree {
+private:
+    struct AtomicNode {
+        atomic<Node*> next;
+        atomic<uint64_t> version;
+        atomic<uint64_t> lock;
+        vector<Key> keys;
+        vector<atomic<Node*>> children;
+        vector<atomic<Value*>> values;
+
+        bool try_lock() {
+            uint64_t expected = UNLOCKED;
+            return lock.compare_exchange_strong(expected, LOCKED,
+                                               memory_order_acquire,
+                                               memory_order_relaxed);
+        }
+
+        void unlock() {
+            lock.store(UNLOCKED, memory_order_release);
+        }
+
+        uint64_t increment_version() {
+            return version.fetch_add(1, memory_order_relaxed) + 1;
+        }
+    };
+
+public:
+    bool lock_free_insert(const Key& key, const Value& value) {
+        while (true) {
+            // 路径查找和版本检查
+            auto path_result = find_path_with_validation(key);
+            if (!path_result.success) {
+                continue;  // 路径验证失败，重试
+            }
+
+            AtomicNode* leaf = path_result.leaf_node;
+
+            // 尝试锁定叶子节点
+            if (!leaf->try_lock()) {
+                continue;  // 锁定失败，重试
+            }
+
+            // 检查叶子节点是否被修改
+            if (leaf->version.load() != path_result.leaf_version) {
+                leaf->unlock();
+                continue;  // 节点被修改，重试
+            }
+
+            // 执行插入操作
+            bool success = insert_in_locked_node(leaf, key, value);
+            leaf->increment_version();
+            leaf->unlock();
+
+            if (success) {
+                return true;
+            }
+        }
+    }
+
+    bool lock_free_find(const Key& key, Value* value) {
+        while (true) {
+            auto path_result = find_path_with_validation(key);
+            if (!path_result.success) {
+                continue;
+            }
+
+            AtomicNode* leaf = path_result.leaf_node;
+
+            // 原子读取值
+            size_t key_index = find_key_index(leaf, key);
+            if (key_index >= leaf->keys.size()) {
+                return false;
+            }
+
+            Value* result = leaf->values[key_index].load(memory_order_acquire);
+            if (result == nullptr) {
+                continue;  // 值被删除，重试
+            }
+
+            *value = *result;
+            return true;
+        }
+    }
+
+private:
+    struct PathResult {
+        bool success;
+        vector<AtomicNode*> path_nodes;
+        vector<uint64_t> path_versions;
+        AtomicNode* leaf_node;
+        uint64_t leaf_version;
+    };
+
+    PathResult find_path_with_validation(const Key& key) {
+        PathResult result;
+        AtomicNode* current = root.load(memory_order_acquire);
+
+        while (current != nullptr) {
+            result.path_nodes.push_back(current);
+            result.path_versions.push_back(current->version.load(memory_order_acquire));
+
+            if (current->keys.empty()) {
+                result.leaf_node = current;
+                result.leaf_version = current->version.load(memory_order_acquire);
+                result.success = true;
+                return result;
+            }
+
+            size_t child_index = find_child_index(current, key);
+            current = current->children[child_index].load(memory_order_acquire);
+        }
+
+        result.success = false;
+        return result;
+    }
+
+    bool validate_path(const PathResult& path_result) {
+        // 验证路径上所有节点的版本号
+        for (size_t i = 0; i < path_result.path_nodes.size(); i++) {
+            AtomicNode* node = path_result.path_nodes[i];
+            uint64_t expected_version = path_result.path_versions[i];
+            uint64_t current_version = node->version.load(memory_order_acquire);
+
+            if (current_version != expected_version) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+```
+
+### 自适应并发控制
+
+#### 混合并发策略
+```cpp
+class AdaptiveBPlusTree {
+private:
+    enum class ConcurrencyMode {
+        PESSIMISTIC,    // 悲观并发控制
+        OPTIMISTIC,     // 乐观并发控制
+        MIXED,          // 混合模式
+        LOCK_FREE       // 无锁模式
+    };
+
+    struct WorkloadProfile {
+        double read_ratio;           // 读操作比例
+        double write_ratio;          // 写操作比例
+        double conflict_rate;       // 冲突率
+        double avg_transaction_size; // 平均事务大小
+        size_t concurrent_threads;   // 并发线程数
+    };
+
+    ConcurrencyMode current_mode;
+    WorkloadProfile current_profile;
+    PerformanceMonitor* perf_monitor;
+
+public:
+    void adapt_concurrency_strategy() {
+        WorkloadProfile profile = perf_monitor->get_workload_profile();
+        ConcurrencyMode best_mode = determine_best_mode(profile);
+
+        if (best_mode != current_mode) {
+            switch_mode(best_mode);
+        }
+    }
+
+    bool adaptive_operation(TransactionId txn_id, Operation op, const Key& key, const Value* value) {
+        switch (current_mode) {
+            case ConcurrencyMode::PESSIMISTIC:
+                return execute_pessimistic(txn_id, op, key, value);
+            case ConcurrencyMode::OPTIMISTIC:
+                return execute_optimistic(txn_id, op, key, value);
+            case ConcurrencyMode::MIXED:
+                return execute_mixed(txn_id, op, key, value);
+            case ConcurrencyMode::LOCK_FREE:
+                return execute_lock_free(op, key, value);
+            default:
+                return false;
+        }
+    }
+
+private:
+    ConcurrencyMode determine_best_mode(const WorkloadProfile& profile) {
+        // 基于工作负载特征选择最佳并发模式
+        if (profile.conflict_rate > 0.3) {
+            return ConcurrencyMode::PESSIMISTIC;
+        } else if (profile.conflict_rate < 0.05 && profile.read_ratio > 0.8) {
+            return ConcurrencyMode::LOCK_FREE;
+        } else if (profile.write_ratio < 0.2) {
+            return ConcurrencyMode::OPTIMISTIC;
+        } else {
+            return ConcurrencyMode::MIXED;
+        }
+    }
+
+    void switch_mode(ConcurrencyMode new_mode) {
+        // 安全地切换并发模式
+        lock_guard<mutex> lock(mode_switch_mutex);
+
+        // 完成当前正在执行的操作
+        wait_for_current_operations();
+
+        // 切换模式
+        current_mode = new_mode;
+
+        // 重新初始化并发控制组件
+        reinitialize_concurrency_components(new_mode);
+    }
+
+    bool execute_mixed(TransactionId txn_id, Operation op, const Key& key, const Value* value) {
+        // 混合模式：短事务用乐观控制，长事务用悲观控制
+        if (is_short_transaction(txn_id)) {
+            return execute_optimistic(txn_id, op, key, value);
+        } else {
+            return execute_pessimistic(txn_id, op, key, value);
+        }
+    }
+
+    bool is_short_transaction(TransactionId txn_id) {
+        auto start_time = txn_manager->get_start_time(txn_id);
+        auto current_time = chrono::system_clock::now();
+        auto duration = chrono::duration_cast<chrono::milliseconds>(current_time - start_time);
+        return duration.count() < SHORT_TRANSACTION_THRESHOLD;
+    }
+};
+```
+
+## 实践建议
+
+### 并发控制选择策略
+1. **读密集型**：考虑乐观并发控制或无锁算法
+2. **写密集型**：使用悲观并发控制
+3. **混合负载**：采用自适应策略
+4. **高冲突率**：使用强锁协议
+
+### 性能调优技巧
+1. **监控冲突率**：定期检查事务冲突情况
+2. **调整锁粒度**：根据数据访问模式选择合适的锁粒度
+3. **优化事务边界**：减少事务持有锁的时间
+4. **使用批处理**：批量处理小事务减少开销
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持多版本并发控制的B+树
+2. 设计并实现B+树的无锁查找算法
+3. 实现一个自适应的并发控制系统，能够根据工作负载动态调整策略
+
+### 思考题
+1. 分析不同并发控制算法在各种工作负载下的性能特征
+2. 讨论B+树并发控制中的死锁预防策略
+3. 如何设计一个支持高并发的分布式B+树索引？
+
+## 下节预告
+
+下一讲将开始**查询处理**部分，首先介绍：
+- 排序与聚合算法
+- 外部排序技术
+- 聚合操作优化
+- 查询执行基础
+
+---
+
+**关键概念**：B+树的并发控制需要在正确性和性能之间找到平衡，合理选择并发控制策略对系统性能至关重要！

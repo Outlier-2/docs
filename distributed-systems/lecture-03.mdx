@@ -1,0 +1,1460 @@
+---
+title: "Lecture 3: 主从复制"
+description: "分布式系统中的主从复制机制，一种基本的容错设计模式"
+---
+
+# Lecture 3: 主从复制
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/mit-6.824/lecture-3" title="MIT 6.824 Lecture 3" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 本周内容
+
+- **主从复制原理**：领导者-跟随者模式的基本概念
+- **复制策略**：状态转移 vs 操作转移
+- **故障检测**：心跳机制和超时处理
+- **故障恢复**：领导者选举和状态同步
+- **实践项目**：Lab 2 - 主从复制实现
+
+## 核心概念
+
+### 主从复制概述
+
+主从复制(Primary-Backup Replication)是分布式系统中最基本也是最常用的容错机制之一。它通过在多个节点间复制数据来提供高可用性和故障恢复能力。
+
+#### 基本架构
+
+```text
+客户端请求 → 主节点(Primary)
+               ↙     ↓     ↘
+           从节点1 从节点2 从节点3
+```
+
+**工作流程：**
+1. 所有写操作都发送到主节点
+2. 主节点将数据复制到从节点
+3. 读操作可以从主节点或从节点读取
+4. 主节点故障时，从节点可以接管
+
+#### 设计目标
+
+1. **高可用性**：即使主节点故障，系统仍能提供服务
+2. **数据一致性**：所有节点最终保持数据一致
+3. **故障恢复**：能够从故障中快速恢复
+4. **透明性**：客户端感知不到故障切换
+
+### 复制策略
+
+#### 1. 状态转移复制(State Transfer)
+
+**原理：** 主节点定期将完整的状态快照发送给从节点。
+
+**实现方式：**
+```go
+// 状态转移复制示例
+type StateTransferReplica struct {
+    mu         sync.RWMutex
+    data       map[string]string
+    lastUpdate time.Time
+    isPrimary  bool
+    backupAddr string
+}
+
+func (s *StateTransferReplica) backupState() error {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    // 创建状态快照
+    snapshot := make(map[string]string)
+    for k, v := range s.data {
+        snapshot[k] = v
+    }
+
+    // 序列化状态
+    data, err := json.Marshal(snapshot)
+    if err != nil {
+        return err
+    }
+
+    // 发送到备份节点
+    req, err := http.NewRequest("POST", "http://"+s.backupAddr+"/state", bytes.NewBuffer(data))
+    if err != nil {
+        return err
+    }
+
+    client := &http.Client{Timeout: 5 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("state transfer failed: %s", resp.Status)
+    }
+
+    return nil
+}
+
+// 定期执行状态备份
+func (s *StateTransferReplica) startStateBackup(interval time.Duration) {
+    ticker := time.NewTicker(interval)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        if s.isPrimary {
+            if err := s.backupState(); err != nil {
+                log.Printf("State backup failed: %v", err)
+            }
+        }
+    }
+}
+```
+
+**优点：**
+- 实现简单直观
+- 从节点不需要复杂的状态管理
+- 容易理解故障恢复过程
+
+**缺点：**
+- 网络开销大，特别是状态很大时
+- 复制延迟较高
+- 可能丢失两次备份之间的更新
+
+#### 2. 操作转移复制(Operation Transfer)
+
+**原理：** 主节点将操作序列(如写操作日志)发送给从节点，从节点按相同顺序执行这些操作。
+
+**实现方式：**
+```go
+// 操作转移复制示例
+type OperationTransferReplica struct {
+    mu          sync.RWMutex
+    data        map[string]string
+    operationLog []Operation
+    logIndex    int64
+    isPrimary   bool
+    followers   []string
+}
+
+type Operation struct {
+    Index    int64
+    Type     string // "PUT", "DELETE"
+    Key      string
+    Value    string
+    Timestamp time.Time
+}
+
+func (o *OperationTransferReplica) applyOperation(op Operation) {
+    o.mu.Lock()
+    defer o.mu.Unlock()
+
+    switch op.Type {
+    case "PUT":
+        o.data[op.Key] = op.Value
+    case "DELETE":
+        delete(o.data, op.Key)
+    }
+
+    o.operationLog = append(o.operationLog, op)
+    o.logIndex = op.Index
+}
+
+func (o *OperationTransferReplica) replicateOperation(op Operation) error {
+    var wg sync.WaitGroup
+    var errors []error
+
+    for _, follower := range o.followers {
+        wg.Add(1)
+        go func(addr string) {
+            defer wg.Done()
+
+            err := o.sendOperationToFollower(addr, op)
+            if err != nil {
+                errors = append(errors, err)
+            }
+        }(follower)
+    }
+
+    wg.Wait()
+
+    if len(errors) > 0 {
+        return fmt.Errorf("replication failed for %d followers: %v", len(errors), errors)
+    }
+
+    return nil
+}
+
+func (o *OperationTransferReplica) sendOperationToFollower(addr string, op Operation) error {
+    data, err := json.Marshal(op)
+    if err != nil {
+        return err
+    }
+
+    req, err := http.NewRequest("POST", "http://"+addr+"/operation", bytes.NewBuffer(data))
+    if err != nil {
+        return err
+    }
+
+    client := &http.Client{Timeout: 3 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("operation replication failed: %s", resp.Status)
+    }
+
+    return nil
+}
+
+func (o *OperationTransferReplica) Put(key, value string) error {
+    if !o.isPrimary {
+        return errors.New("not primary")
+    }
+
+    op := Operation{
+        Index:     o.logIndex + 1,
+        Type:      "PUT",
+        Key:       key,
+        Value:     value,
+        Timestamp: time.Now(),
+    }
+
+    // 首先在本地应用操作
+    o.applyOperation(op)
+
+    // 复制到从节点
+    return o.replicateOperation(op)
+}
+```
+
+**优点：**
+- 网络开销较小
+- 复制延迟较低
+- 不会丢失更新
+
+**缺点：**
+- 实现复杂
+- 需要处理操作顺序问题
+- 从节点可能因为执行顺序不同导致状态不一致
+
+### 容错机制
+
+#### 故障检测
+
+**1. 心跳机制**
+
+心跳是检测节点故障的基本机制。主节点定期向从节点发送心跳消息，从节点向主节点发送确认。
+
+```go
+// 心跳机制实现
+type HeartbeatMonitor struct {
+    nodes       map[string]*NodeStatus
+    interval    time.Duration
+    timeout     time.Duration
+    mu          sync.RWMutex
+}
+
+type NodeStatus struct {
+    LastHeartbeat time.Time
+    IsAlive       bool
+    Address       string
+}
+
+func (hm *HeartbeatMonitor) Start() {
+    ticker := time.NewTicker(hm.interval)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        hm.checkNodes()
+    }
+}
+
+func (hm *HeartbeatMonitor) checkNodes() {
+    hm.mu.RLock()
+    defer hm.mu.RUnlock()
+
+    now := time.Now()
+    for addr, status := range hm.nodes {
+        if now.Sub(status.LastHeartbeat) > hm.timeout {
+            if status.IsAlive {
+                log.Printf("Node %s is now considered dead", addr)
+                status.IsAlive = false
+            }
+        }
+    }
+}
+
+func (hm *HeartbeatMonitor) ReceiveHeartbeat(addr string) {
+    hm.mu.Lock()
+    defer hm.mu.Unlock()
+
+    if _, exists := hm.nodes[addr]; !exists {
+        hm.nodes[addr] = &NodeStatus{
+            Address: addr,
+        }
+    }
+
+    status := hm.nodes[addr]
+    status.LastHeartbeat = time.Now()
+    if !status.IsAlive {
+        log.Printf("Node %s is now alive", addr)
+        status.IsAlive = true
+    }
+}
+
+// 心跳发送器
+type HeartbeatSender struct {
+    targetAddr string
+    interval   time.Duration
+    stopChan   chan struct{}
+}
+
+func (hs *HeartbeatSender) Start() {
+    ticker := time.NewTicker(hs.interval)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ticker.C:
+            hs.sendHeartbeat()
+        case <-hs.stopChan:
+            return
+        }
+    }
+}
+
+func (hs *HeartbeatSender) sendHeartbeat() {
+    req, err := http.NewRequest("GET", "http://"+hs.targetAddr+"/heartbeat", nil)
+    if err != nil {
+        log.Printf("Failed to create heartbeat request: %v", err)
+        return
+    }
+
+    client := &http.Client{Timeout: 2 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        log.Printf("Heartbeat failed: %v", err)
+        return
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        log.Printf("Heartbeat returned non-OK status: %s", resp.Status)
+    }
+}
+
+func (hs *HeartbeatSender) Stop() {
+    close(hs.stopChan)
+}
+```
+
+**2. 超时处理**
+
+```go
+// 带超时的操作
+func withTimeout(operation func() error, timeout time.Duration) error {
+    done := make(chan error, 1)
+
+    go func() {
+        done <- operation()
+    }()
+
+    select {
+    case err := <-done:
+        return err
+    case <-time.After(timeout):
+        return fmt.Errorf("operation timed out after %v", timeout)
+    }
+}
+
+// 重试机制
+func withRetry(operation func() error, maxRetries int, delay time.Duration) error {
+    var lastErr error
+
+    for i := 0; i < maxRetries; i++ {
+        err := operation()
+        if err == nil {
+            return nil
+        }
+
+        lastErr = err
+        if i < maxRetries-1 {
+            time.Sleep(delay)
+            delay *= 2 // 指数退避
+        }
+    }
+
+    return fmt.Errorf("operation failed after %d retries: %v", maxRetries, lastErr)
+}
+```
+
+#### 故障恢复
+
+**1. 领导者选举**
+
+当主节点故障时，需要从从节点中选举新的主节点。
+
+```go
+// 简单的领导者选举
+type LeaderElection struct {
+    nodes      []string
+    currentNode string
+    currentLeader string
+    heartbeat  *HeartbeatMonitor
+    mu         sync.RWMutex
+}
+
+func (le *LeaderElection) Start() {
+    // 启动心跳监控
+    go le.heartbeat.Start()
+
+    // 定期检查是否需要选举
+    ticker := time.NewTicker(2 * time.Second)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        if le.shouldStartElection() {
+            le.startElection()
+        }
+    }
+}
+
+func (le *LeaderElection) shouldStartElection() bool {
+    le.mu.RLock()
+    defer le.mu.RUnlock()
+
+    // 如果当前节点是leader，不需要选举
+    if le.currentLeader == le.currentNode {
+        return false
+    }
+
+    // 如果没有leader或者leader已经死亡，需要选举
+    if le.currentLeader == "" || !le.heartbeat.IsAlive(le.currentLeader) {
+        return true
+    }
+
+    return false
+}
+
+func (le *LeaderElection) startElection() {
+    log.Printf("Starting leader election...")
+
+    // 简单的选举策略：选择节点ID最小的存活节点
+    var candidates []string
+    for _, node := range le.nodes {
+        if le.heartbeat.IsAlive(node) {
+            candidates = append(candidates, node)
+        }
+    }
+
+    if len(candidates) == 0 {
+        log.Printf("No alive nodes found")
+        return
+    }
+
+    // 排序选择最小的ID
+    sort.Strings(candidates)
+    newLeader := candidates[0]
+
+    le.mu.Lock()
+    le.currentLeader = newLeader
+    le.mu.Unlock()
+
+    log.Printf("New leader elected: %s", newLeader)
+
+    // 如果当前节点被选为leader，执行leader初始化
+    if newLeader == le.currentNode {
+        le.becomeLeader()
+    }
+}
+
+func (le *LeaderElection) becomeLeader() {
+    log.Printf("This node (%s) is now the leader", le.currentNode)
+
+    // 执行leader特定的初始化
+    // 1. 开始接受写操作
+    // 2. 开始复制数据到从节点
+    // 3. 发送leader通知
+}
+```
+
+**2. 状态同步**
+
+```go
+// 状态同步机制
+type StateSynchronizer struct {
+    primary   string
+    backups   []string
+    data      map[string]string
+    version   int64
+    mu        sync.RWMutex
+}
+
+func (ss *StateSynchronizer) SyncFromPrimary() error {
+    // 从主节点获取最新状态
+    req, err := http.NewRequest("GET", "http://"+ss.primary+"/state", nil)
+    if err != nil {
+        return err
+    }
+
+    client := &http.Client{Timeout: 10 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("failed to get state from primary: %s", resp.Status)
+    }
+
+    var syncData struct {
+        Data    map[string]string `json:"data"`
+        Version int64            `json:"version"`
+    }
+
+    if err := json.NewDecoder(resp.Body).Decode(&syncData); err != nil {
+        return err
+    }
+
+    // 应用同步的数据
+    ss.mu.Lock()
+    defer ss.mu.Unlock()
+
+    if syncData.Version > ss.version {
+        ss.data = syncData.Data
+        ss.version = syncData.Version
+        log.Printf("Synced state from primary, version: %d", ss.version)
+    }
+
+    return nil
+}
+
+// 差异同步（只同步变更的部分）
+func (ss *StateSynchronizer) SyncIncremental() error {
+    req, err := http.NewRequest("GET", "http://"+ss.primary+"/changes?since="+strconv.FormatInt(ss.version, 10), nil)
+    if err != nil {
+        return err
+    }
+
+    client := &http.Client{Timeout: 10 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("failed to get incremental changes: %s", resp.Status)
+    }
+
+    var changes []struct {
+        Key   string `json:"key"`
+        Value string `json:"value"`
+        Op    string `json:"op"` // "PUT" or "DELETE"
+    }
+
+    if err := json.NewDecoder(resp.Body).Decode(&changes); err != nil {
+        return err
+    }
+
+    // 应用增量变更
+    ss.mu.Lock()
+    defer ss.mu.Unlock()
+
+    for _, change := range changes {
+        switch change.Op {
+        case "PUT":
+            ss.data[change.Key] = change.Value
+        case "DELETE":
+            delete(ss.data, change.Key)
+        }
+        ss.version++
+    }
+
+    log.Printf("Applied %d incremental changes, new version: %d", len(changes), ss.version)
+    return nil
+}
+```
+
+### 数据一致性保证
+
+#### 1. 写前日志(Write-Ahead Log)
+
+```go
+// 写前日志实现
+type WAL struct {
+    file    *os.File
+    encoder *json.Encoder
+    decoder *json.Decoder
+    mu      sync.Mutex
+}
+
+type LogEntry struct {
+    Sequence int64
+    Operation string
+    Key      string
+    Value    string
+    Timestamp time.Time
+}
+
+func NewWAL(filename string) (*WAL, error) {
+    file, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
+    if err != nil {
+        return nil, err
+    }
+
+    return &WAL{
+        file:    file,
+        encoder: json.NewEncoder(file),
+        decoder: json.NewDecoder(file),
+    }, nil
+}
+
+func (wal *WAL) Append(op, key, value string) error {
+    wal.mu.Lock()
+    defer wal.mu.Unlock()
+
+    entry := LogEntry{
+        Sequence:  time.Now().UnixNano(),
+        Operation: op,
+        Key:       key,
+        Value:     value,
+        Timestamp: time.Now(),
+    }
+
+    if err := wal.encoder.Encode(entry); err != nil {
+        return err
+    }
+
+    // 确保写入磁盘
+    return wal.file.Sync()
+}
+
+func (wal *WAL) Replay() ([]LogEntry, error) {
+    wal.mu.Lock()
+    defer wal.mu.Unlock()
+
+    // 重置文件指针到开始位置
+    if _, err := wal.file.Seek(0, 0); err != nil {
+        return nil, err
+    }
+
+    var entries []LogEntry
+    for {
+        var entry LogEntry
+        if err := wal.decoder.Decode(&entry); err != nil {
+            if err == io.EOF {
+                break
+            }
+            return nil, err
+        }
+        entries = append(entries, entry)
+    }
+
+    return entries, nil
+}
+```
+
+#### 2. 校验和验证
+
+```go
+// 数据校验和验证
+type ChecksumValidator struct {
+    data map[string][]byte
+    mu   sync.RWMutex
+}
+
+func (cv *ChecksumValidator) Put(key string, value []byte) {
+    cv.mu.Lock()
+    defer cv.mu.Unlock()
+
+    cv.data[key] = value
+}
+
+func (cv *ChecksumValidator) Get(key string) ([]byte, error) {
+    cv.mu.RLock()
+    defer cv.mu.RUnlock()
+
+    value, exists := cv.data[key]
+    if !exists {
+        return nil, fmt.Errorf("key not found: %s", key)
+    }
+
+    // 验证数据完整性
+    if !cv.validateChecksum(key, value) {
+        return nil, fmt.Errorf("data integrity check failed for key: %s", key)
+    }
+
+    return value, nil
+}
+
+func (cv *ChecksumValidator) validateChecksum(key string, data []byte) bool {
+    // 简单的CRC32校验
+    checksum := crc32.ChecksumIEEE(data)
+    storedChecksum := cv.getStoredChecksum(key)
+
+    return checksum == storedChecksum
+}
+
+func (cv *ChecksumValidator) getStoredChecksum(key string) uint32 {
+    // 这里应该从存储中获取之前保存的校验和
+    // 为了示例，我们使用简单的hash
+    cv.mu.RLock()
+    defer cv.mu.RUnlock()
+
+    if data, exists := cv.data[key]; exists {
+        return crc32.ChecksumIEEE(data)
+    }
+    return 0
+}
+```
+
+## 代码示例：完整的主从复制系统
+
+```go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "errors"
+    "fmt"
+    "log"
+    "net/http"
+    "sort"
+    "strconv"
+    "sync"
+    "time"
+)
+
+// 主从复制服务
+type PrimaryBackupService struct {
+    mu          sync.RWMutex
+    data        map[string]string
+    operationLog []Operation
+    logIndex    int64
+    isPrimary   bool
+    primaryAddr string
+    backups     []string
+    heartbeat   *HeartbeatMonitor
+    elector     *LeaderElection
+    wal         *WAL
+    version     int64
+}
+
+type Operation struct {
+    Index     int64     `json:"index"`
+    Type      string    `json:"type"`
+    Key       string    `json:"key"`
+    Value     string    `json:"value"`
+    Timestamp time.Time `json:"timestamp"`
+}
+
+type HeartbeatMonitor struct {
+    nodes    map[string]*NodeStatus
+    interval time.Duration
+    timeout  time.Duration
+    mu       sync.RWMutex
+}
+
+type NodeStatus struct {
+    LastHeartbeat time.Time
+    IsAlive       bool
+    Address       string
+}
+
+func NewPrimaryBackupService(isPrimary bool, primaryAddr string, backups []string) *PrimaryBackupService {
+    wal, err := NewWAL("wal.log")
+    if err != nil {
+        log.Fatalf("Failed to create WAL: %v", err)
+    }
+
+    service := &PrimaryBackupService{
+        data:        make(map[string]string),
+        isPrimary:   isPrimary,
+        primaryAddr: primaryAddr,
+        backups:     backups,
+        version:     0,
+        wal:         wal,
+    }
+
+    // 重放WAL恢复状态
+    if err := service.recoverFromWAL(); err != nil {
+        log.Printf("Warning: failed to recover from WAL: %v", err)
+    }
+
+    // 初始化心跳监控
+    service.heartbeat = &HeartbeatMonitor{
+        nodes:    make(map[string]*NodeStatus),
+        interval: 1 * time.Second,
+        timeout:  5 * time.Second,
+    }
+
+    // 如果是主节点，启动心跳
+    if isPrimary {
+        go service.startHeartbeat()
+    }
+
+    return service
+}
+
+func (s *PrimaryBackupService) recoverFromWAL() error {
+    entries, err := s.wal.Replay()
+    if err != nil {
+        return err
+    }
+
+    for _, entry := range entries {
+        s.applyOperation(entry)
+    }
+
+    return nil
+}
+
+func (s *PrimaryBackupService) applyOperation(op Operation) {
+    switch op.Type {
+    case "PUT":
+        s.data[op.Key] = op.Value
+    case "DELETE":
+        delete(s.data, op.Key)
+    }
+
+    if op.Index > s.logIndex {
+        s.logIndex = op.Index
+        s.version++
+    }
+}
+
+func (s *PrimaryBackupService) Put(key, value string) error {
+    if !s.isPrimary {
+        return errors.New("not primary")
+    }
+
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    op := Operation{
+        Index:     s.logIndex + 1,
+        Type:      "PUT",
+        Key:       key,
+        Value:     value,
+        Timestamp: time.Now(),
+    }
+
+    // 写入WAL
+    if err := s.wal.Append(op.Type, op.Key, op.Value); err != nil {
+        return fmt.Errorf("failed to write WAL: %v", err)
+    }
+
+    // 应用操作
+    s.applyOperation(op)
+
+    // 复制到从节点
+    return s.replicateOperation(op)
+}
+
+func (s *PrimaryBackupService) Get(key string) (string, error) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    value, exists := s.data[key]
+    if !exists {
+        return "", fmt.Errorf("key not found: %s", key)
+    }
+
+    return value, nil
+}
+
+func (s *PrimaryBackupService) replicateOperation(op Operation) error {
+    var wg sync.WaitGroup
+    var errors []error
+
+    for _, backup := range s.backups {
+        wg.Add(1)
+        go func(addr string) {
+            defer wg.Done()
+            err := s.sendOperationToBackup(addr, op)
+            if err != nil {
+                errors = append(errors, err)
+            }
+        }(backup)
+    }
+
+    wg.Wait()
+
+    if len(errors) > 0 {
+        return fmt.Errorf("replication failed for %d backups: %v", len(errors), errors)
+    }
+
+    return nil
+}
+
+func (s *PrimaryBackupService) sendOperationToBackup(addr string, op Operation) error {
+    data, err := json.Marshal(op)
+    if err != nil {
+        return err
+    }
+
+    req, err := http.NewRequest("POST", "http://"+addr+"/operation", bytes.NewBuffer(data))
+    if err != nil {
+        return err
+    }
+
+    client := &http.Client{Timeout: 3 * time.Second}
+    resp, err := client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("operation replication failed: %s", resp.Status)
+    }
+
+    return nil
+}
+
+func (s *PrimaryBackupService) startHeartbeat() {
+    ticker := time.NewTicker(1 * time.Second)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        s.sendHeartbeats()
+    }
+}
+
+func (s *PrimaryBackupService) sendHeartbeats() {
+    for _, backup := range s.backups {
+        go func(addr string) {
+            req, err := http.NewRequest("GET", "http://"+addr+"/heartbeat", nil)
+            if err != nil {
+                return
+            }
+
+            client := &http.Client{Timeout: 2 * time.Second}
+            resp, err := client.Do(req)
+            if err != nil {
+                s.heartbeat.ReceiveHeartbeat(addr)
+                return
+            }
+            defer resp.Body.Close()
+
+            if resp.StatusCode == http.StatusOK {
+                s.heartbeat.ReceiveHeartbeat(addr)
+            }
+        }(backup)
+    }
+}
+
+// HTTP处理函数
+func (s *PrimaryBackupService) HandlePut(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Key   string `json:"key"`
+        Value string `json:"value"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    if err := s.Put(req.Key, req.Value); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusOK)
+}
+
+func (s *PrimaryBackupService) HandleGet(w http.ResponseWriter, r *http.Request) {
+    key := r.URL.Query().Get("key")
+    value, err := s.Get(key)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+
+    json.NewEncoder(w).Encode(map[string]string{"value": value})
+}
+
+func (s *PrimaryBackupService) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
+    w.WriteHeader(http.StatusOK)
+}
+
+func (s *PrimaryBackupService) HandleOperation(w http.ResponseWriter, r *http.Request) {
+    if s.isPrimary {
+        http.Error(w, "primary should not receive operations", http.StatusBadRequest)
+        return
+    }
+
+    var op Operation
+    if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 写入WAL
+    if err := s.wal.Append(op.Type, op.Key, op.Value); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    // 应用操作
+    s.applyOperation(op)
+
+    w.WriteHeader(http.StatusOK)
+}
+
+func (s *PrimaryBackupService) Start(addr string) {
+    http.HandleFunc("/put", s.HandlePut)
+    http.HandleFunc("/get", s.HandleGet)
+    http.HandleFunc("/heartbeat", s.HandleHeartbeat)
+    http.HandleFunc("/operation", s.HandleOperation)
+
+    log.Printf("Starting %s server on %s", map[bool]string{true: "primary", false: "backup"}[s.isPrimary], addr)
+    log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func main() {
+    // 启动主节点
+    primary := NewPrimaryBackupService(true, "localhost:8080", []string{"localhost:8081", "localhost:8082"})
+    go primary.Start(":8080")
+
+    // 等待主节点启动
+    time.Sleep(1 * time.Second)
+
+    // 启动从节点
+    backup1 := NewPrimaryBackupService(false, "localhost:8080", nil)
+    go backup1.Start(":8081")
+
+    backup2 := NewPrimaryBackupService(false, "localhost:8080", nil)
+    go backup2.Start(":8082")
+
+    // 保持程序运行
+    select {}
+}
+```
+
+## 练习题与答案
+
+### 1. 主从复制设计
+
+**问题：** 设计一个支持读写分离的主从复制系统，要求：
+- 写操作只在主节点执行
+- 读操作可以在从节点执行
+- 处理主节点故障切换
+- 保证最终一致性
+
+**答案：**
+```go
+// 读写分离的主从复制系统
+type ReadWriteSeparatedService struct {
+    mu          sync.RWMutex
+    data        map[string]string
+    isPrimary   bool
+    primaryAddr string
+    backups     []string
+    readFromPrimary bool // 是否从主节点读取
+}
+
+func (s *ReadWriteSeparatedService) Get(key string) (string, error) {
+    // 如果配置从主节点读取，或者当前是主节点
+    if s.readFromPrimary || s.isPrimary {
+        return s.getFromPrimary(key)
+    }
+
+    // 从从节点读取，如果有多个从节点，可以随机选择
+    if len(s.backups) > 0 {
+        return s.getFromBackup(key)
+    }
+
+    return s.getFromPrimary(key)
+}
+
+func (s *ReadWriteSeparatedService) getFromPrimary(key string) (string, error) {
+    if !s.isPrimary {
+        // 如果不是主节点，需要向主节点请求
+        return s.requestFromPrimary(key)
+    }
+
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    value, exists := s.data[key]
+    if !exists {
+        return "", fmt.Errorf("key not found: %s", key)
+    }
+
+    return value, nil
+}
+
+func (s *ReadWriteSeparatedService) getFromBackup(key string) (string, error) {
+    // 随机选择一个从节点
+    backupAddr := s.backups[0] // 简化实现，实际应该随机选择
+
+    resp, err := http.Get("http://" + backupAddr + "/get?key=" + key)
+    if err != nil {
+        // 如果从节点失败，回退到主节点
+        return s.getFromPrimary(key)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return s.getFromPrimary(key)
+    }
+
+    var result map[string]string
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return s.getFromPrimary(key)
+    }
+
+    return result["value"], nil
+}
+```
+
+### 2. 故障检测优化
+
+**问题：** 如何优化故障检测机制，减少误判和延迟？
+
+**答案：**
+```go
+// 改进的故障检测机制
+type ImprovedFaultDetector struct {
+    nodes       map[string]*NodeHealth
+    config      DetectorConfig
+    mu          sync.RWMutex
+}
+
+type DetectorConfig struct {
+    HeartbeatInterval   time.Duration
+    FailureThreshold    int
+    SuccessThreshold    int
+    SuspicionTimeout    time.Duration
+    CheckInterval       time.Duration
+}
+
+type NodeHealth struct {
+    Address             string
+    SuccessCount        int
+    FailureCount        int
+    LastSuccess         time.Time
+    LastFailure         time.Time
+    State              NodeState
+    SuspicionLevel      int
+}
+
+type NodeState int
+
+const (
+    Healthy NodeState = iota
+    Suspicious
+    Unhealthy
+)
+
+func (d *ImprovedFaultDetector) checkNodeHealth(addr string) {
+    d.mu.Lock()
+    defer d.mu.Unlock()
+
+    health, exists := d.nodes[addr]
+    if !exists {
+        health = &NodeHealth{
+            Address: addr,
+            State:   Healthy,
+        }
+        d.nodes[addr] = health
+    }
+
+    // 执行健康检查
+    if d.pingNode(addr) {
+        health.SuccessCount++
+        health.FailureCount = 0
+        health.LastSuccess = time.Now()
+
+        // 如果连续成功次数达到阈值，标记为健康
+        if health.SuccessCount >= d.config.SuccessThreshold {
+            health.State = Healthy
+            health.SuspicionLevel = 0
+        }
+    } else {
+        health.FailureCount++
+        health.SuccessCount = 0
+        health.LastFailure = time.Now()
+
+        // 如果连续失败次数达到阈值，标记为可疑
+        if health.FailureCount >= d.config.FailureThreshold {
+            if health.State == Healthy {
+                health.State = Suspicious
+                health.SuspicionLevel = 1
+            } else {
+                health.SuspicionLevel++
+
+                // 如果可疑级别过高，标记为不健康
+                if health.SuspicionLevel > 3 {
+                    health.State = Unhealthy
+                }
+            }
+        }
+    }
+}
+
+func (d *ImprovedFaultDetector) pingNode(addr string) bool {
+    // 实现实际的ping逻辑
+    // 可以使用HTTP请求、TCP连接等
+    return true // 简化实现
+}
+```
+
+### 3. 一致性保证
+
+**问题：** 如何在主从复制中保证强一致性？
+
+**答案：**
+```go
+// 强一致性主从复制
+type StrongConsistencyService struct {
+    mu           sync.RWMutex
+    data         map[string]string
+    isPrimary    bool
+    primaryAddr  string
+    backups      []string
+    quorumSize   int // 需要确认的节点数量
+}
+
+func (s *StrongConsistencyService) Put(key, value string) error {
+    if !s.isPrimary {
+        return errors.New("not primary")
+    }
+
+    s.mu.Lock()
+    defer s.mu.Unlock()
+
+    // 本地写入
+    s.data[key] = value
+
+    // 等待多数节点确认
+    return s.waitForQuorum(key, value)
+}
+
+func (s *StrongConsistencyService) waitForQuorum(key, value string) error {
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+    successCount := 0
+    errors := []error{}
+
+    for _, backup := range s.backups {
+        wg.Add(1)
+        go func(addr string) {
+            defer wg.Done()
+
+            err := s.replicateToBackup(addr, key, value)
+            mu.Lock()
+            defer mu.Unlock()
+
+            if err == nil {
+                successCount++
+            } else {
+                errors = append(errors, err)
+            }
+        }(backup)
+    }
+
+    wg.Wait()
+
+    // 检查是否达到多数
+    if successCount >= s.quorumSize {
+        return nil
+    }
+
+    return fmt.Errorf("failed to achieve quorum: %d/%d successful, errors: %v",
+        successCount, s.quorumSize, errors)
+}
+
+func (s *StrongConsistencyService) Get(key string) (string, error) {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    value, exists := s.data[key]
+    if !exists {
+        return "", fmt.Errorf("key not found: %s", key)
+    }
+
+    return value, nil
+}
+```
+
+### 4. 性能优化
+
+**问题：** 如何优化主从复制的性能？
+
+**答案：**
+```go
+// 性能优化的主从复制
+type OptimizedReplicationService struct {
+    mu                sync.RWMutex
+    data              map[string]string
+    isPrimary         bool
+    primaryAddr       string
+    backups           []string
+    batchChannel      chan BatchOperation
+    batchSize         int
+    batchTimeout      time.Duration
+    compression       bool
+    pipeline          bool
+}
+
+type BatchOperation struct {
+    Operations []Operation
+    Timestamp  time.Time
+}
+
+func (s *OptimizedReplicationService) Start() {
+    // 启动批处理协程
+    go s.batchProcessor()
+
+    // 如果是主节点，启动复制器
+    if s.isPrimary {
+        go s.replicator()
+    }
+}
+
+func (s *OptimizedReplicationService) batchProcessor() {
+    var batch []Operation
+    timer := time.NewTimer(s.batchTimeout)
+    defer timer.Stop()
+
+    for {
+        select {
+        case op := <-s.operationChannel:
+            batch = append(batch, op)
+
+            if len(batch) >= s.batchSize {
+                s.processBatch(batch)
+                batch = nil
+                timer.Reset(s.batchTimeout)
+            }
+
+        case <-timer.C:
+            if len(batch) > 0 {
+                s.processBatch(batch)
+                batch = nil
+            }
+            timer.Reset(s.batchTimeout)
+        }
+    }
+}
+
+func (s *OptimizedReplicationService) processBatch(batch []Operation) {
+    if s.isPrimary {
+        s.batchChannel <- BatchOperation{
+            Operations: batch,
+            Timestamp: time.Now(),
+        }
+    }
+}
+
+func (s *OptimizedReplicationService) replicator() {
+    for batch := range s.batchChannel {
+        // 使用管道化复制
+        s.replicateBatchWithPipeline(batch)
+    }
+}
+
+func (s *OptimizedReplicationService) replicateBatchWithPipeline(batch BatchOperation) {
+    var wg sync.WaitGroup
+
+    for _, backup := range s.backups {
+        wg.Add(1)
+        go func(addr string) {
+            defer wg.Done()
+            s.sendBatchToBackup(addr, batch)
+        }(backup)
+    }
+
+    wg.Wait()
+}
+```
+
+### 5. 思考题
+
+**问题：** 主从复制中的脑裂问题是什么？如何避免？
+
+**答案：**
+脑裂(Split-Brain)是指当网络分区发生时，系统中出现多个主节点，每个主节点都认为自己才是唯一的主节点，导致数据不一致。
+
+**避免方法：**
+1. **Quorum机制**：要求主节点必须得到多数节点的确认才能进行操作
+2. **租约机制**：主节点需要定期续租，租约过期后不能继续作为主节点
+3. ** fencing token**：每个操作都带有递增的token，拒绝处理过期token的操作
+4. **外部协调服务**：使用ZooKeeper等协调服务来确保只有一个主节点
+
+**问题：** 主从复制和主主复制有什么区别？各自的适用场景是什么？
+
+**答案：**
+**主从复制(Primary-Backup)：**
+- 只有一个主节点处理写操作
+- 从节点只读，负责复制数据
+- 优点：实现简单，数据一致性强
+- 缺点：主节点是单点故障，写扩展性差
+- 适用场景：读多写少，对一致性要求高的系统
+
+**主主复制(Multi-Master)：**
+- 多个节点都可以处理写操作
+- 节点间相互复制数据
+- 优点：无单点故障，写扩展性好
+- 缺点：实现复杂，可能出现数据冲突
+- 适用场景：写多，对可用性要求高的系统
+
+## 学习建议
+
+1. **理解基本概念**：掌握主从复制的基本原理和挑战
+2. **实践实现**：动手实现简单的主从复制系统
+3. **考虑边界情况**：处理网络分区、故障恢复等复杂情况
+4. **性能优化**：学习批处理、管道化等优化技术
+5. **阅读经典论文**：了解Google Spanner、Amazon Dynamo等系统
+
+## 扩展资源
+
+### 必读论文
+- [Viewstamped Replication Revisited (2012)](https://pmg.csail.mit.edu/papers/vr-revisited.pdf)
+- [Paxos Made Live - An Engineering Perspective (2007)](https://static.googleusercontent.com/media/research.google.com/en//archive/paxos_made_live.pdf)
+- [Harvest, Yield, and Scalable Tolerant Systems (2009)](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/HY.pdf)
+
+### 学习工具
+- [Raft Consensus Algorithm](https://raft.github.io/)
+- [etcd - Distributed key-value store](https://etcd.io/)
+- [ZooKeeper - Distributed coordination service](https://zookeeper.apache.org/)
+
+### 实践项目
+- [Build a distributed key-value store](https://github.com/etcd-io/etcd)
+- [Implement a replication system](https://github.com/hashicorp/raft)
+- [Study production systems](https://github.com/apache/cassandra)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Lecture 4: 一致性与线性化" icon="arrow-right" href="./lecture-04">
+    学习分布式系统的一致性模型
+  </Card>
+
+  <Card title="Lab 2: 主从复制" icon="code" href="./lab-2">
+    实现主从复制系统
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到分布式系统课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜完成第3讲！你已经掌握了主从复制的基本原理和实现技术。下一讲我们将深入探讨分布式系统的一致性理论，这是理解更复杂共识算法的基础。*

@@ -1,0 +1,334 @@
+---
+title: "Lecture 2: 高级SQL"
+description: "CMU 15-445 Lecture 2 - 复杂查询、窗口函数、递归查询、查询优化"
+---
+
+# Lecture 2: 高级SQL
+
+## 复杂查询技术
+
+### 子查询
+
+#### 相关子查询
+子查询引用外部查询的列，每次执行外部查询时都会重新计算子查询。
+
+```sql
+-- 找出每个系中成绩最高的学生
+SELECT s.name, s.department, s.score
+FROM Students s
+WHERE s.score = (
+    SELECT MAX(s2.score)
+    FROM Students s2
+    WHERE s2.department = s.department
+);
+```
+
+#### 非相关子查询
+子查询独立于外部查询，只执行一次。
+
+```sql
+-- 找出成绩高于平均分的学生
+SELECT name, score
+FROM Students
+WHERE score > (
+    SELECT AVG(score) FROM Students
+);
+```
+
+### 复杂连接操作
+
+#### 自连接
+表与自身进行连接。
+
+```sql
+-- 找出每个学生的导师关系
+SELECT s1.name AS student, s2.name AS mentor
+FROM Students s1
+JOIN Students s2 ON s1.mentor_id = s2.student_id;
+```
+
+#### 多表连接
+连接三个或更多的表。
+
+```sql
+-- 复杂的多表连接查询
+SELECT s.name, c.course_name, p.professor_name, e.grade
+FROM Students s
+JOIN Enrollments e ON s.student_id = e.student_id
+JOIN Courses c ON e.course_id = c.course_id
+JOIN Professors p ON c.professor_id = p.professor_id
+WHERE e.grade >= 'A' AND p.department = 'Computer Science';
+```
+
+## 聚合函数与分组
+
+### 高级聚合操作
+
+#### ROLLUP
+生成分组的小计和总计。
+
+```sql
+-- 按部门和课程统计学生数量，包含小计
+SELECT
+    department,
+    course_name,
+    COUNT(*) as student_count
+FROM Enrollments e
+JOIN Courses c ON e.course_id = c.course_id
+GROUP BY ROLLUP(department, course_name);
+```
+
+#### CUBE
+生成所有可能的分组组合。
+
+```sql
+-- 生成分组的所有组合统计
+SELECT
+    department,
+    course_name,
+    semester,
+    COUNT(*) as student_count,
+    AVG(score) as avg_score
+FROM Enrollments e
+JOIN Courses c ON e.course_id = c.course_id
+GROUP BY CUBE(department, course_name, semester);
+```
+
+#### GROUPING SETS
+指定特定的分组组合。
+
+```sql
+-- 自定义分组组合
+SELECT
+    department,
+    course_name,
+    COUNT(*) as student_count
+FROM Enrollments e
+JOIN Courses c ON e.course_id = c.course_id
+GROUP BY GROUPING SETS (
+    (department, course_name),
+    (department),
+    (course_name),
+    ()
+);
+```
+
+## 窗口函数
+
+### 窗口函数基础
+窗口函数在结果集的窗口上执行计算，不改变行数。
+
+```sql
+-- 基本窗口函数语法
+SELECT
+    name,
+    department,
+    score,
+    ROW_NUMBER() OVER (PARTITION BY department ORDER BY score DESC) as rank_in_dept,
+    RANK() OVER (ORDER BY score DESC) as overall_rank,
+    DENSE_RANK() OVER (ORDER BY score DESC) as dense_rank,
+    AVG(score) OVER (PARTITION BY department) as dept_avg_score
+FROM Students;
+```
+
+### 常用窗口函数
+
+#### 排名函数
+```sql
+-- 不同排名函数的对比
+SELECT
+    name,
+    score,
+    ROW_NUMBER() OVER (ORDER BY score DESC) as row_num,
+    RANK() OVER (ORDER BY score DESC) as rank,
+    DENSE_RANK() OVER (ORDER BY score DESC) as dense_rank,
+    NTILE(4) OVER (ORDER BY score DESC) as quartile
+FROM Students;
+```
+
+#### 分析函数
+```sql
+-- 移动平均和累计统计
+SELECT
+    date,
+    sales_amount,
+    AVG(sales_amount) OVER (
+        ORDER BY date
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) as moving_avg_3day,
+    SUM(sales_amount) OVER (
+        ORDER BY date
+        ROWS UNBOUNDED PRECEDING
+    ) as cumulative_sum
+FROM DailySales;
+```
+
+#### 偏移函数
+```sql
+-- 访问相邻行的数据
+SELECT
+    date,
+    sales_amount,
+    LAG(sales_amount, 1, 0) OVER (ORDER BY date) as prev_day_sales,
+    LEAD(sales_amount, 1, 0) OVER (ORDER BY date) as next_day_sales,
+    sales_amount - LAG(sales_amount, 1, 0) OVER (ORDER BY date) as day_over_day_change
+FROM DailySales;
+```
+
+## 递归查询
+
+### 递归CTE (Common Table Expression)
+递归CTE用于处理层次结构数据，如组织架构、文件系统等。
+
+```sql
+-- 递归查询组织架构
+WITH RECURSIVE EmployeeHierarchy AS (
+    -- 基础查询：选择顶级管理者
+    SELECT
+        employee_id,
+        name,
+        title,
+        manager_id,
+        1 as level
+    FROM Employees
+    WHERE manager_id IS NULL
+
+    UNION ALL
+
+    -- 递归查询：连接下级员工
+    SELECT
+        e.employee_id,
+        e.name,
+        e.title,
+        e.manager_id,
+        eh.level + 1 as level
+    FROM Employees e
+    JOIN EmployeeHierarchy eh ON e.manager_id = eh.employee_id
+)
+SELECT * FROM EmployeeHierarchy ORDER BY level, name;
+```
+
+### 复杂递归应用
+
+#### 图遍历
+```sql
+-- 使用递归查询进行图遍历
+WITH RECURSIVE GraphTraversal AS (
+    -- 起点
+    SELECT node_id, ARRAY[node_id] as path, 0 as distance
+    FROM GraphNodes
+    WHERE node_id = 'A'
+
+    UNION ALL
+
+    -- 递归扩展
+    SELECT
+        g.target_id,
+        gt.path || g.target_id,
+        gt.distance + 1
+    FROM GraphEdges g
+    JOIN GraphTraversal gt ON g.source_id = gt.node_id
+    WHERE NOT g.target_id = ANY(gt.path) -- 避免环
+)
+SELECT * FROM GraphTraversal WHERE distance <= 3;
+```
+
+## 查询优化基础
+
+### 查询执行计划
+
+#### 查看执行计划
+```sql
+-- PostgreSQL查看执行计划
+EXPLAIN ANALYZE
+SELECT s.name, c.course_name, e.grade
+FROM Students s
+JOIN Enrollments e ON s.student_id = e.student_id
+JOIN Courses c ON e.course_id = c.course_id
+WHERE e.grade >= 'A' AND s.department = 'Computer Science';
+```
+
+#### 常见的执行计划操作
+- **Seq Scan**：顺序扫描整张表
+- **Index Scan**：使用索引扫描
+- **Nested Loop**：嵌套循环连接
+- **Hash Join**：哈希连接
+- **Merge Join**：归并连接
+
+### 查询优化技巧
+
+#### 索引优化
+```sql
+-- 创建合适的索引
+CREATE INDEX idx_students_department_score ON Students(department, score DESC);
+CREATE INDEX idx_enrollments_course_grade ON Enrollments(course_id, grade);
+```
+
+#### 查询重写
+```sql
+-- 避免使用子查询，改用连接
+-- 低效的方式
+SELECT name FROM Students
+WHERE department IN (SELECT department FROM Students WHERE score > 90);
+
+-- 更高效的方式
+SELECT DISTINCT s1.name FROM Students s1
+JOIN Students s2 ON s1.department = s2.department AND s2.score > 90;
+```
+
+## 性能调优
+
+### 统计信息
+数据库优化器依赖统计信息来选择最佳执行计划。
+
+```sql
+-- 更新统计信息
+ANALYZE Students;
+ANALYZE Enrollments;
+```
+
+### 查询提示
+某些数据库支持查询提示来影响优化器的决策。
+
+```sql
+-- 使用索引提示（MySQL语法）
+SELECT * FROM Students USE INDEX (idx_department_score)
+WHERE department = 'Computer Science' AND score > 80;
+```
+
+## 实践建议
+
+### 学习方法
+1. **循序渐进**：从基础SQL开始，逐步学习高级特性
+2. **多做练习**：在真实数据集上练习复杂查询
+3. **分析执行计划**：理解查询的执行过程
+4. **性能测试**：比较不同查询方式的性能差异
+
+### 实际应用场景
+- **数据分析**：使用窗口函数进行趋势分析
+- **报表生成**：使用聚合函数生成统计报表
+- **层次数据处理**：使用递归查询处理树形结构
+
+## 课后练习
+
+### 编程题
+1. 编写一个使用窗口函数的查询，计算每个学生的成绩在班级中的百分位排名
+2. 使用递归查询查找组织架构中所有向上级汇报关系的路径
+3. 优化一个复杂的多表连接查询，比较优化前后的性能差异
+
+### 思考题
+1. 解释为什么窗口函数比自连接查询更高效
+2. 讨论递归查询的潜在性能问题和优化策略
+3. 分析查询优化器如何选择连接算法
+
+## 下节预告
+
+下一讲将开始**数据库存储**部分，包括：
+- 磁盘存储基础
+- 文件组织方式
+- 缓冲池管理
+- I/O优化策略
+
+---
+
+**关键概念**：窗口函数、递归查询、执行计划、查询优化是高级SQL的核心，掌握这些技能将大大提升你的数据处理能力！

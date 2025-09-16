@@ -1,0 +1,1416 @@
+---
+title: 'Lecture 14: Query Planning & Optimization'
+description: '深入探讨查询规划与优化技术，包括查询优化器架构、基于成本的优化、物理操作符选择和执行计划生成'
+date: '2024-02-14'
+tags: ['数据库系统', '查询优化', 'CMU 15-445']
+---
+
+# Lecture 14: Query Planning & Optimization
+
+## 概述
+
+查询规划与优化是数据库系统的核心组件之一，负责将用户的SQL查询转换为高效的执行计划。本讲将深入探讨查询优化器的架构、基于成本的优化方法、物理操作符选择策略以及执行计划生成技术。
+
+## 查询优化器架构
+
+### 1. 优化器组件
+
+```cpp
+// 查询优化器主类
+class QueryOptimizer {
+public:
+    // 优化查询
+    std::unique_ptr<ExecutionPlan> Optimize(
+        const Query* query,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        // 1. 逻辑优化
+        auto logical_plan = LogicalOptimization(query, catalog);
+
+        // 2. 物理优化
+        auto physical_plan = PhysicalOptimization(
+            logical_plan.get(),
+            catalog,
+            stats
+        );
+
+        // 3. 生成执行计划
+        return GenerateExecutionPlan(physical_plan.get());
+    }
+
+private:
+    // 逻辑优化阶段
+    std::unique_ptr<LogicalPlan> LogicalOptimization(
+        const Query* query,
+        const Catalog& catalog
+    ) {
+        auto plan = std::make_unique<LogicalPlan>();
+
+        // 谓词下推
+        PredicatePushdown(plan.get());
+
+        // 投影下推
+        ProjectionPushdown(plan.get());
+
+        // 删除重复操作
+        RemoveRedundantOperations(plan.get());
+
+        // 视图合并
+        MergeViews(plan.get());
+
+        return plan;
+    }
+
+    // 物理优化阶段
+    std::unique_ptr<PhysicalPlan> PhysicalOptimization(
+        const LogicalPlan* logical_plan,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        auto plan = std::make_unique<PhysicalPlan>();
+
+        // 基于成本的优化
+        CostBasedOptimization(logical_plan, plan.get(), catalog, stats);
+
+        // 并行化优化
+        ParallelizationOptimization(plan.get(), stats);
+
+        // 索引选择
+        IndexSelection(plan.get(), catalog, stats);
+
+        return plan;
+    }
+};
+```
+
+### 2. 优化器工作流程
+
+```cpp
+// 查询优化工作流程
+class OptimizationPipeline {
+public:
+    std::unique_ptr<ExecutionPlan> Optimize(const Query* query) {
+        // 阶段1: 解析与验证
+        auto parsed_query = ParseAndValidate(query);
+
+        // 阶段2: 逻辑计划生成
+        auto logical_plan = GenerateLogicalPlan(parsed_query);
+
+        // 阶段3: 逻辑重写
+        RewriteLogicalPlan(logical_plan.get());
+
+        // 阶段4: 物理计划生成
+        auto physical_plan = GeneratePhysicalPlan(logical_plan.get());
+
+        // 阶段5: 成本估算与优化
+        OptimizePhysicalPlan(physical_plan.get());
+
+        // 阶段6: 执行计划生成
+        return GenerateExecutionPlan(physical_plan.get());
+    }
+
+private:
+    // 逻辑重写规则
+    void RewriteLogicalPlan(LogicalPlan* plan) {
+        // 应用一系列重写规则
+        ApplyPredicatePushdown(plan);
+        ApplyProjectionPushdown(plan);
+        ApplyJoinReordering(plan);
+        ApplySubqueryUnnesting(plan);
+        ApplyConstantFolding(plan);
+    }
+};
+```
+
+## 基于成本的优化
+
+### 1. 成本模型
+
+```cpp
+// 操作成本模型
+class CostModel {
+public:
+    // 估算操作成本
+    struct OperationCost {
+        double cpu_cost;      // CPU成本
+        double io_cost;       // I/O成本
+        double memory_cost;   // 内存成本
+        double network_cost;  // 网络成本
+        double total_cost;    // 总成本
+    };
+
+    // 估算扫描操作成本
+    OperationCost EstimateScanCost(
+        const TableStatistics* stats,
+        bool use_index,
+        const Index* index = nullptr
+    ) {
+        OperationCost cost;
+
+        if (use_index && index) {
+            // 索引扫描成本
+            double selectivity = EstimateSelectivity(index, stats);
+            double pages_accessed = stats->num_pages * selectivity;
+
+            cost.io_cost = pages_accessed * PAGE_IO_COST;
+            cost.cpu_cost = stats->num_rows * selectivity * ROW_PROCESSING_COST;
+        } else {
+            // 全表扫描成本
+            cost.io_cost = stats->num_pages * PAGE_IO_COST;
+            cost.cpu_cost = stats->num_rows * ROW_PROCESSING_COST;
+        }
+
+        cost.memory_cost = BUFFER_POOL_SIZE;
+        cost.total_cost = cost.io_cost + cost.cpu_cost;
+
+        return cost;
+    }
+
+    // 估算连接操作成本
+    OperationCost EstimateJoinCost(
+        const JoinAlgorithm algo,
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats,
+        double selectivity
+    ) {
+        OperationCost cost;
+
+        switch (algo) {
+            case JoinAlgorithm::NESTED_LOOP:
+                cost = EstimateNestedLoopJoinCost(left_stats, right_stats);
+                break;
+            case JoinAlgorithm::HASH_JOIN:
+                cost = EstimateHashJoinCost(left_stats, right_stats);
+                break;
+            case JoinAlgorithm::MERGE_JOIN:
+                cost = EstimateMergeJoinCost(left_stats, right_stats);
+                break;
+        }
+
+        // 应用选择性
+        cost.cpu_cost *= selectivity;
+        cost.io_cost *= selectivity;
+        cost.total_cost *= selectivity;
+
+        return cost;
+    }
+
+private:
+    // 成本常量
+    static constexpr double PAGE_IO_COST = 1.0;
+    static constexpr double ROW_PROCESSING_COST = 0.01;
+    static constexpr double BUFFER_POOL_SIZE = 1000.0;
+
+    // 嵌套循环连接成本估算
+    OperationCost EstimateNestedLoopJoinCost(
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats
+    ) {
+        OperationCost cost;
+
+        // I/O成本：外部表扫描 + 内部表重复扫描
+        cost.io_cost = (left_stats->num_pages +
+                       left_stats->num_rows * right_stats->num_pages) * PAGE_IO_COST;
+
+        // CPU成本：笛卡尔积
+        cost.cpu_cost = left_stats->num_rows * right_stats->num_rows *
+                       ROW_PROCESSING_COST;
+
+        cost.total_cost = cost.io_cost + cost.cpu_cost;
+        return cost;
+    }
+
+    // 哈希连接成本估算
+    OperationCost EstimateHashJoinCost(
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats
+    ) {
+        OperationCost cost;
+
+        // I/O成本：两个表的全扫描
+        cost.io_cost = (left_stats->num_pages + right_stats->num_pages) * PAGE_IO_COST;
+
+        // CPU成本：构建哈希表 + 探测
+        cost.cpu_cost = (left_stats->num_rows * HASH_BUILD_COST +
+                        right_stats->num_rows * HASH_PROBE_COST +
+                        left_stats->num_rows * right_stats->num_rows * 0.001) *
+                       ROW_PROCESSING_COST;
+
+        cost.memory_cost = left_stats->num_rows * ROW_SIZE;
+        cost.total_cost = cost.io_cost + cost.cpu_cost;
+
+        return cost;
+    }
+
+    // 归并连接成本估算
+    OperationCost EstimateMergeJoinCost(
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats
+    ) {
+        OperationCost cost;
+
+        // I/O成本：两个表的扫描 + 排序（如果需要）
+        cost.io_cost = (left_stats->num_pages + right_stats->num_pages) * PAGE_IO_COST;
+
+        // 如果需要排序，增加排序成本
+        if (!left_stats->is_sorted) {
+            cost.io_cost += left_stats->num_pages * log2(left_stats->num_pages) * PAGE_IO_COST;
+        }
+
+        if (!right_stats->is_sorted) {
+            cost.io_cost += right_stats->num_pages * log2(right_stats->num_pages) * PAGE_IO_COST;
+        }
+
+        // CPU成本：归并操作
+        cost.cpu_cost = (left_stats->num_rows + right_stats->num_rows) *
+                       ROW_PROCESSING_COST;
+
+        cost.total_cost = cost.io_cost + cost.cpu_cost;
+        return cost;
+    }
+
+    static constexpr double HASH_BUILD_COST = 1.5;
+    static constexpr double HASH_PROBE_COST = 1.0;
+    static constexpr double ROW_SIZE = 100.0;  // bytes
+};
+```
+
+### 2. 统计信息管理
+
+```cpp
+// 表统计信息
+class TableStatistics {
+public:
+    // 更新统计信息
+    void UpdateStatistics(const std::vector<Row>& rows) {
+        num_rows = rows.size();
+        num_pages = (num_rows + ROWS_PER_PAGE - 1) / ROWS_PER_PAGE;
+
+        // 计算每列统计信息
+        for (const auto& row : rows) {
+            for (size_t col = 0; col < row.size(); ++col) {
+                UpdateColumnStatistics(col, row[col]);
+            }
+        }
+
+        // 计算相关性信息
+        CalculateCorrelations();
+    }
+
+    // 估算选择性
+    double EstimateSelectivity(
+        const std::string& column,
+        const Value& value,
+        ComparisonOperator op
+    ) const {
+        auto col_stats = column_stats.at(column);
+
+        switch (op) {
+            case ComparisonOperator::EQUAL:
+                return EstimateEqualitySelectivity(col_stats, value);
+            case ComparisonOperator::LESS_THAN:
+                return EstimateRangeSelectivity(col_stats, value, true);
+            case ComparisonOperator::GREATER_THAN:
+                return EstimateRangeSelectivity(col_stats, value, false);
+            case ComparisonOperator::BETWEEN:
+                // 需要额外参数处理
+                return 0.1;  // 简化实现
+            default:
+                return 0.1;  // 默认选择性
+        }
+    }
+
+private:
+    // 列统计信息
+    struct ColumnStatistics {
+        Value min_value;
+        Value max_value;
+        double avg_value;
+        double std_dev;
+        int num_distinct;
+        int num_null;
+        std::map<Value, int> histogram;
+    };
+
+    // 更新列统计信息
+    void UpdateColumnStatistics(int column, const Value& value) {
+        if (column >= column_stats.size()) {
+            column_stats.resize(column + 1);
+        }
+
+        auto& stats = column_stats[column];
+
+        // 更新最值
+        if (stats.min_value.IsNull() || value < stats.min_value) {
+            stats.min_value = value;
+        }
+        if (stats.max_value.IsNull() || value > stats.max_value) {
+            stats.max_value = value;
+        }
+
+        // 更新直方图
+        stats.histogram[value]++;
+        stats.num_distinct = stats.histogram.size();
+
+        // 处理空值
+        if (value.IsNull()) {
+            stats.num_null++;
+        }
+    }
+
+    // 计算相关性
+    void CalculateCorrelations() {
+        // 计算列间相关性
+        for (size_t i = 0; i < column_stats.size(); ++i) {
+            for (size_t j = i + 1; j < column_stats.size(); ++j) {
+                double corr = CalculateCorrelation(i, j);
+                correlations[{i, j}] = corr;
+            }
+        }
+    }
+
+    // 估算等值选择性
+    double EstimateEqualitySelectivity(
+        const ColumnStatistics& stats,
+        const Value& value
+    ) const {
+        if (value.IsNull()) {
+            return stats.num_null / static_cast<double>(num_rows);
+        }
+
+        auto it = stats.histogram.find(value);
+        if (it != stats.histogram.end()) {
+            return it->second / static_cast<double>(num_rows);
+        }
+
+        // 值不在直方图中，估算为 1/ndv
+        return 1.0 / stats.num_distinct;
+    }
+
+    // 估算范围选择性
+    double EstimateRangeSelectivity(
+        const ColumnStatistics& stats,
+        const Value& value,
+        bool is_less_than
+    ) const {
+        if (stats.num_distinct == 0) return 1.0;
+
+        // 使用均匀分布假设
+        double value_range = (stats.max_value.GetDouble() - stats.min_value.GetDouble());
+        if (value_range == 0) return 1.0;
+
+        double position = (value.GetDouble() - stats.min_value.GetDouble()) / value_range;
+        position = std::max(0.0, std::min(1.0, position));
+
+        return is_less_than ? position : (1.0 - position);
+    }
+
+    // 计算相关性
+    double CalculateCorrelation(int col1, int col2) {
+        // 简化的相关性计算
+        return 0.0;  // 实际实现需要更复杂的计算
+    }
+
+    std::vector<ColumnStatistics> column_stats;
+    std::map<std::pair<int, int>, double> correlations;
+    int num_rows = 0;
+    int num_pages = 0;
+    static constexpr int ROWS_PER_PAGE = 100;
+};
+```
+
+## 物理操作符选择
+
+### 1. 连接算法选择
+
+```cpp
+// 连接算法选择器
+class JoinAlgorithmSelector {
+public:
+    // 选择最佳连接算法
+    JoinAlgorithm SelectBestAlgorithm(
+        const JoinNode* join_node,
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats,
+        const CostModel& cost_model
+    ) {
+        // 估算每种算法的成本
+        auto nl_cost = cost_model.EstimateJoinCost(
+            JoinAlgorithm::NESTED_LOOP,
+            left_stats,
+            right_stats,
+            join_node->selectivity
+        );
+
+        auto hash_cost = cost_model.EstimateJoinCost(
+            JoinAlgorithm::HASH_JOIN,
+            left_stats,
+            right_stats,
+            join_node->selectivity
+        );
+
+        auto merge_cost = cost_model.EstimateJoinCost(
+            JoinAlgorithm::MERGE_JOIN,
+            left_stats,
+            right_stats,
+            join_node->selectivity
+        );
+
+        // 选择成本最低的算法
+        double min_cost = std::min({nl_cost.total_cost, hash_cost.total_cost, merge_cost.total_cost});
+
+        if (min_cost == nl_cost.total_cost) {
+            return JoinAlgorithm::NESTED_LOOP;
+        } else if (min_cost == hash_cost.total_cost) {
+            return JoinAlgorithm::HASH_JOIN;
+        } else {
+            return JoinAlgorithm::MERGE_JOIN;
+        }
+    }
+
+    // 考虑内存限制的算法选择
+    JoinAlgorithm SelectWithMemoryConstraints(
+        const JoinNode* join_node,
+        const TableStatistics* left_stats,
+        const TableStatistics* right_stats,
+        double available_memory
+    ) {
+        // 检查哈希连接的内存需求
+        double hash_memory = EstimateHashJoinMemory(left_stats);
+
+        if (hash_memory <= available_memory) {
+            // 内存足够，考虑哈希连接
+            return SelectBestAlgorithm(join_node, left_stats, right_stats, cost_model_);
+        } else {
+            // 内存不足，排除哈希连接
+            auto nl_cost = cost_model_.EstimateJoinCost(
+                JoinAlgorithm::NESTED_LOOP,
+                left_stats,
+                right_stats,
+                join_node->selectivity
+            );
+
+            auto merge_cost = cost_model_.EstimateJoinCost(
+                JoinAlgorithm::MERGE_JOIN,
+                left_stats,
+                right_stats,
+                join_node->selectivity
+            );
+
+            return nl_cost.total_cost < merge_cost.total_cost ?
+                   JoinAlgorithm::NESTED_LOOP :
+                   JoinAlgorithm::MERGE_JOIN;
+        }
+    }
+
+private:
+    CostModel cost_model_;
+
+    // 估算哈希连接内存需求
+    double EstimateHashJoinMemory(const TableStatistics* stats) {
+        return stats->num_rows * 1.5 * 100;  // 1.5倍数据大小，100字节每行
+    }
+};
+```
+
+### 2. 索引选择策略
+
+```cpp
+// 索引选择器
+class IndexSelector {
+public:
+    // 选择最佳索引
+    const Index* SelectBestIndex(
+        const std::string& table_name,
+        const std::vector<Predicate>& predicates,
+        const Catalog& catalog,
+        const TableStatistics* stats
+    ) {
+        auto indexes = catalog.GetTableIndexes(table_name);
+        if (indexes.empty()) {
+            return nullptr;
+        }
+
+        const Index* best_index = nullptr;
+        double best_score = -1.0;
+
+        for (const auto* index : indexes) {
+            double score = CalculateIndexScore(index, predicates, stats);
+            if (score > best_score) {
+                best_score = score;
+                best_index = index;
+            }
+        }
+
+        return best_score > 0.0 ? best_index : nullptr;
+    }
+
+    // 计算索引得分
+    double CalculateIndexScore(
+        const Index* index,
+        const std::vector<Predicate>& predicates,
+        const TableStatistics* stats
+    ) {
+        double score = 0.0;
+        int matched_columns = 0;
+
+        // 检查索引列匹配
+        for (const auto& pred : predicates) {
+            if (CanUseIndexForPredicate(index, pred)) {
+                matched_columns++;
+                score += CalculatePredicateBenefit(pred, stats);
+            }
+        }
+
+        // 考虑索引覆盖度
+        double coverage = CalculateIndexCoverage(index, predicates);
+        score += coverage * 10.0;
+
+        // 考虑索引选择性
+        if (matched_columns > 0) {
+            double selectivity = CalculateIndexSelectivity(index, predicates, stats);
+            score += (1.0 - selectivity) * 20.0;
+        }
+
+        return score;
+    }
+
+private:
+    // 检查索引是否可用于谓词
+    bool CanUseIndexForPredicate(
+        const Index* index,
+        const Predicate& predicate
+    ) {
+        // 检查谓词列是否在索引中
+        if (!index->ContainsColumn(predicate.column)) {
+            return false;
+        }
+
+        // 检查操作符类型
+        switch (predicate.op) {
+            case ComparisonOperator::EQUAL:
+            case ComparisonOperator::LESS_THAN:
+            case ComparisonOperator::GREATER_THAN:
+            case ComparisonOperator::BETWEEN:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // 计算谓词收益
+    double CalculatePredicateBenefit(
+        const Predicate& predicate,
+        const TableStatistics* stats
+    ) {
+        double selectivity = stats->EstimateSelectivity(
+            predicate.column,
+            predicate.value,
+            predicate.op
+        );
+
+        // 选择性越低，收益越高
+        return (1.0 - selectivity) * 10.0;
+    }
+
+    // 计算索引覆盖度
+    double CalculateIndexCoverage(
+        const Index* index,
+        const std::vector<Predicate>& predicates
+    ) {
+        int covered_predicates = 0;
+        for (const auto& pred : predicates) {
+            if (CanUseIndexForPredicate(index, pred)) {
+                covered_predicates++;
+            }
+        }
+
+        return predicates.empty() ? 0.0 :
+               static_cast<double>(covered_predicates) / predicates.size();
+    }
+
+    // 计算索引选择性
+    double CalculateIndexSelectivity(
+        const Index* index,
+        const std::vector<Predicate>& predicates,
+        const TableStatistics* stats
+    ) {
+        double combined_selectivity = 1.0;
+
+        for (const auto& pred : predicates) {
+            if (CanUseIndexForPredicate(index, pred)) {
+                double selectivity = stats->EstimateSelectivity(
+                    pred.column,
+                    pred.value,
+                    pred.op
+                );
+                combined_selectivity *= selectivity;
+            }
+        }
+
+        return combined_selectivity;
+    }
+};
+```
+
+## 执行计划生成
+
+### 1. 计划生成器
+
+```cpp
+// 执行计划生成器
+class ExecutionPlanGenerator {
+public:
+    // 生成执行计划
+    std::unique_ptr<ExecutionPlan> GeneratePlan(
+        const PhysicalPlan* physical_plan,
+        const Catalog& catalog
+    ) {
+        auto plan = std::make_unique<ExecutionPlan>();
+
+        // 生成执行节点
+        auto root_node = GenerateExecutionNode(physical_plan->GetRoot(), catalog);
+        plan->SetRoot(root_node);
+
+        // 优化内存分配
+        OptimizeMemoryAllocation(plan.get());
+
+        // 生成并行执行策略
+        GenerateParallelizationStrategy(plan.get());
+
+        // 预编译表达式
+        PrecompileExpressions(plan.get());
+
+        return plan;
+    }
+
+private:
+    // 生成执行节点
+    std::unique_ptr<ExecutionNode> GenerateExecutionNode(
+        const PhysicalNode* physical_node,
+        const Catalog& catalog
+    ) {
+        switch (physical_node->GetType()) {
+            case PhysicalNodeType::SCAN:
+                return GenerateScanNode(
+                    static_cast<const ScanNode*>(physical_node),
+                    catalog
+                );
+            case PhysicalNodeType::FILTER:
+                return GenerateFilterNode(
+                    static_cast<const FilterNode*>(physical_node),
+                    catalog
+                );
+            case PhysicalNodeType::JOIN:
+                return GenerateJoinNode(
+                    static_cast<const JoinNode*>(physical_node),
+                    catalog
+                );
+            case PhysicalNodeType::AGGREGATE:
+                return GenerateAggregateNode(
+                    static_cast<const AggregateNode*>(physical_node),
+                    catalog
+                );
+            case PhysicalNodeType::SORT:
+                return GenerateSortNode(
+                    static_cast<const SortNode*>(physical_node),
+                    catalog
+                );
+            default:
+                throw std::runtime_error("Unsupported physical node type");
+        }
+    }
+
+    // 生成扫描节点
+    std::unique_ptr<ExecutionNode> GenerateScanNode(
+        const ScanNode* scan_node,
+        const Catalog& catalog
+    ) {
+        auto scan = std::make_unique<ScanExecutionNode>();
+
+        scan->table_name = scan_node->table_name;
+        scan->columns = scan_node->columns;
+
+        // 设置索引使用
+        if (scan_node->use_index) {
+            scan->index = catalog.GetIndex(scan_node->index_name);
+            scan->index_condition = scan_node->index_condition;
+        }
+
+        // 设置并行扫描
+        scan->parallel_degree = CalculateParallelDegree(scan_node);
+        scan->scan_strategy = DetermineScanStrategy(scan_node);
+
+        return scan;
+    }
+
+    // 生成连接节点
+    std::unique_ptr<ExecutionNode> GenerateJoinNode(
+        const JoinNode* join_node,
+        const Catalog& catalog
+    ) {
+        auto join = std::make_unique<JoinExecutionNode>();
+
+        join->join_type = join_node->join_type;
+        join->join_condition = join_node->join_condition;
+        join->algorithm = join_node->algorithm;
+
+        // 递归生成子节点
+        join->left_child = GenerateExecutionNode(join_node->left_child, catalog);
+        join->right_child = GenerateExecutionNode(join_node->right_child, catalog);
+
+        // 设置并行执行
+        join->parallel_strategy = DetermineJoinParallelStrategy(join_node);
+        join->memory_budget = CalculateJoinMemoryBudget(join_node);
+
+        return join;
+    }
+
+    // 计算并行度
+    int CalculateParallelDegree(const PhysicalNode* node) {
+        // 基于数据大小和系统资源计算并行度
+        double data_size = EstimateDataSize(node);
+        int cpu_cores = GetAvailableCPUCores();
+
+        // 简化的并行度计算
+        return std::min(static_cast<int>(data_size / (1024 * 1024)), cpu_cores);
+    }
+
+    // 确定扫描策略
+    ScanStrategy DetermineScanStrategy(const ScanNode* scan_node) {
+        if (scan_node->use_index) {
+            return ScanStrategy::INDEX_SCAN;
+        } else if (scan_node->parallel_degree > 1) {
+            return ScanStrategy::PARALLEL_SCAN;
+        } else {
+            return ScanStrategy::SEQUENTIAL_SCAN;
+        }
+    }
+
+    // 确定连接并行策略
+    JoinParallelStrategy DetermineJoinParallelStrategy(const JoinNode* join_node) {
+        switch (join_node->algorithm) {
+            case JoinAlgorithm::HASH_JOIN:
+                return JoinParallelStrategy::PARTITIONED_HASH_JOIN;
+            case JoinAlgorithm::MERGE_JOIN:
+                return JoinParallelStrategy::PARALLEL_MERGE_JOIN;
+            case JoinAlgorithm::NESTED_LOOP:
+                return JoinParallelStrategy::BROADCAST_JOIN;
+            default:
+                return JoinParallelStrategy::SEQUENTIAL;
+        }
+    }
+
+    // 计算连接内存预算
+    double CalculateJoinMemoryBudget(const JoinNode* join_node) {
+        // 基于连接算法和数据大小计算内存需求
+        switch (join_node->algorithm) {
+            case JoinAlgorithm::HASH_JOIN:
+                return EstimateHashJoinMemoryUsage(join_node);
+            case JoinAlgorithm::MERGE_JOIN:
+                return EstimateMergeJoinMemoryUsage(join_node);
+            case JoinAlgorithm::NESTED_LOOP:
+                return EstimateNestedLoopMemoryUsage(join_node);
+            default:
+                return 0.0;
+        }
+    }
+};
+```
+
+### 2. 计划优化
+
+```cpp
+// 执行计划优化器
+class ExecutionPlanOptimizer {
+public:
+    // 优化执行计划
+    void Optimize(ExecutionPlan* plan) {
+        // 内存布局优化
+        OptimizeMemoryLayout(plan);
+
+        // 算子融合优化
+        OptimizeOperatorFusion(plan);
+
+        // 向量化优化
+        OptimizeVectorization(plan);
+
+        // 并行化优化
+        OptimizeParallelization(plan);
+
+        // 缓存优化
+        OptimizeCaching(plan);
+    }
+
+private:
+    // 内存布局优化
+    void OptimizeMemoryLayout(ExecutionPlan* plan) {
+        // 优化元组布局
+        OptimizeTupleLayout(plan->GetRoot());
+
+        // 优化中间结果存储
+        OptimizeIntermediateStorage(plan);
+
+        // 预分配内存池
+        PreallocateMemoryPools(plan);
+    }
+
+    // 算子融合优化
+    void OptimizeOperatorFusion(ExecutionPlan* plan) {
+        // 融合相邻的过滤操作
+        FuseFilterOperators(plan->GetRoot());
+
+        // 融合投影操作
+        FuseProjectionOperators(plan->GetRoot());
+
+        // 融合聚合操作
+        FuseAggregateOperators(plan->GetRoot());
+    }
+
+    // 向量化优化
+    void OptimizeVectorization(ExecutionPlan* plan) {
+        // 标记可向量化的操作
+        MarkVectorizableOperators(plan->GetRoot());
+
+        // 设置批处理大小
+        SetBatchProcessingSize(plan);
+
+        // 优化SIMD指令使用
+        OptimizeSIMDUsage(plan);
+    }
+
+    // 并行化优化
+    void OptimizeParallelization(ExecutionPlan* plan) {
+        // 优化工作窃取
+        OptimizeWorkStealing(plan);
+
+        // 优化任务调度
+        OptimizeTaskScheduling(plan);
+
+        // 优化数据分区
+        OptimizeDataPartitioning(plan);
+    }
+
+    // 缓存优化
+    void OptimizeCaching(ExecutionPlan* plan) {
+        // 识别可缓存的结果
+        IdentifyCacheableResults(plan);
+
+        // 设置缓存策略
+        SetupCachingStrategy(plan);
+
+        // 优化缓存失效
+        OptimizeCacheInvalidation(plan);
+    }
+
+    // 优化元组布局
+    void OptimizeTupleLayout(ExecutionNode* node) {
+        if (!node) return;
+
+        // 递归处理子节点
+        for (auto& child : node->children) {
+            OptimizeTupleLayout(child.get());
+        }
+
+        // 根据节点类型优化布局
+        switch (node->type) {
+            case ExecutionNodeType::SCAN:
+                OptimizeScanTupleLayout(static_cast<ScanExecutionNode*>(node));
+                break;
+            case ExecutionNodeType::JOIN:
+                OptimizeJoinTupleLayout(static_cast<JoinExecutionNode*>(node));
+                break;
+            case ExecutionNodeType::AGGREGATE:
+                OptimizeAggregateTupleLayout(static_cast<AggregateExecutionNode*>(node));
+                break;
+        }
+    }
+
+    // 优化扫描元组布局
+    void OptimizeScanTupleLayout(ScanExecutionNode* scan_node) {
+        // 列式存储优化
+        if (scan_node->table_storage == StorageFormat::COLUMNAR) {
+            scan_node->tuple_layout = TupleLayout::COMPACT_COLUMNAR;
+        } else {
+            scan_node->tuple_layout = TupleLayout::ROW_MAJOR;
+        }
+
+        // 设置读取模式
+        scan_node->access_pattern = DetermineAccessPattern(scan_node);
+    }
+
+    // 优化连接元组布局
+    void OptimizeJoinTupleLayout(JoinExecutionNode* join_node) {
+        // 基于连接算法优化布局
+        switch (join_node->algorithm) {
+            case JoinAlgorithm::HASH_JOIN:
+                join_node->build_side_layout = TupleLayout::HASH_OPTIMIZED;
+                join_node->probe_side_layout = TupleLayout::SEQUENTIAL;
+                break;
+            case JoinAlgorithm::MERGE_JOIN:
+                join_node->build_side_layout = TupleLayout::SORTED;
+                join_node->probe_side_layout = TupleLayout::SORTED;
+                break;
+            case JoinAlgorithm::NESTED_LOOP:
+                join_node->build_side_layout = TupleLayout::ROW_MAJOR;
+                join_node->probe_side_layout = TupleLayout::ROW_MAJOR;
+                break;
+        }
+    }
+};
+```
+
+## 查询优化实战
+
+### 1. 复杂查询优化示例
+
+```cpp
+// 复杂查询优化示例
+class ComplexQueryOptimization {
+public:
+    // 优化星型连接查询
+    std::unique_ptr<ExecutionPlan> OptimizeStarJoin(
+        const Query* query,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        // 识别星型模式
+        auto star_schema = IdentifyStarSchema(query, catalog);
+
+        // 生成执行计划
+        auto plan = GenerateStarJoinPlan(star_schema, catalog, stats);
+
+        // 应用星型连接优化
+        ApplyStarJoinOptimizations(plan.get(), star_schema);
+
+        return plan;
+    }
+
+    // 优化子查询
+    std::unique_ptr<ExecutionPlan> OptimizeSubquery(
+        const Query* query,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        // 解嵌子查询
+        auto unnested_query = UnnestSubqueries(query);
+
+        // 重写为连接操作
+        auto rewritten_query = RewriteAsJoins(unnested_query);
+
+        // 优化执行计划
+        auto plan = OptimizeQuery(rewritten_query, catalog, stats);
+
+        return plan;
+    }
+
+    // 优化分组聚合
+    std::unique_ptr<ExecutionPlan> OptimizeGroupByAggregation(
+        const Query* query,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        // 分析分组模式
+        auto groupby_pattern = AnalyzeGroupByPattern(query);
+
+        // 选择聚合策略
+        auto strategy = SelectAggregationStrategy(groupby_pattern, stats);
+
+        // 生成聚合计划
+        auto plan = GenerateAggregationPlan(query, strategy, catalog, stats);
+
+        // 应用聚合优化
+        ApplyAggregationOptimizations(plan.get(), strategy);
+
+        return plan;
+    }
+
+private:
+    // 识别星型模式
+    StarSchema IdentifyStarSchema(const Query* query, const Catalog& catalog) {
+        StarSchema schema;
+
+        // 识别事实表
+        schema.fact_table = IdentifyFactTable(query, catalog);
+
+        // 识别维度表
+        auto joins = ExtractJoins(query);
+        for (const auto& join : joins) {
+            if (IsDimensionTable(join.right_table, catalog)) {
+                schema.dimension_tables.push_back(join.right_table);
+            }
+        }
+
+        return schema;
+    }
+
+    // 生成星型连接计划
+    std::unique_ptr<ExecutionPlan> GenerateStarJoinPlan(
+        const StarSchema& schema,
+        const Catalog& catalog,
+        const StatisticsManager* stats
+    ) {
+        auto plan = std::make_unique<ExecutionPlan>();
+
+        // 使用事实表作为驱动表
+        auto fact_scan = std::make_unique<ScanExecutionNode>();
+        fact_scan->table_name = schema.fact_table;
+        fact_scan->parallel_degree = CalculateFactTableParallelDegree(schema.fact_table, stats);
+
+        // 并行连接维度表
+        std::vector<std::unique_ptr<ExecutionNode>> dimension_joins;
+        for (const auto& dim_table : schema.dimension_tables) {
+            auto dim_join = CreateDimensionJoin(fact_scan.get(), dim_table, catalog, stats);
+            dimension_joins.push_back(std::move(dim_join));
+        }
+
+        // 设置执行计划
+        plan->SetRoot(BuildJoinTree(fact_scan.release(), dimension_joins));
+
+        return plan;
+    }
+
+    // 应用星型连接优化
+    void ApplyStarJoinOptimizations(
+        ExecutionPlan* plan,
+        const StarSchema& schema
+    ) {
+        // 应用星型连接重排序
+        ReorderStarJoins(plan, schema);
+
+        // 应用位图索引优化
+        ApplyBitmapIndexOptimizations(plan);
+
+        // 应用预聚合优化
+        ApplyPreAggregationOptimizations(plan);
+
+        // 应用并行星型连接优化
+        ApplyParallelStarJoinOptimizations(plan);
+    }
+
+    // 重排序星型连接
+    void ReorderStarJoins(ExecutionPlan* plan, const StarSchema& schema) {
+        // 基于表大小和选择性重排序连接
+        auto join_order = CalculateOptimalJoinOrder(schema);
+
+        // 重新排列执行计划中的连接节点
+        ReorderJoinNodes(plan->GetRoot(), join_order);
+    }
+
+    // 应用位图索引优化
+    void ApplyBitmapIndexOptimizations(ExecutionPlan* plan) {
+        // 识别适合位图索引的列
+        auto bitmap_columns = IdentifyBitmapIndexColumns(plan);
+
+        // 应用位图索引扫描
+        ApplyBitmapIndexScans(plan->GetRoot(), bitmap_columns);
+
+        // 优化位图操作
+        OptimizeBitmapOperations(plan);
+    }
+
+    // 应用预聚合优化
+    void ApplyPreAggregationOptimizations(ExecutionPlan* plan) {
+        // 识别可预聚合的列
+        auto preagg_columns = IdentifyPreAggregationColumns(plan);
+
+        // 添加预聚合节点
+        AddPreAggregationNodes(plan->GetRoot(), preagg_columns);
+
+        // 优化聚合传播
+        OptimizeAggregationPropagation(plan);
+    }
+
+    // 应用并行星型连接优化
+    void ApplyParallelStarJoinOptimizations(ExecutionPlan* plan) {
+        // 设置事实表并行扫描
+        SetupFactTableParallelScan(plan);
+
+        // 设置维度表广播连接
+        SetupDimensionTableBroadcastJoins(plan);
+
+        // 优化内存使用
+        OptimizeMemoryUsageForStarJoin(plan);
+    }
+};
+```
+
+### 2. 性能监控与调优
+
+```cpp
+// 查询性能监控器
+class QueryPerformanceMonitor {
+public:
+    // 监控查询执行
+    QueryExecutionStats MonitorQueryExecution(
+        const ExecutionPlan* plan,
+        const Query* query
+    ) {
+        QueryExecutionStats stats;
+
+        // 开始监控
+        StartMonitoring(plan);
+
+        // 执行查询
+        ExecuteQuery(plan);
+
+        // 收集统计信息
+        CollectExecutionStats(plan, &stats);
+
+        // 分析性能
+        AnalyzePerformance(&stats);
+
+        // 停止监控
+        StopMonitoring();
+
+        return stats;
+    }
+
+    // 生成优化建议
+    std::vector<OptimizationSuggestion> GenerateOptimizationSuggestions(
+        const QueryExecutionStats& stats
+    ) {
+        std::vector<OptimizationSuggestion> suggestions;
+
+        // 分析瓶颈
+        auto bottlenecks = IdentifyBottlenecks(stats);
+
+        // 生成建议
+        for (const auto& bottleneck : bottlenecks) {
+            auto suggestion = GenerateSuggestionForBottleneck(bottleneck);
+            suggestions.push_back(suggestion);
+        }
+
+        return suggestions;
+    }
+
+private:
+    // 查询执行统计信息
+    struct QueryExecutionStats {
+        double total_time;
+        double cpu_time;
+        double io_time;
+        double memory_usage;
+        std::map<std::string, double> operator_times;
+        std::map<std::string, int> row_counts;
+        std::vector<PerformanceBottleneck> bottlenecks;
+    };
+
+    // 性能瓶颈
+    struct PerformanceBottleneck {
+        std::string operator_name;
+        BottleneckType type;
+        double severity;
+        std::string description;
+    };
+
+    // 优化建议
+    struct OptimizationSuggestion {
+        std::string description;
+        SuggestionType type;
+        double expected_improvement;
+        std::string implementation_hint;
+    };
+
+    // 监控执行
+    void StartMonitoring(const ExecutionPlan* plan) {
+        // 设置性能计数器
+        SetupPerformanceCounters(plan);
+
+        // 初始化监控
+        InitializeMonitoring();
+
+        // 开始计时
+        StartTimer();
+    }
+
+    // 收集执行统计信息
+    void CollectExecutionStats(const ExecutionPlan* plan, QueryExecutionStats* stats) {
+        // 收集时间统计
+        CollectTimeStatistics(plan, stats);
+
+        // 收集资源使用统计
+        CollectResourceStatistics(plan, stats);
+
+        // 收集操作符统计
+        CollectOperatorStatistics(plan, stats);
+
+        // 计算总体统计
+        CalculateOverallStatistics(stats);
+    }
+
+    // 识别瓶颈
+    std::vector<PerformanceBottleneck> IdentifyBottlenecks(
+        const QueryExecutionStats& stats
+    ) {
+        std::vector<PerformanceBottleneck> bottlenecks;
+
+        // 识别CPU瓶颈
+        if (stats.cpu_time / stats.total_time > 0.8) {
+            bottlenecks.push_back({
+                "CPU",
+                BottleneckType::CPU,
+                stats.cpu_time / stats.total_time,
+                "High CPU usage detected"
+            });
+        }
+
+        // 识别I/O瓶颈
+        if (stats.io_time / stats.total_time > 0.6) {
+            bottlenecks.push_back({
+                "I/O",
+                BottleneckType::IO,
+                stats.io_time / stats.total_time,
+                "High I/O usage detected"
+            });
+        }
+
+        // 识别内存瓶颈
+        if (stats.memory_usage > GetAvailableMemory() * 0.8) {
+            bottlenecks.push_back({
+                "Memory",
+                BottleneckType::MEMORY,
+                stats.memory_usage / GetAvailableMemory(),
+                "High memory usage detected"
+            });
+        }
+
+        // 识别操作符瓶颈
+        for (const auto& [op_name, op_time] : stats.operator_times) {
+            if (op_time / stats.total_time > 0.5) {
+                bottlenecks.push_back({
+                    op_name,
+                    BottleneckType::OPERATOR,
+                    op_time / stats.total_time,
+                    "Operator " + op_name + " is taking too long"
+                });
+            }
+        }
+
+        return bottlenecks;
+    }
+
+    // 生成优化建议
+    OptimizationSuggestion GenerateSuggestionForBottleneck(
+        const PerformanceBottleneck& bottleneck
+    ) {
+        switch (bottleneck.type) {
+            case BottleneckType::CPU:
+                return {
+                    "Consider adding indexes or optimizing query logic",
+                    SuggestionType::INDEX_OPTIMIZATION,
+                    bottleneck.severity * 0.3,
+                    "CREATE INDEX ON table(column)"
+                };
+
+            case BottleneckType::IO:
+                return {
+                    "Consider increasing buffer pool size or optimizing I/O patterns",
+                    SuggestionType::MEMORY_OPTIMIZATION,
+                    bottleneck.severity * 0.4,
+                    "Increase shared_buffers in PostgreSQL"
+                };
+
+            case BottleneckType::MEMORY:
+                return {
+                    "Consider optimizing memory usage or increasing available memory",
+                    SuggestionType::MEMORY_OPTIMIZATION,
+                    bottleneck.severity * 0.5,
+                    "Tune work_mem parameter"
+                };
+
+            case BottleneckType::OPERATOR:
+                return {
+                    "Consider using a different join algorithm or adding proper indexes",
+                    SuggestionType::ALGORITHM_OPTIMIZATION,
+                    bottleneck.severity * 0.6,
+                    "Use HASH JOIN instead of NESTED LOOP"
+                };
+
+            default:
+                return {
+                    "Analyze query execution plan and optimize accordingly",
+                    SuggestionType::GENERAL,
+                    0.1,
+                    "Run EXPLAIN ANALYZE"
+                };
+        }
+    }
+};
+```
+
+## 实践练习
+
+### 练习1：实现简单查询优化器
+
+```cpp
+// 练习：实现基于规则的查询优化器
+class RuleBasedOptimizer {
+public:
+    std::unique_ptr<ExecutionPlan> Optimize(const Query* query) {
+        // 实现基于规则的优化逻辑
+        // 1. 谓词下推
+        // 2. 投影下推
+        // 3. 连接重排序
+        // 4. 索引选择
+
+        return nullptr;  // 学生需要完成实现
+    }
+};
+```
+
+### 练习2：实现成本估算器
+
+```cpp
+// 练习：实现查询成本估算器
+class CostEstimator {
+public:
+    double EstimateCost(const ExecutionPlan* plan) {
+        // 实现成本估算逻辑
+        // 1. 扫描成本估算
+        // 2. 连接成本估算
+        // 3. 聚合成本估算
+        // 4. 排序成本估算
+
+        return 0.0;  // 学生需要完成实现
+    }
+};
+```
+
+### 练习3：实现执行计划生成器
+
+```cpp
+// 练习：实现执行计划生成器
+class PlanGenerator {
+public:
+    std::unique_ptr<ExecutionPlan> GeneratePlan(const LogicalPlan* logical_plan) {
+        // 实现执行计划生成逻辑
+        // 1. 物理操作符选择
+        // 2. 内存分配策略
+        // 3. 并行化策略
+        // 4. 缓存策略
+
+        return nullptr;  // 学生需要完成实现
+    }
+};
+```
+
+## 总结
+
+查询规划与优化是数据库系统的核心组件，负责将用户查询转换为高效的执行计划。通过本讲的学习，我们理解了：
+
+1. **查询优化器架构**：理解了优化器的整体架构和工作流程
+2. **基于成本的优化**：掌握了成本模型和统计信息管理方法
+3. **物理操作符选择**：学会了如何选择最佳的物理操作符
+4. **执行计划生成**：理解了如何生成优化的执行计划
+5. **性能监控与调优**：掌握了查询性能分析和优化方法
+
+查询优化是一个复杂的搜索问题，需要在巨大的搜索空间中找到最优的执行计划。现代数据库系统通常采用基于成本的优化方法，结合启发式规则和机器学习技术来提高优化质量和效率。
+
+## 进一步学习
+
+- [PostgreSQL Query Optimization](https://www.postgresql.org/docs/current/query-optimization.html)
+- [MySQL Query Optimization](https://dev.mysql.com/doc/refman/8.0/en/optimization.html)
+- [Oracle Query Optimization](https://docs.oracle.com/en/database/oracle/oracle-database/21/tgsql/query-optimization.html)
+- [Query Optimization Literature](https://dl.acm.org/doi/book/10.1145/3186456)

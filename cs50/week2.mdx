@@ -1,0 +1,557 @@
+---
+title: "Week 2 - 数组和字符串"
+description: "CS50第2周（2025版本）：学习数组、字符串、命令行参数和密码学基础"
+---
+
+# Week 2 - 数组和字符串
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/2" title="CS50 2025 - Week 2" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **编译过程**：预处理、编译、汇编、链接
+- **数组**：声明、初始化、访问、遍历
+- **字符串**：字符数组、NUL终止符、字符串操作
+- **命令行参数**：argc和argv的使用
+- **内存管理**：内存布局、指针基础
+- **密码学**：加密、解密、凯撒密码
+- **调试技巧**：breakpoint、内存检查
+
+## 核心概念
+
+### 编译过程的四个步骤
+
+C语言编译分为四个主要步骤：
+
+1. **预处理**：处理#include、#define等指令
+2. **编译**：将C代码转换为汇编代码
+3. **汇编**：将汇编代码转换为机器码
+4. **链接**：链接库文件，生成可执行文件
+
+![编译过程图示](https://cs50.harvard.edu/x/notes/2/cs50Week2Slide033.png)
+
+编译过程将人类可读的C代码转换为机器可执行的二进制代码。
+
+### 数组基础
+
+#### 数组的声明和初始化
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    // 声明并初始化数组
+    int scores[3] = {95, 88, 76};
+
+    // 访问数组元素
+    printf("第一个分数: %d\n", scores[0]);
+    printf("第二个分数: %d\n", scores[1]);
+    printf("第三个分数: %d\n", scores[2]);
+
+    return 0;
+}
+```
+
+#### 数组的遍历
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int numbers[] = {10, 20, 30, 40, 50};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("数组元素: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    // 计算数组平均值
+    int sum = 0;
+    for (int i = 0; i < size; i++) {
+        sum += numbers[i];
+    }
+    double average = (double)sum / size;
+    printf("平均值: %.2f\n", average);
+
+    return 0;
+}
+```
+
+### 字符串处理
+
+#### 字符串的本质
+
+字符串实际上是以NUL字符('\0')结尾的字符数组。
+
+![字符串的内存表示](https://cs50.harvard.edu/x/notes/2/cs50Week2Slide116.png)
+
+字符串"HI!"在内存中的实际存储方式，注意最后的NUL终止符。
+
+#### 字符串操作示例
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <cs50.h>
+
+int main(void) {
+    // 获取用户输入
+    string name = get_string("你的名字是: ");
+
+    // 获取字符串长度
+    int length = strlen(name);
+    printf("你的名字有 %d 个字符\n", length);
+
+    // 逐个字符处理
+    printf("逐个显示: ");
+    for (int i = 0; i < length; i++) {
+        printf("%c ", name[i]);
+    }
+    printf("\n");
+
+    // 字符串复制
+    char copy[50];
+    strcpy(copy, name);
+    printf("复制后的字符串: %s\n", copy);
+
+    // 字符串连接
+    string greeting = "你好, ";
+    char message[100];
+    strcpy(message, greeting);
+    strcat(message, name);
+    strcat(message, "!");
+    printf("问候语: %s\n", message);
+
+    return 0;
+}
+```
+
+### 命令行参数
+
+#### 基本使用
+
+```c
+#include <stdio.h>
+
+int main(int argc, string argv[]) {
+    printf("程序名称: %s\n", argv[0]);
+    printf("参数个数: %d\n", argc - 1);
+
+    // 显示所有参数
+    for (int i = 1; i < argc; i++) {
+        printf("参数 %d: %s\n", i, argv[i]);
+    }
+
+    return 0;
+}
+```
+
+#### 实际应用示例
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+
+int main(int argc, string argv[]) {
+    // 检查参数数量
+    if (argc != 2) {
+        printf("用法: %s <数字>\n", argv[0]);
+        return 1;
+    }
+
+    // 检查参数是否为数字
+    for (int i = 0; argv[1][i] != '\0'; i++) {
+        if (!isdigit(argv[1][i])) {
+            printf("错误: 请输入有效的数字\n");
+            return 1;
+        }
+    }
+
+    int number = atoi(argv[1]);
+    printf("你输入的数字是: %d\n", number);
+
+    // 检查是否为素数
+    bool is_prime = true;
+    if (number <= 1) {
+        is_prime = false;
+    } else {
+        for (int i = 2; i * i <= number; i++) {
+            if (number % i == 0) {
+                is_prime = false;
+                break;
+            }
+        }
+    }
+
+    if (is_prime) {
+        printf("%d 是素数\n", number);
+    } else {
+        printf("%d 不是素数\n", number);
+    }
+
+    return 0;
+}
+```
+
+### 密码学基础
+
+#### 凯撒密码实现
+
+![密码学概念](https://cs50.harvard.edu/x/notes/2/cs50Week2Slide153.png)
+
+密码学通过密钥将明文转换为密文。
+
+```c
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <cs50.h>
+
+char caesar_cipher(char c, int key) {
+    if (isalpha(c)) {
+        char base = isupper(c) ? 'A' : 'a';
+        return (c - base + key) % 26 + base;
+    }
+    return c;
+}
+
+int main(int argc, string argv[]) {
+    // 检查参数
+    if (argc != 2) {
+        printf("用法: %s <密钥>\n", argv[0]);
+        return 1;
+    }
+
+    int key = atoi(argv[1]);
+    if (key <= 0) {
+        printf("错误: 密钥必须是正整数\n");
+        return 1;
+    }
+
+    string plaintext = get_string("明文: ");
+    printf("密文: ");
+
+    for (int i = 0, len = strlen(plaintext); i < len; i++) {
+        printf("%c", caesar_cipher(plaintext[i], key));
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 调试技巧
+
+#### 使用breakpoint进行调试
+
+![Debug界面](https://cs50.harvard.edu/x/notes/2/cs50Week2Debugging.png)
+
+使用调试工具可以逐行执行代码，检查变量值，帮助找出程序错误。
+
+## 代码示例
+
+### 数组排序算法
+
+```c
+#include <stdio.h>
+
+void bubble_sort(int arr[], int size) {
+    for (int i = 0; i < size - 1; i++) {
+        for (int j = 0; j < size - i - 1; j++) {
+            if (arr[j] > arr[j + 1]) {
+                // 交换元素
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+    }
+}
+
+int main(void) {
+    int numbers[] = {64, 34, 25, 12, 22, 11, 90};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+
+    printf("排序前: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    bubble_sort(numbers, size);
+
+    printf("排序后: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 字符串处理函数实现
+
+```c
+#include <stdio.h>
+
+// 自定义字符串长度函数
+int my_strlen(const char *str) {
+    int length = 0;
+    while (str[length] != '\0') {
+        length++;
+    }
+    return length;
+}
+
+// 自定义字符串复制函数
+void my_strcpy(char *dest, const char *src) {
+    int i = 0;
+    while (src[i] != '\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = '\0';
+}
+
+// 自定义字符串连接函数
+void my_strcat(char *dest, const char *src) {
+    int dest_len = my_strlen(dest);
+    int i = 0;
+    while (src[i] != '\0') {
+        dest[dest_len + i] = src[i];
+        i++;
+    }
+    dest[dest_len + i] = '\0';
+}
+
+int main(void) {
+    char str1[100] = "Hello";
+    char str2[] = " World";
+
+    printf("str1长度: %d\n", my_strlen(str1));
+    printf("str2长度: %d\n", my_strlen(str2));
+
+    my_strcat(str1, str2);
+    printf("连接后: %s\n", str1);
+
+    char str3[50];
+    my_strcpy(str3, str1);
+    printf("复制后: %s\n", str3);
+
+    return 0;
+}
+```
+
+## 练习题与答案
+
+### 1. 数组操作练习
+
+**问题：** 编写一个程序，找出数组中的最大值和最小值。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <limits.h>
+
+void find_min_max(int arr[], int size, int *min, int *max) {
+    *min = INT_MAX;
+    *max = INT_MIN;
+
+    for (int i = 0; i < size; i++) {
+        if (arr[i] < *min) {
+            *min = arr[i];
+        }
+        if (arr[i] > *max) {
+            *max = arr[i];
+        }
+    }
+}
+
+int main(void) {
+    int numbers[] = {12, 45, 7, 23, 56, 8, 32};
+    int size = sizeof(numbers) / sizeof(numbers[0]);
+    int min, max;
+
+    find_min_max(numbers, size, &min, &max);
+
+    printf("数组: ");
+    for (int i = 0; i < size; i++) {
+        printf("%d ", numbers[i]);
+    }
+    printf("\n");
+
+    printf("最小值: %d\n", min);
+    printf("最大值: %d\n", max);
+
+    return 0;
+}
+```
+
+### 2. 字符串反转
+
+**问题：** 编写一个函数，将字符串反转。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <string.h>
+
+void reverse_string(char *str) {
+    int length = strlen(str);
+    for (int i = 0; i < length / 2; i++) {
+        char temp = str[i];
+        str[i] = str[length - 1 - i];
+        str[length - 1 - i] = temp;
+    }
+}
+
+int main(void) {
+    char str[100];
+
+    printf("请输入一个字符串: ");
+    fgets(str, sizeof(str), stdin);
+
+    // 移除换行符
+    str[strcspn(str, "\n")] = '\0';
+
+    printf("原字符串: %s\n", str);
+
+    reverse_string(str);
+
+    printf("反转后: %s\n", str);
+
+    return 0;
+}
+```
+
+### 3. 命令行参数处理
+
+**问题：** 编写一个程序，接收两个数字作为命令行参数，计算它们的和、差、积、商。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, string argv[]) {
+    if (argc != 3) {
+        printf("用法: %s <数字1> <数字2>\n", argv[0]);
+        return 1;
+    }
+
+    double num1 = atof(argv[1]);
+    double num2 = atof(argv[2]);
+
+    printf("数字1: %.2f\n", num1);
+    printf("数字2: %.2f\n", num2);
+    printf("和: %.2f\n", num1 + num2);
+    printf("差: %.2f\n", num1 - num2);
+    printf("积: %.2f\n", num1 * num2);
+
+    if (num2 != 0) {
+        printf("商: %.2f\n", num1 / num2);
+    } else {
+        printf("商: 除数不能为0\n");
+    }
+
+    return 0;
+}
+```
+
+### 4. 密码学练习
+
+**问题：** 实现Vigenère密码，这是一个比凯撒密码更复杂的加密方法。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <cs50.h>
+
+char vigenere_cipher(char c, char key) {
+    if (isalpha(c)) {
+        char base = isupper(c) ? 'A' : 'a';
+        char key_base = isupper(key) ? 'A' : 'a';
+        return (c - base + key - key_base) % 26 + base;
+    }
+    return c;
+}
+
+int main(int argc, string argv[]) {
+    if (argc != 2) {
+        printf("用法: %s <密钥>\n", argv[0]);
+        return 1;
+    }
+
+    // 检查密钥是否为字母
+    for (int i = 0; argv[1][i] != '\0'; i++) {
+        if (!isalpha(argv[1][i])) {
+            printf("错误: 密钥必须只包含字母\n");
+            return 1;
+        }
+    }
+
+    string plaintext = get_string("明文: ");
+    string key = argv[1];
+
+    printf("密文: ");
+    for (int i = 0, j = 0, len = strlen(plaintext); i < len; i++) {
+        if (isalpha(plaintext[i])) {
+            printf("%c", vigenere_cipher(plaintext[i], key[j % strlen(key)]));
+            j++;
+        } else {
+            printf("%c", plaintext[i]);
+        }
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+## 学习建议
+
+1. **理解内存模型**：了解数组在内存中是如何连续存储的
+2. **掌握字符串操作**：熟练使用标准字符串处理函数
+3. **练习命令行编程**：学会通过命令行参数控制程序行为
+4. **学习调试技巧**：使用调试工具逐步执行程序
+5. **实践密码学**：通过实现加密算法理解密码学原理
+
+## 扩展资源
+
+- **官方资源**：
+  - [CS50 Week 2 Lecture](https://cs50.harvard.edu/x/2025/weeks/2/)
+  - [CS50 Week 2 Notes](https://cs50.harvard.edu/x/2025/notes/2/)
+
+- **学习工具**：
+  - [Online GDB Debugger](https://www.onlinegdb.com/)
+  - [C Reference](https://en.cppreference.com/w/c)
+
+- **深入阅读**：
+  - [C语言数组详解](https://www.geeksforgeeks.org/arrays-in-c-cpp/)
+  - [字符串处理函数](https://www.tutorialspoint.com/c_standard_library/string_h.htm)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 3: 算法" icon="arrow-right" href="./week3">
+    学习排序、搜索等基础算法
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 2的学习！现在你已经掌握了数组、字符串和命令行编程的核心概念，为进一步学习算法奠定了坚实基础。*

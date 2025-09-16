@@ -1,0 +1,1777 @@
+---
+title: 'Lecture 15: Concurrency Control Theory'
+description: '深入探讨并发控制理论基础，包括并发问题、锁机制、时间戳排序和多版本并发控制'
+date: '2024-02-15'
+tags: ['数据库系统', '并发控制', 'CMU 15-445']
+---
+
+# Lecture 15: Concurrency Control Theory
+
+## 概述
+
+并发控制理论是数据库系统的核心理论基础，主要解决多个事务同时执行时可能出现的数据一致性问题。本讲将深入探讨并发问题的本质、各种并发控制机制的理论基础以及它们在数据库系统中的实现。
+
+## 并发问题
+
+### 1. 并发问题的分类
+
+```cpp
+// 并发问题类型枚举
+enum class ConcurrencyIssue {
+    LOST_UPDATE,           // 丢失更新
+    DIRTY_READ,           // 脏读
+    UNREPEATABLE_READ,    // 不可重复读
+    PHANTOM_READ,         // 幻读
+    WRITE_SKEW,           // 写偏斜
+    DEADLOCK              // 死锁
+};
+
+// 并发问题描述
+class ConcurrencyIssueAnalyzer {
+public:
+    // 分析并发问题
+    std::vector<ConcurrencyIssue> AnalyzeIssues(
+        const std::vector<Transaction>& transactions
+    ) {
+        std::vector<ConcurrencyIssue> issues;
+
+        // 检查丢失更新
+        if (HasLostUpdate(transactions)) {
+            issues.push_back(ConcurrencyIssue::LOST_UPDATE);
+        }
+
+        // 检查脏读
+        if (HasDirtyRead(transactions)) {
+            issues.push_back(ConcurrencyIssue::DIRTY_READ);
+        }
+
+        // 检查不可重复读
+        if (HasUnrepeatableRead(transactions)) {
+            issues.push_back(ConcurrencyIssue::UNREPEATABLE_READ);
+        }
+
+        // 检查幻读
+        if (HasPhantomRead(transactions)) {
+            issues.push_back(ConcurrencyIssue::PHANTOM_READ);
+        }
+
+        // 检查写偏斜
+        if (HasWriteSkew(transactions)) {
+            issues.push_back(ConcurrencyIssue::WRITE_SKEW);
+        }
+
+        // 检查死锁
+        if (HasDeadlock(transactions)) {
+            issues.push_back(ConcurrencyIssue::DEADLOCK);
+        }
+
+        return issues;
+    }
+
+private:
+    // 检查丢失更新
+    bool HasLostUpdate(const std::vector<Transaction>& transactions) {
+        std::map<Key, std::vector<TransactionId>> write_operations;
+
+        // 收集所有写操作
+        for (const auto& txn : transactions) {
+            for (const auto& op : txn.operations) {
+                if (op.type == OperationType::WRITE) {
+                    write_operations[op.key].push_back(txn.id);
+                }
+            }
+        }
+
+        // 检查是否有多个事务写入同一个键
+        for (const auto& [key, txn_ids] : write_operations) {
+            if (txn_ids.size() > 1) {
+                // 检查是否有重叠的执行时间
+                if (HasOverlappingExecution(transactions, txn_ids)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 检查脏读
+    bool HasDirtyRead(const std::vector<Transaction>& transactions) {
+        for (const auto& txn : transactions) {
+            for (const auto& op : txn.operations) {
+                if (op.type == OperationType::READ) {
+                    // 检查是否有未提交的写操作
+                    if (HasUncommittedWrite(transactions, op.key, txn.start_time)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // 检查不可重复读
+    bool HasUnrepeatableRead(const std::vector<Transaction>& transactions) {
+        std::map<TransactionId, std::map<Key, std::vector<Value>>> read_values;
+
+        // 收集每个事务的读取值
+        for (const auto& txn : transactions) {
+            for (const auto& op : txn.operations) {
+                if (op.type == OperationType::READ) {
+                    read_values[txn.id][op.key].push_back(op.value);
+                }
+            }
+        }
+
+        // 检查是否有事务对同一个键读取到不同的值
+        for (const auto& [txn_id, key_reads] : read_values) {
+            for (const auto& [key, values] : key_reads) {
+                if (values.size() > 1) {
+                    // 检查是否有不同的值
+                    for (size_t i = 1; i < values.size(); ++i) {
+                        if (values[i] != values[0]) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 检查幻读
+    bool HasPhantomRead(const std::vector<Transaction>& transactions) {
+        std::map<TransactionId, std::set<Key>> read_keys;
+
+        // 收集每个事务读取的键集合
+        for (const auto& txn : transactions) {
+            for (const auto& op : txn.operations) {
+                if (op.type == OperationType::READ) {
+                    read_keys[txn.id].insert(op.key);
+                }
+            }
+        }
+
+        // 检查是否有事务在两次读取之间看到了新的键
+        for (const auto& [txn_id, keys] : read_keys) {
+            if (keys.size() > 1) {
+                // 检查键集合是否在事务执行期间发生变化
+                if (HasKeySetChanges(transactions, txn_id, keys)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 检查写偏斜
+    bool HasWriteSkew(const std::vector<Transaction>& transactions) {
+        // 识别具有约束条件的写操作
+        auto constrained_writes = IdentifyConstrainedWrites(transactions);
+
+        // 检查是否有违反约束的并发写入
+        for (const auto& write1 : constrained_writes) {
+            for (const auto& write2 : constrained_writes) {
+                if (write1.txn_id != write2.txn_id) {
+                    if (ViolatesConstraint(write1, write2)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 检查死锁
+    bool HasDeadlock(const std::vector<Transaction>& transactions) {
+        // 构建等待图
+        auto wait_for_graph = BuildWaitForGraph(transactions);
+
+        // 检查环
+        return HasCycle(wait_for_graph);
+    }
+
+    // 辅助函数
+    bool HasOverlappingExecution(
+        const std::vector<Transaction>& transactions,
+        const std::vector<TransactionId>& txn_ids
+    ) {
+        // 检查事务执行时间是否重叠
+        for (size_t i = 0; i < txn_ids.size(); ++i) {
+            for (size_t j = i + 1; j < txn_ids.size(); ++j) {
+                auto txn1 = FindTransaction(transactions, txn_ids[i]);
+                auto txn2 = FindTransaction(transactions, txn_ids[j]);
+
+                if (txn1 && txn2) {
+                    if (TimeRangesOverlap(txn1->start_time, txn1->end_time,
+                                        txn2->start_time, txn2->end_time)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // 其他辅助函数实现...
+};
+```
+
+### 2. 事务隔离级别
+
+```cpp
+// 事务隔离级别
+enum class IsolationLevel {
+    READ_UNCOMMITTED,    // 读未提交
+    READ_COMMITTED,      // 读已提交
+    REPEATABLE_READ,     // 可重复读
+    SERIALIZABLE         // 可串行化
+};
+
+// 隔离级别管理器
+class IsolationLevelManager {
+public:
+    // 检查操作是否允许在给定隔离级别下执行
+    bool IsOperationAllowed(
+        OperationType op_type,
+        IsolationLevel level,
+        const TransactionContext& context
+    ) {
+        switch (level) {
+            case IsolationLevel::READ_UNCOMMITTED:
+                return IsAllowedInReadUncommitted(op_type, context);
+            case IsolationLevel::READ_COMMITTED:
+                return IsAllowedInReadCommitted(op_type, context);
+            case IsolationLevel::REPEATABLE_READ:
+                return IsAllowedInRepeatableRead(op_type, context);
+            case IsolationLevel::SERIALIZABLE:
+                return IsAllowedInSerializable(op_type, context);
+            default:
+                return false;
+        }
+    }
+
+    // 获取隔离级别防止的并发问题
+    std::vector<ConcurrencyIssue> GetPreventedIssues(IsolationLevel level) {
+        switch (level) {
+            case IsolationLevel::READ_UNCOMMITTED:
+                return {};  // 不防止任何问题
+            case IsolationLevel::READ_COMMITTED:
+                return {ConcurrencyIssue::DIRTY_READ};
+            case IsolationLevel::REPEATABLE_READ:
+                return {ConcurrencyIssue::DIRTY_READ,
+                       ConcurrencyIssue::UNREPEATABLE_READ};
+            case IsolationLevel::SERIALIZABLE:
+                return {ConcurrencyIssue::DIRTY_READ,
+                       ConcurrencyIssue::UNREPEATABLE_READ,
+                       ConcurrencyIssue::PHANTOM_READ,
+                       ConcurrencyIssue::WRITE_SKEW};
+            default:
+                return {};
+        }
+    }
+
+private:
+    // 读未提交级别的检查
+    bool IsAllowedInReadUncommitted(OperationType op_type, const TransactionContext& context) {
+        // 读未提交级别允许所有操作，但会出现脏读等问题
+        return true;
+    }
+
+    // 读已提交级别的检查
+    bool IsAllowedInReadCommitted(OperationType op_type, const TransactionContext& context) {
+        // 防止脏读
+        if (op_type == OperationType::READ) {
+            // 检查是否有未提交的写操作
+            return !HasUncommittedWrite(context);
+        }
+        return true;
+    }
+
+    // 可重复读级别的检查
+    bool IsAllowedInRepeatableRead(OperationType op_type, const TransactionContext& context) {
+        // 防止脏读和不可重复读
+        if (op_type == OperationType::READ) {
+            // 检查数据是否被其他事务修改
+            if (HasDataModified(context)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 可串行化级别的检查
+    bool IsAllowedInSerializable(OperationType op_type, const TransactionContext& context) {
+        // 最严格的隔离级别，防止所有并发问题
+        // 需要更复杂的检查逻辑
+        return CheckSerializableExecution(op_type, context);
+    }
+
+    // 检查串行化执行
+    bool CheckSerializableExecution(OperationType op_type, const TransactionContext& context) {
+        // 实现串行化检查逻辑
+        // 可能包括：谓词锁、时间戳排序、多版本控制等
+        return true;  // 简化实现
+    }
+
+    // 辅助函数
+    bool HasUncommittedWrite(const TransactionContext& context) {
+        // 检查是否有未提交的写操作
+        return false;
+    }
+
+    bool HasDataModified(const TransactionContext& context) {
+        // 检查数据是否被其他事务修改
+        return false;
+    }
+};
+```
+
+## 锁机制
+
+### 1. 基本锁类型
+
+```cpp
+// 锁类型
+enum class LockType {
+    SHARED,         // 共享锁（S锁）
+    EXCLUSIVE,      // 排他锁（X锁）
+    INTENTION_SHARED,    // 意向共享锁（IS锁）
+    INTENTION_EXCLUSIVE, // 意向排他锁（IX锁）
+    UPDATE          // 更新锁（U锁）
+};
+
+// 锁管理器
+class LockManager {
+public:
+    // 请求锁
+    bool AcquireLock(
+        TransactionId txn_id,
+        const Key& key,
+        LockType lock_type,
+        LockMode mode = LockMode::NORMAL
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 检查锁兼容性
+        if (!IsLockCompatible(txn_id, key, lock_type)) {
+            // 锁冲突，需要等待
+            if (mode == LockMode::WAIT) {
+                return WaitForLock(txn_id, key, lock_type);
+            } else if (mode == LockMode::NOWAIT) {
+                return false;
+            } else {
+                // 检测死锁
+                if (WouldCauseDeadlock(txn_id, key, lock_type)) {
+                    throw DeadlockException("Deadlock detected");
+                }
+                return WaitForLock(txn_id, key, lock_type);
+            }
+        }
+
+        // 授予锁
+        GrantLock(txn_id, key, lock_type);
+        return true;
+    }
+
+    // 释放锁
+    void ReleaseLock(TransactionId txn_id, const Key& key) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 移除锁
+        RemoveLock(txn_id, key);
+
+        // 唤醒等待的事务
+        WakeUpWaitingTransactions(key);
+    }
+
+    // 释放事务的所有锁
+    void ReleaseAllLocks(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 找到事务的所有锁
+        auto it = transaction_locks_.find(txn_id);
+        if (it != transaction_locks_.end()) {
+            // 逐个释放锁
+            for (const auto& key : it->second) {
+                ReleaseLockInternal(txn_id, key);
+            }
+            // 清理事务记录
+            transaction_locks_.erase(it);
+        }
+    }
+
+    // 检查锁升级
+    bool UpgradeLock(TransactionId txn_id, const Key& key, LockType new_type) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 检查当前锁类型
+        auto current_type = GetCurrentLockType(txn_id, key);
+        if (!current_type) {
+            return false;  // 没有锁
+        }
+
+        // 检查升级是否合法
+        if (!IsValidUpgrade(*current_type, new_type)) {
+            return false;
+        }
+
+        // 检查升级后的兼容性
+        if (!IsUpgradeCompatible(txn_id, key, *current_type, new_type)) {
+            return false;
+        }
+
+        // 执行升级
+        UpgradeLockInternal(txn_id, key, *current_type, new_type);
+        return true;
+    }
+
+private:
+    // 锁条目
+    struct LockEntry {
+        TransactionId txn_id;
+        Key key;
+        LockType type;
+        bool granted;
+        std::chrono::steady_clock::time_point acquire_time;
+    };
+
+    // 锁表
+    std::map<Key, std::vector<LockEntry>> lock_table_;
+
+    // 事务锁映射
+    std::map<TransactionId, std::set<Key>> transaction_locks_;
+
+    // 等待图
+    std::map<TransactionId, std::set<TransactionId>> wait_for_graph_;
+
+    // 互斥锁
+    std::mutex mutex_;
+
+    // 检查锁兼容性
+    bool IsLockCompatible(TransactionId txn_id, const Key& key, LockType lock_type) {
+        auto it = lock_table_.find(key);
+        if (it == lock_table_.end()) {
+            return true;  // 没有锁，兼容
+        }
+
+        // 检查与现有锁的兼容性
+        for (const auto& entry : it->second) {
+            if (entry.granted && entry.txn_id != txn_id) {
+                if (!AreLocksCompatible(entry.type, lock_type)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    // 检查两个锁类型是否兼容
+    bool AreLocksCompatible(LockType existing, LockType requested) {
+        static const std::map<LockType, std::set<LockType>> compatibility_matrix = {
+            {LockType::SHARED, {LockType::SHARED, LockType::INTENTION_SHARED}},
+            {LockType::EXCLUSIVE, {}},  // 排他锁与其他锁都不兼容
+            {LockType::INTENTION_SHARED, {LockType::SHARED, LockType::INTENTION_SHARED,
+                                        LockType::INTENTION_EXCLUSIVE, LockType::UPDATE}},
+            {LockType::INTENTION_EXCLUSIVE, {LockType::INTENTION_SHARED, LockType::INTENTION_EXCLUSIVE}},
+            {LockType::UPDATE, {LockType::INTENTION_SHARED, LockType::UPDATE}}
+        };
+
+        auto it = compatibility_matrix.find(existing);
+        if (it != compatibility_matrix.end()) {
+            return it->second.find(requested) != it->second.end();
+        }
+
+        return false;
+    }
+
+    // 等待锁
+    bool WaitForLock(TransactionId txn_id, const Key& key, LockType lock_type) {
+        // 添加到等待队列
+        auto& lock_entries = lock_table_[key];
+        lock_entries.push_back({txn_id, key, lock_type, false, std::chrono::steady_clock::now()});
+
+        // 更新等待图
+        UpdateWaitForGraph(txn_id, key);
+
+        return true;
+    }
+
+    // 授予锁
+    void GrantLock(TransactionId txn_id, const Key& key, LockType lock_type) {
+        auto& lock_entries = lock_table_[key];
+        lock_entries.push_back({txn_id, key, lock_type, true, std::chrono::steady_clock::now()});
+
+        // 更新事务锁映射
+        transaction_locks_[txn_id].insert(key);
+
+        // 更新等待图
+        UpdateWaitForGraph(txn_id, key);
+    }
+
+    // 移除锁
+    void RemoveLock(TransactionId txn_id, const Key& key) {
+        ReleaseLockInternal(txn_id, key);
+    }
+
+    // 内部释放锁
+    void ReleaseLockInternal(TransactionId txn_id, const Key& key) {
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            // 移除指定事务的锁
+            it->second.erase(
+                std::remove_if(it->second.begin(), it->second.end(),
+                    [txn_id](const LockEntry& entry) {
+                        return entry.txn_id == txn_id;
+                    }),
+                it->second.end()
+            );
+
+            // 如果没有锁了，删除条目
+            if (it->second.empty()) {
+                lock_table_.erase(it);
+            }
+        }
+
+        // 从事务锁映射中移除
+        auto txn_it = transaction_locks_.find(txn_id);
+        if (txn_it != transaction_locks_.end()) {
+            txn_it->second.erase(key);
+            if (txn_it->second.empty()) {
+                transaction_locks_.erase(txn_it);
+            }
+        }
+
+        // 更新等待图
+        UpdateWaitForGraph(txn_id, key);
+    }
+
+    // 唤醒等待事务
+    void WakeUpWaitingTransactions(const Key& key) {
+        auto it = lock_table_.find(key);
+        if (it == lock_table_.end()) {
+            return;
+        }
+
+        // 检查等待队列中的事务
+        for (auto& entry : it->second) {
+            if (!entry.granted) {
+                // 检查现在是否可以授予锁
+                if (IsLockCompatible(entry.txn_id, key, entry.type)) {
+                    entry.granted = true;
+                    entry.acquire_time = std::chrono::steady_clock::now();
+
+                    // 通知事务
+                    NotifyTransactionLockGranted(entry.txn_id, key);
+                }
+            }
+        }
+    }
+
+    // 更新等待图
+    void UpdateWaitForGraph(TransactionId txn_id, const Key& key) {
+        // 清理该键相关的等待关系
+        CleanWaitForGraphEntries(key);
+
+        // 重建等待关系
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            // 找到所有已授予的锁
+            std::set<TransactionId> granted_txns;
+            for (const auto& entry : it->second) {
+                if (entry.granted) {
+                    granted_txns.insert(entry.txn_id);
+                }
+            }
+
+            // 为等待的事务添加等待关系
+            for (const auto& entry : it->second) {
+                if (!entry.granted) {
+                    for (auto granted_txn : granted_txns) {
+                        if (!AreLocksCompatible(entry.type, GetLockType(granted_txn, key))) {
+                            wait_for_graph_[entry.txn_id].insert(granted_txn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 检查是否会死锁
+    bool WouldCauseDeadlock(TransactionId txn_id, const Key& key, LockType lock_type) {
+        // 临时更新等待图
+        auto temp_graph = wait_for_graph_;
+
+        // 添加新的等待关系
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            for (const auto& entry : it->second) {
+                if (entry.granted && !AreLocksCompatible(entry.type, lock_type)) {
+                    temp_graph[txn_id].insert(entry.txn_id);
+                }
+            }
+        }
+
+        // 检查是否有环
+        return HasCycleInGraph(temp_graph);
+    }
+
+    // 检查图中是否有环
+    bool HasCycleInGraph(const std::map<TransactionId, std::set<TransactionId>>& graph) {
+        std::set<TransactionId> visited;
+        std::set<TransactionId> recursion_stack;
+
+        for (const auto& [node, neighbors] : graph) {
+            if (visited.find(node) == visited.end()) {
+                if (HasCycleDFS(node, graph, visited, recursion_stack)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 深度优先搜索检查环
+    bool HasCycleDFS(
+        TransactionId node,
+        const std::map<TransactionId, std::set<TransactionId>>& graph,
+        std::set<TransactionId>& visited,
+        std::set<TransactionId>& recursion_stack
+    ) {
+        visited.insert(node);
+        recursion_stack.insert(node);
+
+        auto it = graph.find(node);
+        if (it != graph.end()) {
+            for (auto neighbor : it->second) {
+                if (visited.find(neighbor) == visited.end()) {
+                    if (HasCycleDFS(neighbor, graph, visited, recursion_stack)) {
+                        return true;
+                    }
+                } else if (recursion_stack.find(neighbor) != recursion_stack.end()) {
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.erase(node);
+        return false;
+    }
+
+    // 获取锁类型
+    LockType GetLockType(TransactionId txn_id, const Key& key) {
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            for (const auto& entry : it->second) {
+                if (entry.txn_id == txn_id && entry.granted) {
+                    return entry.type;
+                }
+            }
+        }
+        throw std::runtime_error("Lock not found");
+    }
+
+    // 检查锁升级是否合法
+    bool IsValidUpgrade(LockType current, LockType new_type) {
+        static const std::map<LockType, std::set<LockType>> valid_upgrades = {
+            {LockType::SHARED, {LockType::EXCLUSIVE, LockType::UPDATE}},
+            {LockType::UPDATE, {LockType::EXCLUSIVE}},
+            {LockType::INTENTION_SHARED, {LockType::INTENTION_EXCLUSIVE, LockType::SHARED}},
+            {LockType::INTENTION_EXCLUSIVE, {LockType::EXCLUSIVE}}
+        };
+
+        auto it = valid_upgrades.find(current);
+        if (it != valid_upgrades.end()) {
+            return it->second.find(new_type) != it->second.end();
+        }
+
+        return false;
+    }
+
+    // 检查升级后的兼容性
+    bool IsUpgradeCompatible(
+        TransactionId txn_id,
+        const Key& key,
+        LockType current,
+        LockType new_type
+    ) {
+        // 临时移除当前锁
+        RemoveLockInternal(txn_id, key);
+
+        // 检查新锁类型的兼容性
+        bool compatible = IsLockCompatible(txn_id, key, new_type);
+
+        // 恢复当前锁
+        GrantLock(txn_id, key, current);
+
+        return compatible;
+    }
+
+    // 执行锁升级
+    void UpgradeLockInternal(
+        TransactionId txn_id,
+        const Key& key,
+        LockType current,
+        LockType new_type
+    ) {
+        // 移除当前锁
+        RemoveLockInternal(txn_id, key);
+
+        // 授予新锁
+        GrantLock(txn_id, key, new_type);
+    }
+
+    // 其他辅助函数
+    void CleanWaitForGraphEntries(const Key& key) {
+        // 清理与指定键相关的等待关系
+        std::vector<TransactionId> to_remove;
+        for (auto& [txn_id, waiting_for] : wait_for_graph_) {
+            for (auto it = waiting_for.begin(); it != waiting_for.end(); ) {
+                if (IsWaitingForKey(*it, key)) {
+                    it = waiting_for.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            if (waiting_for.empty()) {
+                to_remove.push_back(txn_id);
+            }
+        }
+
+        for (auto txn_id : to_remove) {
+            wait_for_graph_.erase(txn_id);
+        }
+    }
+
+    bool IsWaitingForKey(TransactionId txn_id, const Key& key) {
+        // 检查事务是否在等待指定键的锁
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            for (const auto& entry : it->second) {
+                if (entry.txn_id == txn_id && !entry.granted) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void NotifyTransactionLockGranted(TransactionId txn_id, const Key& key) {
+        // 实现锁授予通知机制
+        // 这里可以通过条件变量或其他同步机制通知等待的事务
+    }
+
+    LockType GetCurrentLockType(TransactionId txn_id, const Key& key) {
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            for (const auto& entry : it->second) {
+                if (entry.txn_id == txn_id && entry.granted) {
+                    return entry.type;
+                }
+            }
+        }
+        return LockType::SHARED;  // 默认值
+    }
+};
+```
+
+### 2. 死锁检测与预防
+
+```cpp
+// 死锁管理器
+class DeadlockManager {
+public:
+    // 死锁检测策略
+    enum class DetectionStrategy {
+        TIMEOUT,        // 超时检测
+        WAIT_DIE,       // 等待-死亡
+        WOUND_WAIT,     // 伤害-等待
+        TIMESTAMP       // 时间戳排序
+    };
+
+    // 检测死锁
+    bool DetectDeadlock(
+        const std::map<TransactionId, std::set<TransactionId>>& wait_for_graph
+    ) {
+        std::set<TransactionId> visited;
+        std::set<TransactionId> recursion_stack;
+
+        for (const auto& [txn_id, waiting_for] : wait_for_graph) {
+            if (visited.find(txn_id) == visited.end()) {
+                if (HasCycle(txn_id, wait_for_graph, visited, recursion_stack)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // 解决死锁
+    TransactionId ResolveDeadlock(
+        const std::map<TransactionId, std::set<TransactionId>>& wait_for_graph,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        // 找到环中的所有事务
+        auto cycle = FindCycle(wait_for_graph);
+        if (cycle.empty()) {
+            return INVALID_TRANSACTION_ID;
+        }
+
+        // 选择要终止的事务
+        return SelectVictim(cycle, timestamps);
+    }
+
+    // 应用死锁预防策略
+    bool ShouldAbortTransaction(
+        TransactionId requester,
+        TransactionId holder,
+        DetectionStrategy strategy,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        switch (strategy) {
+            case DetectionStrategy::WAIT_DIE:
+                return ShouldAbortWaitDie(requester, holder, timestamps);
+            case DetectionStrategy::WOUND_WAIT:
+                return ShouldAbortWoundWait(requester, holder, timestamps);
+            case DetectionStrategy::TIMESTAMP:
+                return ShouldAbortTimestamp(requester, holder, timestamps);
+            default:
+                return false;
+        }
+    }
+
+private:
+    // 查找环
+    std::vector<TransactionId> FindCycle(
+        const std::map<TransactionId, std::set<TransactionId>>& graph
+    ) {
+        std::set<TransactionId> visited;
+        std::set<TransactionId> recursion_stack;
+        std::vector<TransactionId> cycle;
+
+        for (const auto& [node, neighbors] : graph) {
+            if (visited.find(node) == visited.end()) {
+                if (FindCycleDFS(node, graph, visited, recursion_stack, cycle)) {
+                    return cycle;
+                }
+            }
+        }
+
+        return cycle;
+    }
+
+    // 深度优先搜索查找环
+    bool FindCycleDFS(
+        TransactionId node,
+        const std::map<TransactionId, std::set<TransactionId>>& graph,
+        std::set<TransactionId>& visited,
+        std::set<TransactionId>& recursion_stack,
+        std::vector<TransactionId>& cycle
+    ) {
+        visited.insert(node);
+        recursion_stack.insert(node);
+
+        auto it = graph.find(node);
+        if (it != graph.end()) {
+            for (auto neighbor : it->second) {
+                if (visited.find(neighbor) == visited.end()) {
+                    if (FindCycleDFS(neighbor, graph, visited, recursion_stack, cycle)) {
+                        cycle.push_back(node);
+                        return true;
+                    }
+                } else if (recursion_stack.find(neighbor) != recursion_stack.end()) {
+                    // 找到环，构建环路径
+                    cycle.push_back(neighbor);
+                    cycle.push_back(node);
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.erase(node);
+        return false;
+    }
+
+    // 选择牺牲事务
+    TransactionId SelectVictim(
+        const std::vector<TransactionId>& cycle,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        if (cycle.empty()) {
+            return INVALID_TRANSACTION_ID;
+        }
+
+        // 选择时间戳最大的事务（最年轻的事务）
+        TransactionId victim = cycle[0];
+        Timestamp max_timestamp = timestamps.at(victim);
+
+        for (size_t i = 1; i < cycle.size(); ++i) {
+            auto current_timestamp = timestamps.at(cycle[i]);
+            if (current_timestamp > max_timestamp) {
+                victim = cycle[i];
+                max_timestamp = current_timestamp;
+            }
+        }
+
+        return victim;
+    }
+
+    // 等待-死亡策略
+    bool ShouldAbortWaitDie(
+        TransactionId requester,
+        TransactionId holder,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        auto requester_timestamp = timestamps.at(requester);
+        auto holder_timestamp = timestamps.at(holder);
+
+        // 如果请求者时间戳大于持有者（请求者更年轻），则终止请求者
+        return requester_timestamp > holder_timestamp;
+    }
+
+    // 伤害-等待策略
+    bool ShouldAbortWoundWait(
+        TransactionId requester,
+        TransactionId holder,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        auto requester_timestamp = timestamps.at(requester);
+        auto holder_timestamp = timestamps.at(holder);
+
+        // 如果请求者时间戳小于持有者（请求者更老），则终止持有者
+        return requester_timestamp < holder_timestamp;
+    }
+
+    // 时间戳排序策略
+    bool ShouldAbortTimestamp(
+        TransactionId requester,
+        TransactionId holder,
+        const std::map<TransactionId, Timestamp>& timestamps
+    ) {
+        auto requester_timestamp = timestamps.at(requester);
+        auto holder_timestamp = timestamps.at(holder);
+
+        // 基于时间戳决定是否终止
+        return requester_timestamp > holder_timestamp;
+    }
+
+    // 辅助函数
+    bool HasCycle(
+        TransactionId node,
+        const std::map<TransactionId, std::set<TransactionId>>& graph,
+        std::set<TransactionId>& visited,
+        std::set<TransactionId>& recursion_stack
+    ) {
+        visited.insert(node);
+        recursion_stack.insert(node);
+
+        auto it = graph.find(node);
+        if (it != graph.end()) {
+            for (auto neighbor : it->second) {
+                if (visited.find(neighbor) == visited.end()) {
+                    if (HasCycle(neighbor, graph, visited, recursion_stack)) {
+                        return true;
+                    }
+                } else if (recursion_stack.find(neighbor) != recursion_stack.end()) {
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.erase(node);
+        return false;
+    }
+
+    static constexpr TransactionId INVALID_TRANSACTION_ID = -1;
+    using Timestamp = uint64_t;
+};
+```
+
+## 时间戳排序
+
+### 1. 基本时间戳协议
+
+```cpp
+// 时间戳管理器
+class TimestampManager {
+public:
+    // 获取时间戳
+    Timestamp GetTimestamp() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return current_timestamp_++;
+    }
+
+    // 读取数据项
+    bool ReadItem(
+        TransactionId txn_id,
+        const Key& key,
+        Value& value,
+        const TransactionContext& context
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取数据项的读写时间戳
+        auto [read_ts, write_ts] = GetTimestamps(key);
+
+        // 检查写时间戳
+        if (write_ts > context.timestamp) {
+            // 写-写冲突，事务需要终止
+            return false;
+        }
+
+        // 检查读时间戳
+        if (read_ts > context.timestamp) {
+            // 写-读冲突，事务需要终止
+            return false;
+        }
+
+        // 更新读时间戳
+        UpdateReadTimestamp(key, context.timestamp);
+
+        // 返回数据值
+        value = GetValue(key);
+        return true;
+    }
+
+    // 写入数据项
+    bool WriteItem(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value,
+        const TransactionContext& context
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取数据项的读写时间戳
+        auto [read_ts, write_ts] = GetTimestamps(key);
+
+        // 检查读时间戳
+        if (read_ts > context.timestamp) {
+            // 读-写冲突，事务需要终止
+            return false;
+        }
+
+        // 检查写时间戳
+        if (write_ts > context.timestamp) {
+            // 写-写冲突，事务需要终止
+            return false;
+        }
+
+        // 更新写时间戳和数据值
+        UpdateWriteTimestamp(key, context.timestamp);
+        SetValue(key, value);
+
+        return true;
+    }
+
+    // 提交事务
+    void CommitTransaction(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 清理事务相关的状态
+        CleanupTransaction(txn_id);
+    }
+
+    // 终止事务
+    void AbortTransaction(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 回滚事务的修改
+        RollbackTransaction(txn_id);
+
+        // 清理事务相关的状态
+        CleanupTransaction(txn_id);
+    }
+
+private:
+    // 时间戳映射
+    std::map<Key, std::pair<Timestamp, Timestamp>> key_timestamps_;
+
+    // 数据值存储
+    std::map<Key, Value> data_values_;
+
+    // 事务状态
+    std::map<TransactionId, std::set<Key>> transaction_writes_;
+
+    // 当前时间戳
+    Timestamp current_timestamp_ = 1;
+
+    // 互斥锁
+    std::mutex mutex_;
+
+    // 获取时间戳对
+    std::pair<Timestamp, Timestamp> GetTimestamps(const Key& key) {
+        auto it = key_timestamps_.find(key);
+        if (it != key_timestamps_.end()) {
+            return it->second;
+        }
+        return {0, 0};  // 默认时间戳
+    }
+
+    // 更新读时间戳
+    void UpdateReadTimestamp(const Key& key, Timestamp timestamp) {
+        auto& [read_ts, write_ts] = key_timestamps_[key];
+        read_ts = std::max(read_ts, timestamp);
+    }
+
+    // 更新写时间戳
+    void UpdateWriteTimestamp(const Key& key, Timestamp timestamp) {
+        auto& [read_ts, write_ts] = key_timestamps_[key];
+        write_ts = std::max(write_ts, timestamp);
+    }
+
+    // 设置数据值
+    void SetValue(const Key& key, const Value& value) {
+        data_values_[key] = value;
+    }
+
+    // 获取数据值
+    Value GetValue(const Key& key) {
+        auto it = data_values_.find(key);
+        if (it != data_values_.end()) {
+            return it->second;
+        }
+        return Value();  // 默认值
+    }
+
+    // 清理事务状态
+    void CleanupTransaction(TransactionId txn_id) {
+        transaction_writes_.erase(txn_id);
+    }
+
+    // 回滚事务
+    void RollbackTransaction(TransactionId txn_id) {
+        auto it = transaction_writes_.find(txn_id);
+        if (it != transaction_writes_.end()) {
+            // 恢复原始值（需要保存旧值）
+            for (const auto& key : it->second) {
+                // 这里需要实现值恢复逻辑
+                // 可能需要保存事务的旧值
+            }
+        }
+    }
+};
+```
+
+### 2. Thomas写规则
+
+```cpp
+// Thomas写规则实现
+class ThomasWriteRule {
+public:
+    // 应用Thomas写规则
+    bool ApplyThomasWriteRule(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value,
+        const TransactionContext& context,
+        TimestampManager& ts_manager
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取数据项的写时间戳
+        auto [read_ts, write_ts] = ts_manager.GetTimestamps(key);
+
+        // 检查是否可以应用Thomas写规则
+        if (write_ts > context.timestamp) {
+            // 检查是否有后续事务已经读取了该数据
+            if (HasSubsequentRead(key, context.timestamp)) {
+                // 不能忽略写入，需要终止事务
+                return false;
+            } else {
+                // 可以忽略写入（Thomas写规则）
+                return true;
+            }
+        }
+
+        // 正常写入
+        return ts_manager.WriteItem(txn_id, key, value, context);
+    }
+
+private:
+    // 检查是否有后续事务读取了数据
+    bool HasSubsequentRead(const Key& key, Timestamp timestamp) {
+        auto it = read_timestamps_.find(key);
+        if (it != read_timestamps_.end()) {
+            for (auto read_ts : it->second) {
+                if (read_ts > timestamp) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // 读时间戳记录
+    std::map<Key, std::set<Timestamp>> read_timestamps_;
+    std::mutex mutex_;
+};
+```
+
+## 多版本并发控制（MVCC）
+
+### 1. MVCC基本概念
+
+```cpp
+// 版本数据结构
+struct Version {
+    Value value;
+    Timestamp begin_ts;
+    Timestamp end_ts;
+    TransactionId creator_txn;
+    bool committed;
+};
+
+// MVCC管理器
+class MVCCManager {
+public:
+    // 读取数据
+    bool Read(
+        TransactionId txn_id,
+        const Key& key,
+        Value& value,
+        const TransactionContext& context
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取数据版本
+        auto versions = GetVersions(key);
+
+        // 查找可见版本
+        Version* visible_version = nullptr;
+        for (auto& version : versions) {
+            if (IsVersionVisible(version, context.timestamp)) {
+                if (!visible_version || version.begin_ts > visible_version->begin_ts) {
+                    visible_version = &version;
+                }
+            }
+        }
+
+        if (!visible_version) {
+            return false;  // 没有可见版本
+        }
+
+        value = visible_version->value;
+
+        // 记录读取操作
+        RecordRead(txn_id, key, context.timestamp);
+
+        return true;
+    }
+
+    // 写入数据
+    bool Write(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value,
+        const TransactionContext& context
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 检查写-写冲突
+        if (HasWriteWriteConflict(key, context.timestamp)) {
+            return false;
+        }
+
+        // 检查写-读冲突
+        if (HasWriteReadConflict(key, context.timestamp)) {
+            return false;
+        }
+
+        // 创建新版本
+        CreateNewVersion(txn_id, key, value, context);
+
+        return true;
+    }
+
+    // 提交事务
+    void Commit(TransactionId txn_id, Timestamp commit_ts) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 标记事务的版本为已提交
+        MarkVersionsAsCommitted(txn_id, commit_ts);
+
+        // 清理旧版本
+        CleanupOldVersions();
+
+        // 清理事务状态
+        CleanupTransaction(txn_id);
+    }
+
+    // 终止事务
+    void Abort(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 删除事务的版本
+        DeleteTransactionVersions(txn_id);
+
+        // 清理事务状态
+        CleanupTransaction(txn_id);
+    }
+
+private:
+    // 版本存储
+    std::map<Key, std::vector<Version>> version_store_;
+
+    // 事务状态
+    std::map<TransactionId, std::set<Key>> transaction_versions_;
+
+    // 读取记录
+    std::map<TransactionId, std::map<Key, Timestamp>> read_set_;
+
+    // 互斥锁
+    std::mutex mutex_;
+
+    // 获取版本
+    std::vector<Version>& GetVersions(const Key& key) {
+        return version_store_[key];
+    }
+
+    // 检查版本是否可见
+    bool IsVersionVisible(const Version& version, Timestamp timestamp) {
+        return (version.begin_ts <= timestamp && version.end_ts > timestamp) &&
+               (version.committed || version.creator_txn == GetCurrentTransaction());
+    }
+
+    // 记录读取
+    void RecordRead(TransactionId txn_id, const Key& key, Timestamp timestamp) {
+        read_set_[txn_id][key] = timestamp;
+    }
+
+    // 检查写-写冲突
+    bool HasWriteWriteConflict(const Key& key, Timestamp timestamp) {
+        auto versions = GetVersions(key);
+
+        for (const auto& version : versions) {
+            if (version.end_ts == std::numeric_limits<Timestamp>::max() &&
+                version.begin_ts > timestamp) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // 检查写-读冲突
+    bool HasWriteReadConflict(const Key& key, Timestamp timestamp) {
+        // 检查是否有其他事务在当前事务时间戳之后读取了该数据
+        for (const auto& [txn_id, reads] : read_set_) {
+            auto it = reads.find(key);
+            if (it != reads.end() && it->second > timestamp) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // 创建新版本
+    void CreateNewVersion(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value,
+        const TransactionContext& context
+    ) {
+        auto& versions = GetVersions(key);
+
+        // 找到当前活动版本并设置end_ts
+        for (auto& version : versions) {
+            if (version.end_ts == std::numeric_limits<Timestamp>::max()) {
+                version.end_ts = context.timestamp;
+                break;
+            }
+        }
+
+        // 创建新版本
+        Version new_version;
+        new_version.value = value;
+        new_version.begin_ts = context.timestamp;
+        new_version.end_ts = std::numeric_limits<Timestamp>::max();
+        new_version.creator_txn = txn_id;
+        new_version.committed = false;
+
+        versions.push_back(new_version);
+
+        // 记录事务版本
+        transaction_versions_[txn_id].insert(key);
+    }
+
+    // 标记版本为已提交
+    void MarkVersionsAsCommitted(TransactionId txn_id, Timestamp commit_ts) {
+        auto it = transaction_versions_.find(txn_id);
+        if (it != transaction_versions_.end()) {
+            for (const auto& key : it->second) {
+                auto& versions = GetVersions(key);
+                for (auto& version : versions) {
+                    if (version.creator_txn == txn_id) {
+                        version.committed = true;
+                        version.begin_ts = commit_ts;
+                    }
+                }
+            }
+        }
+    }
+
+    // 删除事务版本
+    void DeleteTransactionVersions(TransactionId txn_id) {
+        auto it = transaction_versions_.find(txn_id);
+        if (it != transaction_versions_.end()) {
+            for (const auto& key : it->second) {
+                auto& versions = GetVersions(key);
+                versions.erase(
+                    std::remove_if(versions.begin(), versions.end(),
+                        [txn_id](const Version& version) {
+                            return version.creator_txn == txn_id;
+                        }),
+                    versions.end()
+                );
+            }
+            transaction_versions_.erase(it);
+        }
+    }
+
+    // 清理旧版本
+    void CleanupOldVersions() {
+        Timestamp oldest_active_ts = GetOldestActiveTimestamp();
+
+        for (auto& [key, versions] : version_store_) {
+            versions.erase(
+                std::remove_if(versions.begin(), versions.end(),
+                    [oldest_active_ts](const Version& version) {
+                        return version.end_ts <= oldest_active_ts;
+                    }),
+                versions.end()
+            );
+        }
+    }
+
+    // 清理事务状态
+    void CleanupTransaction(TransactionId txn_id) {
+        transaction_versions_.erase(txn_id);
+        read_set_.erase(txn_id);
+    }
+
+    // 获取最旧的活动事务时间戳
+    Timestamp GetOldestActiveTimestamp() {
+        Timestamp oldest = std::numeric_limits<Timestamp>::max();
+
+        // 这里需要实现获取最旧活动事务时间戳的逻辑
+        // 可能需要与事务管理器协作
+
+        return oldest;
+    }
+
+    // 获取当前事务ID（简化实现）
+    TransactionId GetCurrentTransaction() {
+        return 0;  // 简化实现
+    }
+};
+```
+
+### 2. 快照隔离
+
+```cpp
+// 快照隔离管理器
+class SnapshotIsolationManager : public MVCCManager {
+public:
+    // 开始事务
+    TransactionId BeginTransaction(IsolationLevel level = IsolationLevel::SNAPSHOT_ISOLATION) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 创建事务状态
+        TransactionState state;
+        state.txn_id = GenerateTransactionId();
+        state.start_ts = GetCommitTimestamp();
+        state.level = level;
+        state.status = TransactionStatus::ACTIVE;
+
+        // 存储事务状态
+        transaction_states_[state.txn_id] = state;
+
+        return state.txn_id;
+    }
+
+    // 读取数据（快照隔离）
+    bool ReadSnapshot(
+        TransactionId txn_id,
+        const Key& key,
+        Value& value
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取事务状态
+        auto it = transaction_states_.find(txn_id);
+        if (it == transaction_states_.end()) {
+            return false;
+        }
+
+        const auto& state = it->second;
+
+        // 获取数据版本
+        auto versions = GetVersions(key);
+
+        // 查找在事务开始时间点已提交的最新版本
+        Version* latest_committed = nullptr;
+        for (auto& version : versions) {
+            if (version.committed && version.begin_ts <= state.start_ts) {
+                if (!latest_committed || version.begin_ts > latest_committed->begin_ts) {
+                    latest_committed = &version;
+                }
+            }
+        }
+
+        if (!latest_committed) {
+            return false;
+        }
+
+        value = latest_committed->value;
+
+        // 记录读取
+        state.read_set.insert(key);
+
+        return true;
+    }
+
+    // 写入数据（快照隔离）
+    bool WriteSnapshot(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value
+    ) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取事务状态
+        auto it = transaction_states_.find(txn_id);
+        if (it == transaction_states_.end()) {
+            return false;
+        }
+
+        auto& state = it->second;
+
+        // 检查写-写冲突（first-committer-wins）
+        if (HasWriteWriteConflict(key, state.start_ts)) {
+            return false;
+        }
+
+        // 创建新版本
+        CreateNewVersion(txn_id, key, value, state.start_ts);
+
+        // 记录写入
+        state.write_set.insert(key);
+
+        return true;
+    }
+
+    // 提交事务（快照隔离）
+    bool CommitTransaction(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 获取事务状态
+        auto it = transaction_states_.find(txn_id);
+        if (it == transaction_states_.end()) {
+            return false;
+        }
+
+        auto& state = it->second;
+
+        // 检查是否有写-写冲突
+        if (HasWriteWriteConflict(state.write_set, state.start_ts)) {
+            AbortTransaction(txn_id);
+            return false;
+        }
+
+        // 获取提交时间戳
+        Timestamp commit_ts = GetCommitTimestamp();
+
+        // 标记版本为已提交
+        MarkVersionsAsCommitted(txn_id, commit_ts);
+
+        // 更新事务状态
+        state.status = TransactionStatus::COMMITTED;
+        state.commit_ts = commit_ts;
+
+        // 清理事务状态
+        CleanupTransaction(txn_id);
+
+        return true;
+    }
+
+private:
+    // 事务状态
+    struct TransactionState {
+        TransactionId txn_id;
+        Timestamp start_ts;
+        Timestamp commit_ts;
+        IsolationLevel level;
+        TransactionStatus status;
+        std::set<Key> read_set;
+        std::set<Key> write_set;
+    };
+
+    // 事务状态存储
+    std::map<TransactionId, TransactionState> transaction_states_;
+
+    // 互斥锁
+    std::mutex mutex_;
+
+    // 生成事务ID
+    TransactionId GenerateTransactionId() {
+        static TransactionId next_id = 1;
+        return next_id++;
+    }
+
+    // 获取提交时间戳
+    Timestamp GetCommitTimestamp() {
+        static Timestamp next_ts = 1;
+        return next_ts++;
+    }
+
+    // 检查写-写冲突
+    bool HasWriteWriteConflict(const std::set<Key>& write_set, Timestamp start_ts) {
+        for (const auto& key : write_set) {
+            if (HasWriteWriteConflict(key, start_ts)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 创建新版本（重写以适应快照隔离）
+    void CreateNewVersion(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& value,
+        Timestamp start_ts
+    ) {
+        auto& versions = GetVersions(key);
+
+        // 创建新版本
+        Version new_version;
+        new_version.value = value;
+        new_version.begin_ts = start_ts;  // 临时设置为开始时间戳
+        new_version.end_ts = std::numeric_limits<Timestamp>::max();
+        new_version.creator_txn = txn_id;
+        new_version.committed = false;
+
+        versions.push_back(new_version);
+    }
+
+    // 清理事务状态
+    void CleanupTransaction(TransactionId txn_id) {
+        transaction_states_.erase(txn_id);
+        MVCCManager::CleanupTransaction(txn_id);
+    }
+};
+```
+
+## 实践练习
+
+### 练习1：实现简单的锁管理器
+
+```cpp
+// 练习：实现简单的锁管理器
+class SimpleLockManager {
+public:
+    bool AcquireLock(TransactionId txn_id, const Key& key, LockType type) {
+        // 学生需要实现锁获取逻辑
+        // 1. 检查锁兼容性
+        // 2. 处理锁冲突
+        // 3. 更新锁表
+        return false;
+    }
+
+    void ReleaseLock(TransactionId txn_id, const Key& key) {
+        // 学生需要实现锁释放逻辑
+        // 1. 从锁表中移除锁
+        // 2. 唤醒等待事务
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习2：实现时间戳排序协议
+
+```cpp
+// 练习：实现时间戳排序协议
+class TimestampOrdering {
+public:
+    bool Read(TransactionId txn_id, const Key& key, Value& value) {
+        // 学生需要实现时间戳排序读取逻辑
+        // 1. 检查读写时间戳
+        // 2. 处理冲突
+        // 3. 更新读时间戳
+        return false;
+    }
+
+    bool Write(TransactionId txn_id, const Key& key, const Value& value) {
+        // 学生需要实现时间戳排序写入逻辑
+        // 1. 检查读写时间戳
+        // 2. 处理冲突
+        // 3. 更新写时间戳
+        return false;
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习3：实现基本的MVCC
+
+```cpp
+// 练习：实现基本的多版本并发控制
+class BasicMVCC {
+public:
+    Value Read(TransactionId txn_id, const Key& key) {
+        // 学生需要实现MVCC读取逻辑
+        // 1. 查找可见版本
+        // 2. 处理版本可见性
+        // 3. 返回适当的版本
+        return Value();
+    }
+
+    void Write(TransactionId txn_id, const Key& key, const Value& value) {
+        // 学生需要实现MVCC写入逻辑
+        // 1. 创建新版本
+        // 2. 处理冲突检测
+        // 3. 更新版本链
+    }
+
+    void Commit(TransactionId txn_id) {
+        // 学生需要实现提交逻辑
+        // 1. 标记版本为已提交
+        // 2. 清理旧版本
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+## 总结
+
+并发控制理论是数据库系统的核心理论基础，通过本讲的学习，我们理解了：
+
+1. **并发问题**：理解了各种并发问题的本质和特征
+2. **锁机制**：掌握了基本的锁类型、锁协议和死锁处理
+3. **时间戳排序**：学会了基于时间戳的并发控制方法
+4. **多版本并发控制**：理解了MVCC的基本原理和实现
+5. **隔离级别**：掌握了不同隔离级别的含义和实现
+
+并发控制的目标是在保证数据一致性的前提下，最大化系统的并发性。不同的并发控制机制有不同的性能特征和适用场景，需要根据具体的应用需求选择合适的方法。
+
+## 进一步学习
+
+- [Concurrency Control and Recovery in Database Systems](https://dl.acm.org/doi/book/10.1145/563709)
+- [Transaction Processing: Concepts and Techniques](https://dl.acm.org/doi/book/10.5555/563711)
+- [PostgreSQL Concurrency Control](https://www.postgresql.org/docs/current/concurrency-control.html)
+- [MVCC in PostgreSQL](https://www.postgresql.org/docs/current/mvcc.html)
+- [Oracle Concurrency Control](https://docs.oracle.com/en/database/oracle/oracle-database/21/cncpt/concurrency-control.html)

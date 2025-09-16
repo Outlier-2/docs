@@ -1,0 +1,783 @@
+---
+title: "Week 5：拥塞控制"
+description: "CS144 Week 5 - 拥塞控制原理、算法实现、性能优化"
+---
+
+# Week 5：拥塞控制
+
+## 课程概述
+
+Week 5深入探讨拥塞控制的原理和实现，包括各种拥塞控制算法和性能优化技术。
+
+## 拥塞控制基础
+
+### 什么是网络拥塞？
+
+网络拥塞是指网络中的数据包数量超过了网络的处理能力，导致网络性能下降的现象。
+
+#### 拥塞的表现
+1. **高延迟**：数据包传输时间增加
+2. **高丢包率**：路由器缓冲区溢出导致丢包
+3. **低吞吐量**：实际传输速率下降
+4. **抖动**：延迟变化增大
+
+### 拥塞控制的目标
+
+1. **公平性**：各流量公平分享网络资源
+2. **效率**：充分利用网络带宽
+3. **稳定性**：避免拥塞崩溃
+4. **快速响应**：快速适应网络变化
+
+## 拥塞控制算法
+
+### 基本原理
+
+拥塞控制通过调节发送速率来避免和缓解网络拥塞。
+
+#### 窗口机制
+
+```cpp
+class CongestionWindow {
+private:
+    uint32_t cwnd;           // 拥塞窗口大小
+    uint32_t ssthresh;       // 慢启动阈值
+    uint32_t min_cwnd;       // 最小窗口大小
+    uint32_t max_cwnd;       // 最大窗口大小
+
+public:
+    CongestionWindow() : cwnd(1), ssthresh(UINT32_MAX), min_cwnd(1), max_cwnd(65535) {}
+
+    void on_packet_sent(uint32_t bytes) {
+        // 发送数据包时的处理
+    }
+
+    void on_ack_received(uint32_t bytes_acked) {
+        // 接收到ACK时的处理
+    }
+
+    void on_packet_loss() {
+        // 数据包丢失时的处理
+    }
+
+    uint32_t get_window_size() const {
+        return std::clamp(cwnd, min_cwnd, max_cwnd);
+    }
+};
+```
+
+### 慢启动 (Slow Start)
+
+慢启动是TCP连接开始时的阶段，窗口大小呈指数增长。
+
+```cpp
+class SlowStart {
+private:
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    bool in_slow_start;
+
+public:
+    void on_ack_received(uint32_t bytes_acked) {
+        if (in_slow_start) {
+            // 指数增长
+            cwnd += bytes_acked;
+
+            // 检查是否超过阈值
+            if (cwnd >= ssthresh) {
+                in_slow_start = false;
+            }
+        }
+    }
+
+    void on_packet_loss() {
+        ssthresh = std::max(cwnd / 2, 2 * MSS);
+        cwnd = 1;
+        in_slow_start = true;
+    }
+};
+```
+
+### 拥塞避免 (Congestion Avoidance)
+
+拥塞避免阶段，窗口大小线性增长。
+
+```cpp
+class CongestionAvoidance {
+private:
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    uint32_t bytes_acked_this_window;
+
+public:
+    void on_ack_received(uint32_t bytes_acked) {
+        bytes_acked_this_window += bytes_acked;
+
+        // 线性增长：每个窗口增加一个MSS
+        if (bytes_acked_this_window >= cwnd) {
+            cwnd += MSS;
+            bytes_acked_this_window = 0;
+        }
+    }
+
+    void on_packet_loss() {
+        ssthresh = std::max(cwnd / 2, 2 * MSS);
+        cwnd = ssthresh;
+    }
+};
+```
+
+### 快速重传 (Fast Retransmit)
+
+快速重传通过重复ACK来检测数据包丢失，避免等待超时。
+
+```cpp
+class FastRetransmit {
+private:
+    std::map<uint32_t, int> dup_ack_count;
+    uint32_t last_ack;
+
+public:
+    void on_ack_received(uint32_t ack_num) {
+        if (ack_num == last_ack) {
+            dup_ack_count[ack_num]++;
+
+            // 3个重复ACK触发快速重传
+            if (dup_ack_count[ack_num] >= 3) {
+                trigger_fast_retransmit(ack_num);
+            }
+        } else {
+            // 新ACK，重置计数器
+            dup_ack_count.clear();
+            last_ack = ack_num;
+        }
+    }
+
+    void trigger_fast_retransmit(uint32_t ack_num) {
+        // 重传丢失的数据包
+        retransmit_packet(ack_num);
+
+        // 进入快速恢复
+        enter_fast_recovery();
+    }
+};
+```
+
+### 快速恢复 (Fast Recovery)
+
+快速恢复在快速重传后，不回到慢启动，而是调整窗口大小继续传输。
+
+```cpp
+class FastRecovery {
+private:
+    bool in_recovery;
+    uint32_t recovery_point;
+    uint32_t ssthresh;
+
+public:
+    void enter_fast_recovery(uint32_t ack_num) {
+        in_recovery = true;
+        recovery_point = ack_num;
+        ssthresh = cwnd / 2;
+        cwnd = ssthresh + 3;  // 加上3个重复ACK
+    }
+
+    void on_ack_received(uint32_t ack_num) {
+        if (in_recovery) {
+            if (ack_num >= recovery_point) {
+                // 新数据确认，退出快速恢复
+                exit_fast_recovery();
+            } else {
+                // 在快速恢复阶段，增加窗口
+                cwnd++;
+            }
+        }
+    }
+
+    void exit_fast_recovery() {
+        in_recovery = false;
+        cwnd = ssthresh;
+    }
+};
+```
+
+## 高级拥塞控制算法
+
+### Tahoe算法
+
+```cpp
+class TahoeAlgorithm {
+private:
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    enum State { SLOW_START, CONGESTION_AVOIDANCE } state;
+
+public:
+    void on_ack_received(uint32_t bytes_acked) {
+        if (state == SLOW_START) {
+            cwnd += bytes_acked;
+            if (cwnd >= ssthresh) {
+                state = CONGESTION_AVOIDANCE;
+            }
+        } else {
+            // 拥塞避免：线性增长
+            cwnd += MSS * bytes_acked / cwnd;
+        }
+    }
+
+    void on_packet_loss() {
+        // 无论什么原因，都回到慢启动
+        ssthresh = cwnd / 2;
+        cwnd = 1;
+        state = SLOW_START;
+    }
+};
+```
+
+### Reno算法
+
+```cpp
+class RenoAlgorithm {
+private:
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    enum State { SLOW_START, CONGESTION_AVOIDANCE, FAST_RECOVERY } state;
+    std::map<uint32_t, int> dup_ack_count;
+
+public:
+    void on_ack_received(uint32_t ack_num) {
+        if (state == FAST_RECOVERY) {
+            if (ack_num >= recovery_point) {
+                // 退出快速恢复
+                cwnd = ssthresh;
+                state = CONGESTION_AVOIDANCE;
+            } else {
+                // 在快速恢复中，窗口增加
+                cwnd++;
+            }
+        } else {
+            // 正常的ACK处理
+            if (dup_ack_count[ack_num] >= 3) {
+                // 快速重传和快速恢复
+                ssthresh = cwnd / 2;
+                cwnd = ssthresh + 3;
+                state = FAST_RECOVERY;
+                recovery_point = ack_num;
+            } else {
+                // 正常的拥塞控制
+                if (state == SLOW_START) {
+                    cwnd += bytes_acked;
+                } else {
+                    cwnd += MSS * bytes_acked / cwnd;
+                }
+            }
+        }
+    }
+};
+```
+
+### NewReno算法
+
+```cpp
+class NewRenoAlgorithm {
+private:
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    uint32_t recovery_point;
+    bool in_recovery;
+
+public:
+    void on_ack_received(uint32_t ack_num) {
+        if (in_recovery) {
+            if (ack_num >= recovery_point) {
+                // 所有数据包都被确认
+                exit_recovery();
+            } else {
+                // 部分确认，窗口增加
+                cwnd++;
+            }
+        } else {
+            // 正常的拥塞控制
+            handle_normal_ack(ack_num);
+        }
+    }
+
+    void on_packet_loss(uint32_t seq_num) {
+        if (!in_recovery) {
+            enter_recovery(seq_num);
+        }
+    }
+
+private:
+    void enter_recovery(uint32_t seq_num) {
+        in_recovery = true;
+        ssthresh = cwnd / 2;
+        cwnd = ssthresh + 3;
+        recovery_point = highest_seq_sent;
+    }
+
+    void exit_recovery() {
+        in_recovery = false;
+        cwnd = ssthresh;
+    }
+};
+```
+
+### BIC算法
+
+```cpp
+class BICAlgorithm {
+private:
+    uint32_t cwnd;
+    uint32_t max_cwnd;      // 拥塞点
+    uint32_t min_cwnd;      // 最低点
+    uint32_t last_max_cwnd;
+    bool in_binary_search;
+
+public:
+    void on_ack_received(uint32_t bytes_acked) {
+        if (in_binary_search) {
+            // 二分搜索
+            uint32_t mid = (min_cwnd + max_cwnd) / 2;
+            if (cwnd >= mid) {
+                min_cwnd = mid;
+            } else {
+                max_cwnd = mid;
+            }
+            cwnd = mid;
+        } else {
+            // 加性增长
+            cwnd += cwnd / 32;
+        }
+
+        // 检查是否超过最大窗口
+        if (cwnd >= last_max_cwnd) {
+            in_binary_search = true;
+            max_cwnd = cwnd;
+            min_cwnd = last_max_cwnd;
+        }
+    }
+
+    void on_packet_loss() {
+        last_max_cwnd = cwnd;
+        max_cwnd = cwnd;
+        min_cwnd = cwnd / 2;
+        cwnd = min_cwnd;
+        in_binary_search = true;
+    }
+};
+```
+
+### CUBIC算法
+
+```cpp
+class CUBICAlgorithm {
+private:
+    uint32_t cwnd;
+    uint32_t max_cwnd;
+    double cubic_k;
+    double cubic_c;
+    std::chrono::steady_clock::time_point last_loss_time;
+
+public:
+    CUBICAlgorithm() : cubic_c(0.4), last_loss_time(std::chrono::steady_clock::now()) {
+        cubic_k = std::cbrt(max_cwnd / cubic_c);
+    }
+
+    void on_ack_received(uint32_t bytes_acked) {
+        auto now = std::chrono::steady_clock::now();
+        auto t = std::chrono::duration<double>(now - last_loss_time).count();
+
+        // CUBIC函数
+        double w_cubic = cubic_c * std::pow(t - cubic_k, 3) + max_cwnd;
+
+        // TCP友好
+        double w_tcp = max_cwnd * (1.2 * t - 0.8);
+
+        // 取两者中的较大值
+        double target_cwnd = std::max(w_cubic, w_tcp);
+
+        // 逐步调整到目标窗口
+        cwnd = static_cast<uint32_t>(target_cwnd);
+    }
+
+    void on_packet_loss() {
+        max_cwnd = cwnd;
+        last_loss_time = std::chrono::steady_clock::now();
+        cubic_k = std::cbrt(max_cwnd / cubic_c);
+        cwnd = cwnd * 0.7;  // 乘性减少
+    }
+};
+```
+
+## 拥塞控制实现
+
+### 完整的拥塞控制实现
+
+```cpp
+class AdvancedCongestionControl {
+private:
+    enum Algorithm { TAHOE, RENO, NEWRENO, CUBIC } algorithm;
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    uint32_t mss;
+    bool in_slow_start;
+    bool in_recovery;
+    uint32_t recovery_point;
+
+    // CUBIC specific
+    uint32_t max_cwnd;
+    double cubic_c;
+    double cubic_k;
+    std::chrono::steady_clock::time_point last_loss_time;
+
+    // Statistics
+    uint64_t total_acked;
+    uint64_t total_sent;
+    std::chrono::steady_clock::time_point start_time;
+
+public:
+    AdvancedCongestionControl(Algorithm algo = CUBIC)
+        : algorithm(algo), cwnd(1), ssthresh(UINT32_MAX), mss(1460),
+          in_slow_start(true), in_recovery(false), recovery_point(0),
+          max_cwnd(0), cubic_c(0.4), last_loss_time(std::chrono::steady_clock::now()),
+          total_acked(0), total_sent(0), start_time(std::chrono::steady_clock::now()) {
+
+        if (algorithm == CUBIC) {
+            cubic_k = 0;
+        }
+    }
+
+    void on_ack_received(uint32_t bytes_acked) {
+        total_acked += bytes_acked;
+
+        switch (algorithm) {
+            case TAHOE:
+                handle_tahoe_ack(bytes_acked);
+                break;
+            case RENO:
+                handle_reno_ack(bytes_acked);
+                break;
+            case NEWRENO:
+                handle_newreno_ack(bytes_acked);
+                break;
+            case CUBIC:
+                handle_cubic_ack(bytes_acked);
+                break;
+        }
+    }
+
+    void on_packet_loss() {
+        switch (algorithm) {
+            case TAHOE:
+                handle_tahoe_loss();
+                break;
+            case RENO:
+                handle_reno_loss();
+                break;
+            case NEWRENO:
+                handle_newreno_loss();
+                break;
+            case CUBIC:
+                handle_cubic_loss();
+                break;
+        }
+    }
+
+    uint32_t get_window_size() const {
+        return cwnd;
+    }
+
+    double get_throughput() const {
+        auto elapsed = std::chrono::steady_clock::now() - start_time;
+        return total_acked / std::chrono::duration<double>(elapsed).count();
+    }
+
+private:
+    void handle_tahoe_ack(uint32_t bytes_acked) {
+        if (in_slow_start) {
+            cwnd += bytes_acked;
+            if (cwnd >= ssthresh) {
+                in_slow_start = false;
+            }
+        } else {
+            cwnd += mss * bytes_acked / cwnd;
+        }
+    }
+
+    void handle_tahoe_loss() {
+        ssthresh = std::max(cwnd / 2, 2 * mss);
+        cwnd = 1;
+        in_slow_start = true;
+    }
+
+    void handle_cubic_ack(uint32_t bytes_acked) {
+        auto now = std::chrono::steady_clock::now();
+        auto t = std::chrono::duration<double>(now - last_loss_time).count();
+
+        // CUBIC窗口调整
+        double w_cubic = cubic_c * std::pow(t - cubic_k, 3) + max_cwnd;
+        cwnd = static_cast<uint32_t>(w_cubic);
+    }
+
+    void handle_cubic_loss() {
+        max_cwnd = cwnd;
+        last_loss_time = std::chrono::steady_clock::now();
+        cubic_k = std::cbrt(max_cwnd / cubic_c);
+        cwnd = static_cast<uint32_t>(cwnd * 0.7);
+    }
+};
+```
+
+## 拥塞控制测试
+
+### 测试环境搭建
+
+```cpp
+class CongestionControlTest {
+private:
+    NetworkSimulator network;
+    AdvancedCongestionControl sender_cc;
+    AdvancedCongestionControl receiver_cc;
+
+public:
+    void run_test(const std::string& test_name, Algorithm algorithm) {
+        std::cout << "Running test: " << test_name << std::endl;
+
+        // 设置算法
+        sender_cc = AdvancedCongestionControl(algorithm);
+
+        // 记录统计信息
+        TestStats stats;
+
+        // 运行测试
+        for (int i = 0; i < TEST_DURATION; ++i) {
+            // 发送数据
+            uint32_t window_size = sender_cc.get_window_size();
+            send_data(window_size);
+
+            // 接收ACK
+            process_acks();
+
+            // 模拟网络条件
+            if (should_drop_packet()) {
+                sender_cc.on_packet_loss();
+            }
+
+            // 更新统计
+            stats.update(sender_cc);
+        }
+
+        // 输出结果
+        stats.print_results();
+    }
+};
+```
+
+### 性能测试场景
+
+```cpp
+void test_congestion_control_algorithms() {
+    CongestionControlTest tester;
+
+    std::vector<Algorithm> algorithms = {TAHOE, RENO, NEWRENO, CUBIC};
+    std::vector<std::string> algorithm_names = {"Tahoe", "Reno", "NewReno", "CUBIC"};
+
+    for (size_t i = 0; i < algorithms.size(); ++i) {
+        // 低延迟网络测试
+        tester.run_test(algorithm_names[i] + " - Low Latency", algorithms[i]);
+
+        // 高延迟网络测试
+        tester.run_test(algorithm_names[i] + " - High Latency", algorithms[i]);
+
+        // 高丢包率网络测试
+        tester.run_test(algorithm_names[i] + " - High Loss", algorithms[i]);
+    }
+}
+```
+
+## 实验项目：Checkpoint 5
+
+### 目标
+- 实现多种拥塞控制算法
+- 比较不同算法的性能
+- 优化网络传输效率
+
+### 实现步骤
+
+#### 1. 拥塞控制框架
+
+```cpp
+class CongestionControlFramework {
+private:
+    std::unique_ptr<CongestionControlAlgorithm> algorithm;
+    NetworkInterface network;
+
+public:
+    void set_algorithm(AlgorithmType type) {
+        switch (type) {
+            case AlgorithmType::CUBIC:
+                algorithm = std::make_unique<CUBICAlgorithm>();
+                break;
+            case AlgorithmType::RENO:
+                algorithm = std::make_unique<RenoAlgorithm>();
+                break;
+            // ... 其他算法
+        }
+    }
+
+    void run() {
+        while (true) {
+            // 发送数据
+            uint32_t window_size = algorithm->get_window_size();
+            send_data(window_size);
+
+            // 接收ACK
+            auto ack = receive_ack();
+            if (ack) {
+                algorithm->on_ack_received(ack->bytes_acked);
+            }
+
+            // 处理超时
+            if (check_timeout()) {
+                algorithm->on_timeout();
+            }
+
+            // 处理重复ACK
+            if (check_dup_ack()) {
+                algorithm->on_dup_ack();
+            }
+        }
+    }
+};
+```
+
+#### 2. 性能监控
+
+```cpp
+class PerformanceMonitor {
+private:
+    struct Metrics {
+        double throughput;
+        double latency;
+        double loss_rate;
+        uint32_t window_size;
+        double fairness_index;
+    };
+
+    std::vector<Metrics> history;
+    std::chrono::steady_clock::time_point start_time;
+
+public:
+    void record_metrics(const CongestionControlAlgorithm& algorithm) {
+        Metrics metrics;
+        metrics.throughput = algorithm.get_throughput();
+        metrics.latency = algorithm.get_average_latency();
+        metrics.loss_rate = algorithm.get_loss_rate();
+        metrics.window_size = algorithm.get_window_size();
+        metrics.fairness_index = calculate_fairness_index();
+
+        history.push_back(metrics);
+    }
+
+    void generate_report() {
+        std::cout << "=== Performance Report ===" << std::endl;
+        std::cout << "Average Throughput: " << calculate_average_throughput() << " Mbps" << std::endl;
+        std::cout << "Average Latency: " << calculate_average_latency() << " ms" << std::endl;
+        std::cout << "Average Loss Rate: " << calculate_average_loss_rate() << "%" << std::endl;
+        std::cout << "Fairness Index: " << calculate_fairness_index() << std::endl;
+    }
+};
+```
+
+## 调试和优化
+
+### 常见问题诊断
+
+```cpp
+class CongestionControlDebugger {
+public:
+    void diagnose_slow_throughput(const CongestionControlAlgorithm& algorithm) {
+        // 检查窗口大小
+        if (algorithm.get_window_size() < EXPECTED_MIN_WINDOW) {
+            std::cout << "Window size too small" << std::endl;
+        }
+
+        // 检查丢包率
+        if (algorithm.get_loss_rate() > MAX_ACCEPTABLE_LOSS) {
+            std::cout << "High packet loss detected" << std::endl;
+        }
+
+        // 检查RTT
+        if (algorithm.get_average_rtt() > MAX_ACCEPTABLE_RTT) {
+            std::cout << "High RTT detected" << std::endl;
+        }
+    }
+
+    void analyze_window_evolution(const std::vector<uint32_t>& window_sizes) {
+        // 分析窗口变化趋势
+        double avg_increase_rate = calculate_increase_rate(window_sizes);
+
+        if (avg_increase_rate < MIN_INCREASE_RATE) {
+            std::cout << "Window growing too slowly" << std::endl;
+        }
+
+        // 检查窗口振荡
+        if (calculate_oscillation(window_sizes) > MAX_OSCILLATION) {
+            std::cout << "Excessive window oscillation" << std::endl;
+        }
+    }
+};
+```
+
+### 参数调优
+
+```cpp
+class CongestionControlTuner {
+private:
+    std::map<std::string, double> parameters;
+
+public:
+    void tune_parameters(const NetworkConditions& conditions) {
+        // 根据网络条件调整参数
+        if (conditions.bandwidth > HIGH_BANDWIDTH_THRESHOLD) {
+            parameters["cubic_c"] = 0.8;  // 更快的增长
+        } else if (conditions.rtt > HIGH_RTT_THRESHOLD) {
+            parameters["cubic_c"] = 0.2;  // 更慢的增长
+        }
+
+        if (conditions.loss_rate > HIGH_LOSS_THRESHOLD) {
+            parameters["beta"] = 0.5;  // 更保守的减少
+        }
+    }
+
+    void apply_tuning(CongestionControlAlgorithm& algorithm) {
+        for (const auto& [param, value] : parameters) {
+            algorithm.set_parameter(param, value);
+        }
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 比较Tahoe、Reno、NewReno和CUBIC算法的异同
+2. 什么是公平性？如何衡量拥塞控制的公平性？
+3. 快速重传和快速恢复如何提高TCP性能？
+
+### 实践练习
+1. 实现CUBIC算法
+2. 比较不同拥塞控制算法的性能
+3. 优化拥塞控制参数
+
+### 挑战项目
+1. 实现基于机器学习的拥塞控制
+2. 实现多路径拥塞控制
+3. 实现无线网络的拥塞控制优化
+
+## 下周预告
+
+Week 6将继续拥塞控制的主题，并介绍家庭网络的概念。
+
+---
+*继续学习：[Week 6：拥塞控制与家庭网络](./week6)*

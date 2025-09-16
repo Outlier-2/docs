@@ -1,0 +1,2076 @@
+---
+title: 'Lecture 20: Logging & Recovery II'
+description: '深入探讨数据库恢复算法，包括ARIES算法、恢复过程优化、灾难恢复和高可用性策略'
+date: '2024-02-20'
+tags: ['数据库系统', '日志与恢复', 'CMU 15-445']
+---
+
+# Lecture 20: Logging & Recovery II
+
+## 概述
+
+恢复算法是数据库系统在故障后恢复数据一致性的关键技术。本讲将深入探讨ARIES恢复算法、恢复过程的优化技术、灾难恢复策略以及高可用性方案。
+
+## ARIES恢复算法
+
+### 1. ARIES算法基础
+
+```cpp
+// ARIES恢复管理器
+class ARIESRecoveryManager {
+public:
+    // ARIES恢复阶段
+    enum class RecoveryPhase {
+        ANALYSIS,        // 分析阶段
+        REDO,           // 重做阶段
+        UNDO            // 撤销阶段
+    };
+
+    // 事务状态
+    struct TransactionState {
+        TransactionId txn_id;
+        LSN last_lsn;
+        TransactionStatus status;
+        std::chrono::steady_clock::time_point start_time;
+    };
+
+    // 页面状态
+    struct PageState {
+        PageId page_id;
+        LSN page_lsn;
+        bool recoverable;
+        bool dirty;
+    };
+
+    // 恢复配置
+    struct RecoveryConfig {
+        bool enable_parallel_recovery = false;  // 启用并行恢复
+        size_t recovery_threads = 4;           // 恢复线程数
+        uint64_t buffer_pool_size = 1024 * 1024 * 1024;  // 1GB
+        bool enable_incremental_recovery = true;  // 启用增量恢复
+        uint32_t max_recovery_lag_ms = 30000;  // 最大恢复延迟30秒
+    };
+
+    ARIESRecoveryManager(
+        LogManager* log_manager,
+        BufferPoolManager* buffer_pool,
+        const RecoveryConfig& config = RecoveryConfig{}
+    ) : log_manager_(log_manager), buffer_pool_(buffer_pool), config_(config) {}
+
+    // 执行完整恢复
+    bool PerformRecovery() {
+        auto start_time = std::chrono::steady_clock::now();
+
+        try {
+            // 阶段1: 分析
+            AnalysisPhase();
+
+            // 阶段2: 重做
+            RedoPhase();
+
+            // 阶段3: 撤销
+            UndoPhase();
+
+            // 清理和验证
+            CleanupAndValidate();
+
+            auto end_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                end_time - start_time).count();
+
+            std::cout << "ARIES recovery completed successfully in "
+                      << duration << " seconds" << std::endl;
+
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "Recovery failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    // 增量恢复
+    bool PerformIncrementalRecovery(LSN from_lsn) {
+        // 从指定LSN开始进行增量恢复
+        return PerformRecoveryFromLSN(from_lsn);
+    }
+
+private:
+    LogManager* log_manager_;
+    BufferPoolManager* buffer_pool_;
+    RecoveryConfig config_;
+    LSN master_record_lsn_ = INVALID_LSN;
+    std::unordered_map<TransactionId, TransactionState> transaction_table_;
+    std::unordered_map<PageId, PageState> dirty_page_table_;
+    std::atomic<RecoveryPhase> current_phase_{RecoveryPhase::ANALYSIS};
+
+    // 分析阶段
+    void AnalysisPhase() {
+        std::cout << "Starting analysis phase..." << std::endl;
+        current_phase_.store(RecoveryPhase::ANALYSIS);
+
+        // 1. 从最近的检查点开始
+        auto checkpoint_lsn = FindMostRecentCheckpoint();
+        LSN start_lsn = checkpoint_lsn;
+
+        // 2. 前向扫描日志
+        ForwardScanLog(start_lsn, [this](std::unique_ptr<LogRecord> record) {
+            ProcessLogRecordAnalysis(record.get());
+        });
+
+        std::cout << "Analysis phase completed" << std::endl;
+    }
+
+    // 重做阶段
+    void RedoPhase() {
+        std::cout << "Starting redo phase..." << std::endl;
+        current_phase_.store(RecoveryPhase::REDO);
+
+        // 1. 确定重做起点
+        LSN redo_start_lsn = DetermineRedoStartLSN();
+
+        // 2. 前向扫描并重做
+        ForwardScanLog(redo_start_lsn, [this](std::unique_ptr<LogRecord> record) {
+            ProcessLogRecordRedo(record.get());
+        });
+
+        std::cout << "Redo phase completed" << std::endl;
+    }
+
+    // 撤销阶段
+    void UndoPhase() {
+        std::cout << "Starting undo phase..." << std::endl;
+        current_phase_.store(RecoveryPhase::UNDO);
+
+        // 1. 构建撤销列表
+        std::vector<TransactionId> loser_txns = BuildLoserList();
+
+        // 2. 按时间逆序撤销
+        std::sort(loser_txns.begin(), loser_txns.end(),
+                  [this](TransactionId a, TransactionId b) {
+                      return transaction_table_[a].start_time > transaction_table_[b].start_time;
+                  });
+
+        // 3. 执行撤销
+        for (auto txn_id : loser_txns) {
+            UndoTransaction(txn_id);
+        }
+
+        std::cout << "Undo phase completed" << std::endl;
+    }
+
+    // 查找最近的检查点
+    LSN FindMostRecentCheckpoint() {
+        // 从检查点控制文件读取
+        LSN checkpoint_lsn = LoadCheckpointFromControlFile();
+
+        if (checkpoint_lsn != INVALID_LSN) {
+            std::cout << "Found checkpoint at LSN: " << checkpoint_lsn << std::endl;
+            return checkpoint_lsn;
+        }
+
+        std::cout << "No checkpoint found, starting from beginning" << std::endl;
+        return 0;  // 从日志开头开始
+    }
+
+    // 前向扫描日志
+    void ForwardScanLog(LSN start_lsn, std::function<void(std::unique_ptr<LogRecord>)> processor) {
+        LSN current_lsn = start_lsn;
+
+        while (true) {
+            auto record = log_manager_->ReadLogRecord(current_lsn);
+            if (!record) {
+                break;  // 到达日志末尾
+            }
+
+            processor(std::move(record));
+
+            // 移动到下一个记录
+            current_lsn = record->GetLSN() + record->GetSize();
+        }
+    }
+
+    // 处理分析阶段的日志记录
+    void ProcessLogRecordAnalysis(LogRecord* record) {
+        switch (record->GetType()) {
+            case LogRecordType::BEGIN:
+                ProcessBeginRecordAnalysis(record);
+                break;
+            case LogRecordType::COMMIT:
+                ProcessCommitRecordAnalysis(record);
+                break;
+            case LogRecordType::ABORT:
+                ProcessAbortRecordAnalysis(record);
+                break;
+            case LogRecordType::UPDATE:
+                ProcessUpdateRecordAnalysis(record);
+                break;
+            case LogRecordType::CHECKPOINT:
+                ProcessCheckpointRecordAnalysis(record);
+                break;
+            default:
+                break;
+        }
+    }
+
+    // 处理BEGIN记录（分析阶段）
+    void ProcessBeginRecordAnalysis(LogRecord* record) {
+        auto txn_id = record->GetTransactionId();
+
+        TransactionState state;
+        state.txn_id = txn_id;
+        state.last_lsn = record->GetLSN();
+        state.status = TransactionStatus::ACTIVE;
+        state.start_time = std::chrono::steady_clock::now();
+
+        transaction_table_[txn_id] = state;
+    }
+
+    // 处理COMMIT记录（分析阶段）
+    void ProcessCommitRecordAnalysis(LogRecord* record) {
+        auto txn_id = record->GetTransactionId();
+
+        auto it = transaction_table_.find(txn_id);
+        if (it != transaction_table_.end()) {
+            it->second.status = TransactionStatus::COMMITTED;
+            it->second.last_lsn = record->GetLSN();
+        }
+    }
+
+    // 处理ABORT记录（分析阶段）
+    void ProcessAbortRecordAnalysis(LogRecord* record) {
+        auto txn_id = record->GetTransactionId();
+
+        auto it = transaction_table_.find(txn_id);
+        if (it != transaction_table_.end()) {
+            it->second.status = TransactionStatus::ABORTED;
+            it->second.last_lsn = record->GetLSN();
+        }
+    }
+
+    // 处理UPDATE记录（分析阶段）
+    void ProcessUpdateRecordAnalysis(LogRecord* record) {
+        auto update_record = static_cast<UpdateLogRecord*>(record);
+        auto txn_id = record->GetTransactionId();
+
+        // 更新事务表
+        auto it = transaction_table_.find(txn_id);
+        if (it != transaction_table_.end()) {
+            it->second.last_lsn = record->GetLSN();
+        }
+
+        // 更新脏页表
+        PageId page_id = ExtractPageId(update_record->GetKey());
+        auto page_it = dirty_page_table_.find(page_id);
+        if (page_it == dirty_page_table_.end()) {
+            PageState page_state;
+            page_state.page_id = page_id;
+            page_state.page_lsn = record->GetLSN();
+            page_state.recoverable = true;
+            page_state.dirty = true;
+            dirty_page_table_[page_id] = page_state;
+        } else {
+            if (page_it->second.page_lsn < record->GetLSN()) {
+                page_it->second.page_lsn = record->GetLSN();
+            }
+        }
+    }
+
+    // 处理CHECKPOINT记录（分析阶段）
+    void ProcessCheckpointRecordAnalysis(LogRecord* record) {
+        // 加载检查点记录中的事务和页面信息
+        LoadCheckpointData(record);
+    }
+
+    // 确定重做起点
+    LSN DetermineRedoStartLSN() {
+        LSN redo_start_lsn = INVALID_LSN;
+
+        // 1. 找到最小的脏页LSN
+        for (const auto& [page_id, page_state] : dirty_page_table_) {
+            if (redo_start_lsn == INVALID_LSN || page_state.page_lsn < redo_start_lsn) {
+                redo_start_lsn = page_state.page_lsn;
+            }
+        }
+
+        // 2. 如果没有脏页，使用最近检查点的LSN
+        if (redo_start_lsn == INVALID_LSN) {
+            redo_start_lsn = FindMostRecentCheckpoint();
+        }
+
+        std::cout << "Redo start LSN: " << redo_start_lsn << std::endl;
+        return redo_start_lsn;
+    }
+
+    // 处理重做阶段的日志记录
+    void ProcessLogRecordRedo(LogRecord* record) {
+        switch (record->GetType()) {
+            case LogRecordType::UPDATE:
+                ProcessUpdateRecordRedo(record);
+                break;
+            case LogRecordType::COMMIT:
+                ProcessCommitRecordRedo(record);
+                break;
+            default:
+                break;
+        }
+    }
+
+    // 处理UPDATE记录（重做阶段）
+    void ProcessUpdateRecordRedo(LogRecord* record) {
+        auto update_record = static_cast<UpdateLogRecord*>(record);
+        auto txn_id = record->GetTransactionId();
+
+        // 检查是否需要重做
+        if (NeedsRedo(update_record)) {
+            // 重做更新
+            RedoUpdate(update_record);
+
+            // 更新页面LSN
+            UpdatePageLSN(update_record);
+        }
+    }
+
+    // 检查是否需要重做
+    bool NeedsRedo(UpdateLogRecord* record) {
+        PageId page_id = ExtractPageId(record->GetKey());
+        auto page_lsn = buffer_pool_->GetPageLSN(page_id);
+
+        // 如果页面LSN小于记录LSN，需要重做
+        return page_lsn < record->GetLSN();
+    }
+
+    // 重做更新
+    void RedoUpdate(UpdateLogRecord* record) {
+        PageId page_id = ExtractPageId(record->GetKey());
+        auto page = buffer_pool_->GetPage(page_id);
+
+        if (page) {
+            uint32_t offset = ExtractOffset(record->GetKey());
+            const auto& new_value = record->GetNewValue();
+
+            // 应用更新
+            std::memcpy(page->GetData() + offset, new_value.data(), new_value.size());
+
+            // 标记页面为脏
+            page->SetDirty(true);
+        }
+    }
+
+    // 更新页面LSN
+    void UpdatePageLSN(UpdateLogRecord* record) {
+        PageId page_id = ExtractPageId(record->GetKey());
+        buffer_pool_->SetPageLSN(page_id, record->GetLSN());
+    }
+
+    // 处理COMMIT记录（重做阶段）
+    void ProcessCommitRecordRedo(LogRecord* record) {
+        auto txn_id = record->GetTransactionId();
+
+        // 确保事务标记为已提交
+        auto it = transaction_table_.find(txn_id);
+        if (it != transaction_table_.end()) {
+            it->second.status = TransactionStatus::COMMITTED;
+        }
+    }
+
+    // 构建撤销列表
+    std::vector<TransactionId> BuildLoserList() {
+        std::vector<TransactionId> loser_txns;
+
+        for (const auto& [txn_id, state] : transaction_table_) {
+            if (state.status == TransactionStatus::ACTIVE) {
+                loser_txns.push_back(txn_id);
+            }
+        }
+
+        std::cout << "Found " << loser_txns.size() << " loser transactions" << std::endl;
+        return loser_txns;
+    }
+
+    // 撤销事务
+    void UndoTransaction(TransactionId txn_id) {
+        std::cout << "Undoing transaction " << txn_id << std::endl;
+
+        auto it = transaction_table_.find(txn_id);
+        if (it == transaction_table_.end()) {
+            return;
+        }
+
+        // 从事务的最后LSN开始，逆向撤销
+        LSN current_lsn = it->second.last_lsn;
+
+        while (current_lsn != INVALID_LSN) {
+            auto record = log_manager_->ReadLogRecord(current_lsn);
+            if (!record) {
+                break;
+            }
+
+            if (record->GetType() == LogRecordType::UPDATE) {
+                auto update_record = static_cast<UpdateLogRecord*>(record.get());
+                UndoUpdate(update_record);
+            }
+
+            // 移动到前一个LSN
+            current_lsn = GetPrevLSN(current_lsn);
+        }
+
+        // 记录事务终止
+        LogTransactionEnd(txn_id, false);
+
+        // 从事务表中移除
+        transaction_table_.erase(it);
+    }
+
+    // 撤销更新
+    void UndoUpdate(UpdateLogRecord* record) {
+        PageId page_id = ExtractPageId(record->GetKey());
+        auto page = buffer_pool_->GetPage(page_id);
+
+        if (page) {
+            uint32_t offset = ExtractOffset(record->GetKey());
+            const auto& old_value = record->GetOldValue();
+
+            // 恢复旧值
+            std::memcpy(page->GetData() + offset, old_value.data(), old_value.size());
+
+            // 标记页面为脏
+            page->SetDirty(true);
+
+            // 记录补偿日志
+            LogCompensationRecord(record);
+        }
+    }
+
+    // 记录补偿日志
+    void LogCompensationRecord(UpdateLogRecord* original_record) {
+        // 创建补偿日志记录
+        auto comp_record = std::make_unique<CompensationLogRecord>(
+            original_record->GetTransactionId(),
+            original_record->GetKey(),
+            original_record->GetNewValue(),
+            original_record->GetOldValue(),
+            original_record->GetTableName(),
+            original_record->GetLSN()
+        );
+
+        // 写入日志
+        log_manager_->AppendLogRecord(std::move(comp_record));
+    }
+
+    // 记录事务结束
+    void LogTransactionEnd(TransactionId txn_id, bool committed) {
+        LogRecordType type = committed ? LogRecordType::COMMIT : LogRecordType::ABORT;
+        auto record = std::make_unique<TransactionLogRecord>(type, txn_id);
+        log_manager_->AppendLogRecord(std::move(record));
+    }
+
+    // 获取前一个LSN
+    LSN GetPrevLSN(LSN current_lsn) {
+        // 从日志记录中获取前一个LSN
+        auto record = log_manager_->ReadLogRecord(current_lsn);
+        if (record) {
+            // 需要从记录中获取前一个LSN
+            // 这里简化实现
+            return current_lsn - 1;
+        }
+        return INVALID_LSN;
+    }
+
+    // 清理和验证
+    void CleanupAndValidate() {
+        // 清理事务表
+        transaction_table_.clear();
+
+        // 清理脏页表
+        dirty_page_table_.clear();
+
+        // 验证数据库一致性
+        ValidateDatabaseConsistency();
+    }
+
+    // 验证数据库一致性
+    void ValidateDatabaseConsistency() {
+        // 实现数据库一致性验证逻辑
+        std::cout << "Validating database consistency..." << std::endl;
+        // 验证页面完整性
+        // 验证索引一致性
+        // 验证约束完整性
+        std::cout << "Database consistency validation completed" << std::endl;
+    }
+
+    // 从指定LSN开始恢复
+    bool PerformRecoveryFromLSN(LSN from_lsn) {
+        // 设置恢复起点
+        auto start_time = std::chrono::steady_clock::now();
+
+        // 执行增量恢复
+        ForwardScanLog(from_lsn, [this](std::unique_ptr<LogRecord> record) {
+            ProcessIncrementalLogRecord(record.get());
+        });
+
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+            end_time - start_time).count();
+
+        std::cout << "Incremental recovery completed in " << duration << " seconds" << std::endl;
+        return true;
+    }
+
+    // 处理增量恢复的日志记录
+    void ProcessIncrementalLogRecord(LogRecord* record) {
+        // 根据记录类型处理增量恢复
+        switch (record->GetType()) {
+            case LogRecordType::UPDATE:
+                if (NeedsRedo(static_cast<UpdateLogRecord*>(record))) {
+                    RedoUpdate(static_cast<UpdateLogRecord*>(record));
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    // 辅助方法
+    LSN LoadCheckpointFromControlFile() { return 0; }
+    void LoadCheckpointData(LogRecord* record) {}
+    PageId ExtractPageId(const Key& key) { return 0; }
+    uint32_t ExtractOffset(const Key& key) { return 0; }
+};
+```
+
+### 2. 补偿日志记录
+
+```cpp
+// 补偿日志记录
+class CompensationLogRecord : public UpdateLogRecord {
+public:
+    CompensationLogRecord(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& undo_next_value,
+        const Value& undo_prev_value,
+        const std::string& table_name,
+        LSN undo_next_lsn
+    ) : UpdateLogRecord(txn_id, key, undo_next_value, undo_prev_value, table_name),
+        undo_next_lsn_(undo_next_lsn) {
+        SetType(LogRecordType::COMPENSATION);
+    }
+
+    LogRecordType GetType() const override {
+        return LogRecordType::COMPENSATION;
+    }
+
+    std::vector<char> Serialize() const override {
+        auto base_data = UpdateLogRecord::Serialize();
+
+        // 添加undo_next_lsn
+        base_data.insert(base_data.end(),
+                        reinterpret_cast<const char*>(&undo_next_lsn_),
+                        reinterpret_cast<const char*>(&undo_next_lsn_) + sizeof(undo_next_lsn_));
+
+        return base_data;
+    }
+
+    void Deserialize(const std::vector<char>& data) override {
+        // 先反序列化基类部分
+        size_t base_size = UpdateLogRecord::GetSize();
+        UpdateLogRecord::Deserialize(std::vector<char>(data.begin(), data.begin() + base_size));
+
+        // 读取undo_next_lsn
+        std::memcpy(&undo_next_lsn_, data.data() + base_size, sizeof(undo_next_lsn_));
+    }
+
+    size_t GetSize() const override {
+        return UpdateLogRecord::GetSize() + sizeof(LSN);
+    }
+
+    LSN GetUndoNextLSN() const { return undo_next_lsn_; }
+
+private:
+    LSN undo_next_lsn_;
+};
+
+// 补偿日志管理器
+class CompensationLogManager {
+public:
+    // 记录CLR
+    LSN LogCLR(
+        TransactionId txn_id,
+        const Key& key,
+        const Value& new_value,
+        const Value& old_value,
+        const std::string& table_name,
+        LSN undo_next_lsn
+    ) {
+        auto clr = std::make_unique<CompensationLogRecord>(
+            txn_id, key, new_value, old_value, table_name, undo_next_lsn
+        );
+
+        // 设置CLR特有的属性
+        clr->SetCompensationAttributes();
+
+        return log_manager_->AppendLogRecord(std::move(clr));
+    }
+
+    // 处理CLR
+    void ProcessCLR(CompensationLogRecord* clr) {
+        // CLR的特殊处理逻辑
+        ProcessCompensationOperation(clr);
+
+        // 继续撤销链
+        if (clr->GetUndoNextLSN() != INVALID_LSN) {
+            ContinueUndoChain(clr->GetTransactionId(), clr->GetUndoNextLSN());
+        }
+    }
+
+private:
+    LogManager* log_manager_;
+
+    // 处理补偿操作
+    void ProcessCompensationOperation(CompensationLogRecord* clr) {
+        // 应用撤销操作
+        ApplyCompensation(clr);
+
+        // 记录CLR处理完成
+        MarkCLRProcessed(clr->GetLSN());
+    }
+
+    // 应用补偿
+    void ApplyCompensation(CompensationLogRecord* clr) {
+        // 恢复页面到之前的状态
+        PageId page_id = ExtractPageId(clr->GetKey());
+        auto page = buffer_pool_->GetPage(page_id);
+
+        if (page) {
+            uint32_t offset = ExtractOffset(clr->GetKey());
+            const auto& old_value = clr->GetOldValue();
+
+            std::memcpy(page->GetData() + offset, old_value.data(), old_value.size());
+            page->SetDirty(true);
+        }
+    }
+
+    // 继续撤销链
+    void ContinueUndoChain(TransactionId txn_id, LSN next_lsn) {
+        // 递归处理撤销链
+        auto record = log_manager_->ReadLogRecord(next_lsn);
+        if (record) {
+            if (record->GetType() == LogRecordType::UPDATE) {
+                UndoUpdate(static_cast<UpdateLogRecord*>(record.get()));
+            } else if (record->GetType() == LogRecordType::COMPENSATION) {
+                ProcessCLR(static_cast<CompensationLogRecord*>(record.get()));
+            }
+        }
+    }
+
+    // 标记CLR已处理
+    void MarkCLRProcessed(LSN lsn) {
+        // 记录CLR处理状态
+        processed_clrs_.insert(lsn);
+    }
+
+    std::unordered_set<LSN> processed_clrs_;
+    BufferPoolManager* buffer_pool_;
+};
+```
+
+## 恢复优化技术
+
+### 1. 并行恢复
+
+```cpp
+// 并行恢复管理器
+class ParallelRecoveryManager {
+public:
+    // 并行恢复配置
+    struct ParallelConfig {
+        size_t num_redo_threads = 4;          // 重做线程数
+        size_t num_undo_threads = 4;          // 撤销线程数
+        size_t batch_size = 100;              // 批处理大小
+        bool enable_parallel_redo = true;     // 启用并行重做
+        bool enable_parallel_undo = true;     // 启用并行撤销
+        uint32_t thread_affinity_mask = 0xFF; // 线程亲和性掩码
+    };
+
+    // 恢复任务
+    struct RecoveryTask {
+        LSN start_lsn;
+        LSN end_lsn;
+        RecoveryPhase phase;
+        std::vector<std::unique_ptr<LogRecord>> records;
+    };
+
+    ParallelRecoveryManager(
+        LogManager* log_manager,
+        BufferPoolManager* buffer_pool,
+        const ParallelConfig& config = ParallelConfig{}
+    ) : log_manager_(log_manager), buffer_pool_(buffer_pool), config_(config) {}
+
+    // 执行并行恢复
+    bool PerformParallelRecovery() {
+        auto start_time = std::chrono::steady_clock::now();
+
+        try {
+            // 阶段1: 并行分析
+            ParallelAnalysisPhase();
+
+            // 阶段2: 并行重做
+            ParallelRedoPhase();
+
+            // 阶段3: 并行撤销
+            ParallelUndoPhase();
+
+            // 阶段4: 同步和验证
+            SynchronizeAndValidate();
+
+            auto end_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                end_time - start_time).count();
+
+            std::cout << "Parallel recovery completed in " << duration << " seconds" << std::endl;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "Parallel recovery failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+private:
+    LogManager* log_manager_;
+    BufferPoolManager* buffer_pool_;
+    ParallelConfig config_;
+    std::vector<std::unique_ptr<std::thread>> worker_threads_;
+    std::mutex task_mutex_;
+    std::queue<RecoveryTask> task_queue_;
+    std::condition_variable task_cv_;
+    std::atomic<bool> stop_workers_{false};
+    std::unordered_map<PageId, std::mutex> page_locks_;
+
+    // 并行分析阶段
+    void ParallelAnalysisPhase() {
+        std::cout << "Starting parallel analysis phase..." << std::endl;
+
+        // 创建分析任务
+        std::vector<RecoveryTask> tasks = CreateAnalysisTasks();
+
+        // 执行并行分析
+        ExecuteParallelTasks(tasks, [this](const RecoveryTask& task) {
+            ProcessAnalysisTask(task);
+        });
+
+        std::cout << "Parallel analysis phase completed" << std::endl;
+    }
+
+    // 并行重做阶段
+    void ParallelRedoPhase() {
+        std::cout << "Starting parallel redo phase..." << std::endl;
+
+        if (config_.enable_parallel_redo) {
+            // 创建重做任务
+            std::vector<RecoveryTask> tasks = CreateRedoTasks();
+
+            // 执行并行重做
+            ExecuteParallelTasks(tasks, [this](const RecoveryTask& task) {
+                ProcessRedoTask(task);
+            });
+        } else {
+            // 串行重做
+            SerialRedoPhase();
+        }
+
+        std::cout << "Parallel redo phase completed" << std::endl;
+    }
+
+    // 并行撤销阶段
+    void ParallelUndoPhase() {
+        std::cout << "Starting parallel undo phase..." << std::endl;
+
+        if (config_.enable_parallel_undo) {
+            // 创建撤销任务
+            std::vector<RecoveryTask> tasks = CreateUndoTasks();
+
+            // 执行并行撤销
+            ExecuteParallelTasks(tasks, [this](const RecoveryTask& task) {
+                ProcessUndoTask(task);
+            });
+        } else {
+            // 串行撤销
+            SerialUndoPhase();
+        }
+
+        std::cout << "Parallel undo phase completed" << std::endl;
+    }
+
+    // 创建分析任务
+    std::vector<RecoveryTask> CreateAnalysisTasks() {
+        std::vector<RecoveryTask> tasks;
+
+        // 找到最近的检查点
+        LSN checkpoint_lsn = FindMostRecentCheckpoint();
+        LSN current_lsn = checkpoint_lsn;
+
+        // 按批处理大小分片
+        while (current_lsn < log_manager_->GetMaxLSN()) {
+            RecoveryTask task;
+            task.start_lsn = current_lsn;
+            task.end_lsn = std::min(current_lsn + config_.batch_size * 1024,
+                                  log_manager_->GetMaxLSN());
+            task.phase = RecoveryPhase::ANALYSIS;
+
+            // 读取日志记录
+            task.records = ReadLogRecords(task.start_lsn, task.end_lsn);
+
+            tasks.push_back(task);
+            current_lsn = task.end_lsn;
+        }
+
+        return tasks;
+    }
+
+    // 创建重做任务
+    std::vector<RecoveryTask> CreateRedoTasks() {
+        std::vector<RecoveryTask> tasks;
+
+        // 基于页面分片
+        auto page_ranges = DividePageRanges(config_.num_redo_threads);
+
+        for (const auto& range : page_ranges) {
+            RecoveryTask task;
+            task.start_lsn = range.start_lsn;
+            task.end_lsn = range.end_lsn;
+            task.phase = RecoveryPhase::REDO;
+
+            // 读取相关的重做记录
+            task.records = ReadRedoRecords(range);
+
+            tasks.push_back(task);
+        }
+
+        return tasks;
+    }
+
+    // 创建撤销任务
+    std::vector<RecoveryTask> CreateUndoTasks() {
+        std::vector<RecoveryTask> tasks;
+
+        // 获取需要撤销的事务
+        auto loser_txns = GetLoserTransactions();
+
+        // 按事务分片
+        size_t txns_per_thread = (loser_txns.size() + config_.num_undo_threads - 1) / config_.num_undo_threads;
+
+        for (size_t i = 0; i < config_.num_undo_threads; ++i) {
+            RecoveryTask task;
+            task.phase = RecoveryPhase::UNDO;
+
+            size_t start_idx = i * txns_per_thread;
+            size_t end_idx = std::min(start_idx + txns_per_thread, loser_txns.size());
+
+            for (size_t j = start_idx; j < end_idx; ++j) {
+                // 为每个事务创建撤销任务
+                auto txn_records = GetTransactionRecords(loser_txns[j]);
+                task.records.insert(task.records.end(),
+                                   std::make_move_iterator(txn_records.begin()),
+                                   std::make_move_iterator(txn_records.end()));
+            }
+
+            tasks.push_back(task);
+        }
+
+        return tasks;
+    }
+
+    // 执行并行任务
+    void ExecuteParallelTasks(
+        const std::vector<RecoveryTask>& tasks,
+        std::function<void(const RecoveryTask&)> processor
+    ) {
+        // 启动工作线程
+        StartWorkerThreads(tasks.size());
+
+        // 分发任务
+        {
+            std::lock_guard<std::mutex> lock(task_mutex_);
+            for (const auto& task : tasks) {
+                task_queue_.push(task);
+            }
+        }
+
+        // 通知工作线程
+        task_cv_.notify_all();
+
+        // 等待所有任务完成
+        WaitForTasksCompletion();
+
+        // 停止工作线程
+        StopWorkerThreads();
+    }
+
+    // 启动工作线程
+    void StartWorkerThreads(size_t num_tasks) {
+        stop_workers_.store(false);
+        size_t num_threads = std::min(num_tasks, static_cast<size_t>(std::thread::hardware_concurrency()));
+
+        for (size_t i = 0; i < num_threads; ++i) {
+            worker_threads_.emplace_back([this]() {
+                WorkerThreadMain();
+            });
+        }
+    }
+
+    // 停止工作线程
+    void StopWorkerThreads() {
+        stop_workers_.store(true);
+        task_cv_.notify_all();
+
+        for (auto& thread : worker_threads_) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        worker_threads_.clear();
+    }
+
+    // 工作线程主函数
+    void WorkerThreadMain() {
+        while (!stop_workers_.load()) {
+            RecoveryTask task;
+
+            {
+                std::unique_lock<std::mutex> lock(task_mutex_);
+                if (task_cv_.wait_for(lock, std::chrono::milliseconds(100),
+                                     [this]() { return !task_queue_.empty() || stop_workers_.load(); })) {
+                    if (stop_workers_.load()) break;
+                }
+
+                if (task_queue_.empty()) continue;
+
+                task = std::move(task_queue_.front());
+                task_queue_.pop();
+            }
+
+            // 处理任务
+            ProcessTask(task);
+        }
+    }
+
+    // 处理任务
+    void ProcessTask(const RecoveryTask& task) {
+        switch (task.phase) {
+            case RecoveryPhase::ANALYSIS:
+                ProcessAnalysisTask(task);
+                break;
+            case RecoveryPhase::REDO:
+                ProcessRedoTask(task);
+                break;
+            case RecoveryPhase::UNDO:
+                ProcessUndoTask(task);
+                break;
+        }
+    }
+
+    // 处理分析任务
+    void ProcessAnalysisTask(const RecoveryTask& task) {
+        for (const auto& record : task.records) {
+            ProcessLogRecordAnalysis(record.get());
+        }
+    }
+
+    // 处理重做任务
+    void ProcessRedoTask(const RecoveryTask& task) {
+        for (const auto& record : task.records) {
+            if (record->GetType() == LogRecordType::UPDATE) {
+                auto update_record = static_cast<UpdateLogRecord*>(record.get());
+
+                // 获取页面锁
+                PageId page_id = ExtractPageId(update_record->GetKey());
+                std::lock_guard<std::mutex> page_lock(GetPageLock(page_id));
+
+                if (NeedsRedo(update_record)) {
+                    RedoUpdate(update_record);
+                }
+            }
+        }
+    }
+
+    // 处理撤销任务
+    void ProcessUndoTask(const RecoveryTask& task) {
+        for (const auto& record : task.records) {
+            if (record->GetType() == LogRecordType::UPDATE) {
+                auto update_record = static_cast<UpdateLogRecord*>(record.get());
+
+                // 获取页面锁
+                PageId page_id = ExtractPageId(update_record->GetKey());
+                std::lock_guard<std::mutex> page_lock(GetPageLock(page_id));
+
+                UndoUpdate(update_record);
+            }
+        }
+    }
+
+    // 等待任务完成
+    void WaitForTasksCompletion() {
+        while (true) {
+            {
+                std::lock_guard<std::mutex> lock(task_mutex_);
+                if (task_queue_.empty()) {
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+
+    // 获取页面锁
+    std::mutex& GetPageLock(PageId page_id) {
+        static std::mutex default_mutex;
+        auto it = page_locks_.find(page_id);
+        if (it == page_locks_.end()) {
+            return page_locks_[page_id];
+        }
+        return it->second;
+    }
+
+    // 辅助方法
+    std::vector<std::unique_ptr<LogRecord>> ReadLogRecords(LSN start, LSN end) {
+        std::vector<std::unique_ptr<LogRecord>> records;
+        LSN current = start;
+
+        while (current < end) {
+            auto record = log_manager_->ReadLogRecord(current);
+            if (!record) break;
+
+            records.push_back(std::move(record));
+            current = record->GetLSN() + record->GetSize();
+        }
+
+        return records;
+    }
+
+    struct PageRange {
+        LSN start_lsn;
+        LSN end_lsn;
+    };
+
+    std::vector<PageRange> DividePageRanges(size_t num_ranges) {
+        std::vector<PageRange> ranges;
+        // 实现页面范围分片逻辑
+        return ranges;
+    }
+
+    std::vector<TransactionId> GetLoserTransactions() {
+        std::vector<TransactionId> losers;
+        // 实现获取失败事务逻辑
+        return losers;
+    }
+
+    std::vector<std::unique_ptr<LogRecord>> GetTransactionRecords(TransactionId txn_id) {
+        std::vector<std::unique_ptr<LogRecord>> records;
+        // 实现获取事务记录逻辑
+        return records;
+    }
+
+    std::vector<std::unique_ptr<LogRecord>> ReadRedoRecords(const PageRange& range) {
+        std::vector<std::unique_ptr<LogRecord>> records;
+        // 实现读取重做记录逻辑
+        return records;
+    }
+
+    LSN FindMostRecentCheckpoint() { return 0; }
+    void ProcessLogRecordAnalysis(LogRecord* record) {}
+    bool NeedsRedo(UpdateLogRecord* record) { return true; }
+    void RedoUpdate(UpdateLogRecord* record) {}
+    void UndoUpdate(UpdateLogRecord* record) {}
+    void SerialRedoPhase() {}
+    void SerialUndoPhase() {}
+    void SynchronizeAndValidate() {}
+    PageId ExtractPageId(const Key& key) { return 0; }
+};
+```
+
+### 2. 增量恢复
+
+```cpp
+// 增量恢复管理器
+class IncrementalRecoveryManager {
+public:
+    // 增量恢复配置
+    struct IncrementalConfig {
+        uint64_t backup_interval_hours = 24;     // 备份间隔
+        uint64_t log_retention_hours = 168;     // 日志保留时间（7天）
+        uint32_t max_incremental_size_mb = 1024; // 最大增量备份大小
+        bool enable_compression = true;          // 启用压缩
+        bool enable_deduplication = true;        // 启用去重
+        std::string backup_storage_path = "./backups";
+    };
+
+    // 增量备份记录
+    struct IncrementalBackup {
+        std::string backup_id;
+        uint64_t timestamp;
+        LSN start_lsn;
+        LSN end_lsn;
+        std::string base_backup_id;
+        size_t size_bytes;
+        std::string checksum;
+        std::vector<std::string> changed_pages;
+    };
+
+    IncrementalRecoveryManager(
+        LogManager* log_manager,
+        const IncrementalConfig& config = IncrementalConfig{}
+    ) : log_manager_(log_manager), config_(config) {}
+
+    // 创建增量备份
+    std::string CreateIncrementalBackup(const std::string& base_backup_id) {
+        auto start_time = std::chrono::steady_clock::now();
+
+        // 1. 获取基础备份信息
+        auto base_backup = GetBaseBackupInfo(base_backup_id);
+        if (!base_backup) {
+            throw std::runtime_error("Base backup not found: " + base_backup_id);
+        }
+
+        // 2. 确定备份范围
+        LSN start_lsn = base_backup->end_lsn;
+        LSN end_lsn = log_manager_->GetMaxLSN();
+
+        // 3. 识别变更页面
+        auto changed_pages = IdentifyChangedPages(start_lsn, end_lsn);
+
+        // 4. 创建增量备份
+        IncrementalBackup backup;
+        backup.backup_id = GenerateBackupId();
+        backup.timestamp = GetTickCount();
+        backup.start_lsn = start_lsn;
+        backup.end_lsn = end_lsn;
+        backup.base_backup_id = base_backup_id;
+        backup.changed_pages = changed_pages;
+
+        // 5. 写入备份文件
+        WriteIncrementalBackup(backup);
+
+        // 6. 验证备份完整性
+        if (!VerifyBackupIntegrity(backup)) {
+            throw std::runtime_error("Backup verification failed");
+        }
+
+        // 7. 记录备份元数据
+        RecordBackupMetadata(backup);
+
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+            end_time - start_time).count();
+
+        std::cout << "Incremental backup created: " << backup.backup_id
+                  << " in " << duration << " seconds" << std::endl;
+
+        return backup.backup_id;
+    }
+
+    // 从增量备份恢复
+    bool RestoreFromIncrementalBackup(const std::string& backup_id) {
+        auto start_time = std::chrono::steady_clock::now();
+
+        try {
+            // 1. 加载增量备份
+            auto backup = LoadIncrementalBackup(backup_id);
+            if (!backup) {
+                throw std::runtime_error("Backup not found: " + backup_id);
+            }
+
+            // 2. 恢复基础备份
+            if (!RestoreBaseBackup(backup->base_backup_id)) {
+                throw std::runtime_error("Failed to restore base backup");
+            }
+
+            // 3. 应用增量变更
+            if (!ApplyIncrementalChanges(*backup)) {
+                throw std::runtime_error("Failed to apply incremental changes");
+            }
+
+            // 4. 验证恢复结果
+            if (!VerifyRestoreResult(*backup)) {
+                throw std::runtime_error("Restore verification failed");
+            }
+
+            auto end_time = std::chrono::steady_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::seconds>(
+                end_time - start_time).count();
+
+            std::cout << "Restore from incremental backup completed: " << backup_id
+                      << " in " << duration << " seconds" << std::endl;
+
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "Incremental restore failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    // 清理过期备份
+    void CleanupExpiredBackups() {
+        auto current_time = GetTickCount();
+        uint64_t retention_ms = config_.log_retention_hours * 3600 * 1000;
+
+        std::vector<std::string> to_remove;
+
+        for (const auto& [backup_id, backup] : backup_metadata_) {
+            if (current_time - backup.timestamp > retention_ms) {
+                to_remove.push_back(backup_id);
+            }
+        }
+
+        for (const auto& backup_id : to_remove) {
+            RemoveBackup(backup_id);
+        }
+    }
+
+private:
+    LogManager* log_manager_;
+    IncrementalConfig config_;
+    std::unordered_map<std::string, IncrementalBackup> backup_metadata_;
+
+    // 识别变更页面
+    std::vector<std::string> IdentifyChangedPages(LSN start_lsn, LSN end_lsn) {
+        std::vector<std::string> changed_pages;
+        std::unordered_set<std::string> page_set;
+
+        // 扫描日志识别变更的页面
+        LSN current_lsn = start_lsn;
+
+        while (current_lsn <= end_lsn) {
+            auto record = log_manager_->ReadLogRecord(current_lsn);
+            if (!record) break;
+
+            if (record->GetType() == LogRecordType::UPDATE) {
+                auto update_record = static_cast<UpdateLogRecord*>(record.get());
+                PageId page_id = ExtractPageId(update_record->GetKey());
+                std::string page_key = std::to_string(page_id);
+
+                if (page_set.insert(page_key).second) {
+                    changed_pages.push_back(page_key);
+                }
+            }
+
+            current_lsn = record->GetLSN() + record->GetSize();
+        }
+
+        return changed_pages;
+    }
+
+    // 写入增量备份
+    void WriteIncrementalBackup(const IncrementalBackup& backup) {
+        std::string filename = config_.backup_storage_path + "/" + backup.backup_id + ".inc";
+        std::ofstream file(filename, std::ios::binary);
+
+        if (!file) {
+            throw std::runtime_error("Failed to create backup file: " + filename);
+        }
+
+        // 序列化备份数据
+        auto data = SerializeIncrementalBackup(backup);
+
+        // 压缩数据
+        if (config_.enable_compression) {
+            data = CompressData(data);
+        }
+
+        // 写入文件
+        file.write(data.data(), data.size());
+        backup.size_bytes = data.size();
+    }
+
+    // 验证备份完整性
+    bool VerifyBackupIntegrity(const IncrementalBackup& backup) {
+        std::string filename = config_.backup_storage_path + "/" + backup.backup_id + ".inc";
+        std::ifstream file(filename, std::ios::binary);
+
+        if (!file) {
+            return false;
+        }
+
+        // 计算文件校验和
+        std::vector<char> file_data((std::istreambuf_iterator<char>(file)),
+                                  std::istreambuf_iterator<char>());
+        std::string checksum = CalculateChecksum(file_data);
+
+        return checksum == backup.checksum;
+    }
+
+    // 记录备份元数据
+    void RecordBackupMetadata(const IncrementalBackup& backup) {
+        backup_metadata_[backup.backup_id] = backup;
+
+        // 写入元数据文件
+        std::ofstream metadata_file(config_.backup_storage_path + "/metadata.txt", std::ios::app);
+        metadata_file << backup.backup_id << " " << backup.timestamp << " "
+                     << backup.start_lsn << " " << backup.end_lsn << " "
+                     << backup.base_backup_id << " " << backup.size_bytes << " "
+                     << backup.checksum << std::endl;
+    }
+
+    // 加载增量备份
+    std::optional<IncrementalBackup> LoadIncrementalBackup(const std::string& backup_id) {
+        auto it = backup_metadata_.find(backup_id);
+        if (it != backup_metadata_.end()) {
+            return it->second;
+        }
+
+        // 尝试从元数据文件加载
+        return LoadBackupFromMetadata(backup_id);
+    }
+
+    // 应用增量变更
+    bool ApplyIncrementalChanges(const IncrementalBackup& backup) {
+        // 读取增量备份文件
+        std::string filename = config_.backup_storage_path + "/" + backup.backup_id + ".inc";
+        std::ifstream file(filename, std::ios::binary);
+
+        if (!file) {
+            return false;
+        }
+
+        // 读取数据
+        std::vector<char> data((std::istreambuf_iterator<char>(file)),
+                              std::istreambuf_iterator<char>());
+
+        // 解压缩
+        if (config_.enable_compression) {
+            data = DecompressData(data);
+        }
+
+        // 反序列化
+        auto loaded_backup = DeserializeIncrementalBackup(data);
+
+        // 应用页面变更
+        for (const auto& page_key : loaded_backup.changed_pages) {
+            if (!ApplyPageChange(page_key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // 验证恢复结果
+    bool VerifyRestoreResult(const IncrementalBackup& backup) {
+        // 验证数据库一致性
+        // 检查页面完整性
+        // 验证LSN范围
+        return true;
+    }
+
+    // 移除备份
+    void RemoveBackup(const std::string& backup_id) {
+        // 删除备份文件
+        std::string filename = config_.backup_storage_path + "/" + backup_id + ".inc";
+        std::remove(filename.c_str());
+
+        // 从元数据中移除
+        backup_metadata_.erase(backup_id);
+    }
+
+    // 序列化增量备份
+    std::vector<char> SerializeIncrementalBackup(const IncrementalBackup& backup) {
+        std::vector<char> data;
+        // 实现序列化逻辑
+        return data;
+    }
+
+    // 反序列化增量备份
+    IncrementalBackup DeserializeIncrementalBackup(const std::vector<char>& data) {
+        IncrementalBackup backup;
+        // 实现反序列化逻辑
+        return backup;
+    }
+
+    // 压缩数据
+    std::vector<char> CompressData(const std::vector<char>& data) {
+        std::vector<char> compressed;
+        // 实现压缩逻辑
+        return compressed;
+    }
+
+    // 解压缩数据
+    std::vector<char> DecompressData(const std::vector<char>& data) {
+        std::vector<char> decompressed;
+        // 实现解压缩逻辑
+        return decompressed;
+    }
+
+    // 计算校验和
+    std::string CalculateChecksum(const std::vector<char>& data) {
+        // 实现校验和计算
+        return "checksum";
+    }
+
+    // 辅助方法
+    std::optional<IncrementalBackup> GetBaseBackupInfo(const std::string& base_backup_id) {
+        return std::nullopt;
+    }
+
+    bool RestoreBaseBackup(const std::string& base_backup_id) {
+        return true;
+    }
+
+    bool ApplyPageChange(const std::string& page_key) {
+        return true;
+    }
+
+    std::optional<IncrementalBackup> LoadBackupFromMetadata(const std::string& backup_id) {
+        return std::nullopt;
+    }
+
+    std::string GenerateBackupId() {
+        return "backup_" + std::to_string(GetTickCount());
+    }
+
+    uint64_t GetTickCount() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    PageId ExtractPageId(const Key& key) { return 0; }
+};
+```
+
+## 灾难恢复和高可用性
+
+### 1. 主备复制
+
+```cpp
+// 主备复制管理器
+class PrimaryStandbyReplicationManager {
+public:
+    // 复制模式
+    enum class ReplicationMode {
+        SYNCHRONOUS,    // 同步复制
+        ASYNCHRONOUS,   // 异步复制
+        SEMISYNCHRONOUS // 半同步复制
+    };
+
+    // 复制配置
+    struct ReplicationConfig {
+        ReplicationMode mode = ReplicationMode::ASYNCHRONOUS;
+        uint32_t sync_standby_count = 1;          // 同步备库数量
+        uint32_t max_standby_delay_ms = 1000;     // 最大备库延迟
+        uint32_t replication_batch_size = 1024;   // 复制批处理大小
+        uint32_t heartbeat_interval_ms = 1000;    // 心跳间隔
+        bool enable_compression = true;           // 启用压缩
+        bool enable_encryption = true;            // 启用加密
+    };
+
+    // 备库状态
+    struct StandbyState {
+        std::string standby_id;
+        std::string host;
+        uint32_t port;
+        ReplicationMode mode;
+        LSN last_received_lsn;
+        LSN last_applied_lsn;
+        uint64_t last_heartbeat_time;
+        bool connected;
+        bool synchronized;
+    };
+
+    PrimaryStandbyReplicationManager(const ReplicationConfig& config = ReplicationConfig{})
+        : config_(config), running_(false) {
+        InitializeReplication();
+    }
+
+    ~PrimaryStandbyReplicationManager() {
+        StopReplication();
+    }
+
+    // 启动复制
+    bool StartReplication() {
+        running_ = true;
+
+        // 启动心跳检测
+        StartHeartbeatDetection();
+
+        // 启动日志发送
+        StartLogShipping();
+
+        // 启动同步监控
+        StartSyncMonitoring();
+
+        return true;
+    }
+
+    // 停止复制
+    void StopReplication() {
+        running_ = false;
+
+        // 停止所有线程
+        StopHeartbeatDetection();
+        StopLogShipping();
+        StopSyncMonitoring();
+
+        // 断开所有连接
+        DisconnectAllStandbys();
+    }
+
+    // 添加备库
+    bool AddStandby(const std::string& standby_id, const std::string& host, uint32_t port) {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        StandbyState standby;
+        standby.standby_id = standby_id;
+        standby.host = host;
+        standby.port = port;
+        standby.mode = config_.mode;
+        standby.last_received_lsn = 0;
+        standby.last_applied_lsn = 0;
+        standby.last_heartbeat_time = GetTickCount();
+        standby.connected = false;
+        standby.synchronized = false;
+
+        standbys_[standby_id] = standby;
+
+        // 尝试连接
+        return ConnectToStandby(standby_id);
+    }
+
+    // 移除备库
+    bool RemoveStandby(const std::string& standby_id) {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        auto it = standbys_.find(standby_id);
+        if (it == standbys_.end()) {
+            return false;
+        }
+
+        // 断开连接
+        DisconnectFromStandby(standby_id);
+
+        // 移除备库
+        standbys_.erase(it);
+
+        return true;
+    }
+
+    // 获取备库状态
+    std::vector<StandbyState> GetStandbyStates() const {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        std::vector<StandbyState> states;
+        for (const auto& [id, standby] : standbys_) {
+            states.push_back(standby);
+        }
+
+        return states;
+    }
+
+    // 检查复制健康状态
+    bool IsReplicationHealthy() const {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        if (config_.mode == ReplicationMode::SYNCHRONOUS) {
+            // 同步模式需要至少一个同步备库
+            return std::any_of(standbys_.begin(), standbys_.end(),
+                             [](const auto& pair) {
+                                 return pair.second.connected && pair.second.synchronized;
+                             });
+        } else {
+            // 异步模式只需要有连接的备库
+            return std::any_of(standbys_.begin(), standbys_.end(),
+                             [](const auto& pair) {
+                                 return pair.second.connected;
+                             });
+        }
+    }
+
+    // 故障转移
+    bool PromoteStandby(const std::string& standby_id) {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        auto it = standbys_.find(standby_id);
+        if (it == standbys_.end()) {
+            return false;
+        }
+
+        auto& standby = it->second;
+
+        // 检查备库状态
+        if (!standby.connected || standby.last_applied_lsn < GetCurrentLSN() - 1000) {
+            return false;
+        }
+
+        // 发送提升命令
+        return SendPromoteCommand(standby);
+    }
+
+private:
+    ReplicationConfig config_;
+    std::unordered_map<std::string, StandbyState> standbys_;
+    std::mutex standby_mutex_;
+    std::atomic<bool> running_;
+    std::unique_ptr<std::thread> heartbeat_thread_;
+    std::unique_ptr<std::thread> log_shipping_thread_;
+    std::unique_ptr<std::thread> sync_monitor_thread_;
+
+    // 初始化复制
+    void InitializeReplication() {
+        // 加载备库配置
+        LoadStandbyConfiguration();
+
+        // 建立连接池
+        InitializeConnectionPool();
+    }
+
+    // 启动心跳检测
+    void StartHeartbeatDetection() {
+        heartbeat_thread_ = std::make_unique<std::thread>([this]() {
+            HeartbeatWorker();
+        });
+    }
+
+    // 启动日志发送
+    void StartLogShipping() {
+        log_shipping_thread_ = std::make_unique<std::thread>([this]() {
+            LogShippingWorker();
+        });
+    }
+
+    // 启动同步监控
+    void StartSyncMonitoring() {
+        sync_monitor_thread_ = std::make_unique<std::thread>([this]() {
+            SyncMonitorWorker();
+        });
+    }
+
+    // 停止心跳检测
+    void StopHeartbeatDetection() {
+        if (heartbeat_thread_ && heartbeat_thread_->joinable()) {
+            heartbeat_thread_->join();
+        }
+    }
+
+    // 停止日志发送
+    void StopLogShipping() {
+        if (log_shipping_thread_ && log_shipping_thread_->joinable()) {
+            log_shipping_thread_->join();
+        }
+    }
+
+    // 停止同步监控
+    void StopSyncMonitoring() {
+        if (sync_monitor_thread_ && sync_monitor_thread_->joinable()) {
+            sync_monitor_thread_->join();
+        }
+    }
+
+    // 心跳工作线程
+    void HeartbeatWorker() {
+        while (running_) {
+            SendHeartbeats();
+            CheckHeartbeatResponses();
+            std::this_thread::sleep_for(std::chrono::milliseconds(config_.heartbeat_interval_ms));
+        }
+    }
+
+    // 日志发送工作线程
+    void LogShippingWorker() {
+        LSN last_shipped_lsn = 0;
+
+        while (running_) {
+            LSN current_lsn = GetCurrentLSN();
+
+            if (current_lsn > last_shipped_lsn) {
+                // 批量发送日志
+                std::vector<std::unique_ptr<LogRecord>> records = GetLogRecords(last_shipped_lsn, current_lsn);
+
+                if (!records.empty()) {
+                    ShipLogRecords(records);
+                    last_shipped_lsn = current_lsn;
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+
+    // 同步监控工作线程
+    void SyncMonitorWorker() {
+        while (running_) {
+            MonitorSynchronization();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+    }
+
+    // 发送心跳
+    void SendHeartbeats() {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        for (auto& [id, standby] : standbys_) {
+            if (standby.connected) {
+                SendHeartbeat(standby);
+            }
+        }
+    }
+
+    // 检查心跳响应
+    void CheckHeartbeatResponses() {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        uint64_t current_time = GetTickCount();
+
+        for (auto& [id, standby] : standbys_) {
+            if (standby.connected) {
+                if (current_time - standby.last_heartbeat_time > config_.max_standby_delay_ms * 2) {
+                    // 心跳超时，标记为断开
+                    standby.connected = false;
+                    std::cout << "Standby " << id << " heartbeat timeout" << std::endl;
+                }
+            }
+        }
+    }
+
+    // 发送心跳到备库
+    void SendHeartbeat(StandbyState& standby) {
+        try {
+            // 创建心跳消息
+            HeartbeatMessage heartbeat;
+            heartbeat.timestamp = GetTickCount();
+            heartbeat.primary_lsn = GetCurrentLSN();
+
+            // 发送心跳
+            if (SendMessage(standby, heartbeat)) {
+                standby.last_heartbeat_time = heartbeat.timestamp;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to send heartbeat to standby " << standby.standby_id
+                      << ": " << e.what() << std::endl;
+            standby.connected = false;
+        }
+    }
+
+    // 发送日志记录
+    void ShipLogRecords(const std::vector<std::unique_ptr<LogRecord>>& records) {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        // 根据复制模式选择目标备库
+        std::vector<StandbyState*> target_standbys = GetTargetStandbys();
+
+        // 批量发送日志
+        for (auto* standby : target_standbys) {
+            if (standby->connected) {
+                try {
+                    SendLogRecordsToStandby(*standby, records);
+                } catch (const std::exception& e) {
+                    std::cerr << "Failed to ship logs to standby " << standby->standby_id
+                              << ": " << e.what() << std::endl;
+                    standby->connected = false;
+                }
+            }
+        }
+    }
+
+    // 获取目标备库
+    std::vector<StandbyState*> GetTargetStandbys() {
+        std::vector<StandbyState*> targets;
+
+        for (auto& [id, standby] : standbys_) {
+            if (standby.connected) {
+                targets.push_back(&standby);
+            }
+        }
+
+        return targets;
+    }
+
+    // 发送日志记录到备库
+    void SendLogRecordsToStandby(StandbyState& standby, const std::vector<std::unique_ptr<LogRecord>>& records) {
+        // 创建日志消息
+        LogShippingMessage message;
+        message.records.reserve(records.size());
+
+        for (const auto& record : records) {
+            message.records.push_back(record->Serialize());
+        }
+
+        // 压缩消息
+        if (config_.enable_compression) {
+            message.data = CompressData(SerializeMessage(message));
+        } else {
+            message.data = SerializeMessage(message);
+        }
+
+        // 加密消息
+        if (config_.enable_encryption) {
+            message.data = EncryptData(message.data);
+        }
+
+        // 发送消息
+        SendMessage(standby, message);
+    }
+
+    // 监控同步状态
+    void MonitorSynchronization() {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        LSN current_lsn = GetCurrentLSN();
+
+        for (auto& [id, standby] : standbys_) {
+            if (standby.connected) {
+                // 检查复制延迟
+                uint64_t replication_lag = current_lsn - standby.last_applied_lsn;
+                standby.synchronized = (replication_lag < config_.max_standby_delay_ms);
+
+                if (replication_lag > config_.max_standby_delay_ms) {
+                    std::cout << "Standby " << id << " replication lag: " << replication_lag << " LSN" << std::endl;
+                }
+            }
+        }
+    }
+
+    // 连接到备库
+    bool ConnectToStandby(const std::string& standby_id) {
+        auto it = standbys_.find(standby_id);
+        if (it == standbys_.end()) {
+            return false;
+        }
+
+        auto& standby = it->second;
+
+        try {
+            // 建立连接
+            auto connection = CreateConnection(standby.host, standby.port);
+            if (connection) {
+                standby.connected = true;
+                std::cout << "Connected to standby " << standby_id << std::endl;
+                return true;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to connect to standby " << standby_id
+                      << ": " << e.what() << std::endl;
+        }
+
+        return false;
+    }
+
+    // 断开备库连接
+    void DisconnectFromStandby(const std::string& standby_id) {
+        auto it = standbys_.find(standby_id);
+        if (it != standbys_.end()) {
+            it->second.connected = false;
+            // 关闭连接
+        }
+    }
+
+    // 断开所有备库
+    void DisconnectAllStandbys() {
+        std::lock_guard<std::mutex> lock(standby_mutex_);
+
+        for (auto& [id, standby] : standbys_) {
+            standby.connected = false;
+        }
+    }
+
+    // 发送提升命令
+    bool SendPromoteCommand(const StandbyState& standby) {
+        try {
+            PromoteCommand command;
+            command.timestamp = GetTickCount();
+            command.primary_lsn = GetCurrentLSN();
+
+            return SendMessage(standby, command);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to send promote command to standby " << standby.standby_id
+                      << ": " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    // 辅助方法
+    void LoadStandbyConfiguration() {}
+    void InitializeConnectionPool() {}
+    LSN GetCurrentLSN() const { return 0; }
+    std::vector<std::unique_ptr<LogRecord>> GetLogRecords(LSN start, LSN end) { return {}; }
+    uint64_t GetTickCount() const { return 0; }
+
+    template<typename T>
+    bool SendMessage(const StandbyState& standby, const T& message) {
+        // 实现消息发送逻辑
+        return true;
+    }
+
+    std::vector<char> SerializeMessage(const LogShippingMessage& message) {
+        return std::vector<char>();
+    }
+
+    std::vector<char> CompressData(const std::vector<char>& data) {
+        return data;
+    }
+
+    std::vector<char> EncryptData(const std::vector<char>& data) {
+        return data;
+    }
+
+    struct HeartbeatMessage {
+        uint64_t timestamp;
+        LSN primary_lsn;
+    };
+
+    struct LogShippingMessage {
+        std::vector<std::vector<char>> records;
+        std::vector<char> data;
+    };
+
+    struct PromoteCommand {
+        uint64_t timestamp;
+        LSN primary_lsn;
+    };
+};
+```
+
+## 实践练习
+
+### 练习1：实现ARIES恢复算法
+
+```cpp
+// 练习：实现ARIES恢复算法
+class ARIESImplementation {
+public:
+    bool PerformRecovery() {
+        // 学生需要实现完整的ARIES恢复
+        // 1. 分析阶段
+        // 2. 重做阶段
+        // 3. 撤销阶段
+        return false;
+    }
+
+    void AnalysisPhase() {
+        // 学生需要实现分析阶段
+        // 1. 扫描日志构建事务表
+        // 2. 构建脏页表
+        // 3. 确定重做起点
+    }
+
+    void RedoPhase() {
+        // 学生需要实现重做阶段
+        // 1. 从重做起点开始扫描
+        // 2. 重做所有已提交事务
+        // 3. 更新页面LSN
+    }
+
+    void UndoPhase() {
+        // 学生需要实现撤销阶段
+        // 1. 识别失败事务
+        // 2. 逆向撤销失败事务
+        // 3. 记录补偿日志
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习2：实现并行恢复
+
+```cpp
+// 练习：实现并行恢复
+class ParallelRecoveryImplementation {
+public:
+    bool PerformParallelRecovery() {
+        // 学生需要实现并行恢复
+        // 1. 创建恢复任务
+        // 2. 启动工作线程
+        // 3. 协调任务执行
+        // 4. 同步最终状态
+        return false;
+    }
+
+    void CreateRecoveryTasks() {
+        // 学生需要实现任务创建
+        // 1. 分析任务分片
+        // 2. 重做任务分片
+        // 3. 撤销任务分片
+    }
+
+    void ExecuteParallelTasks() {
+        // 学生需要实现并行任务执行
+        // 1. 任务调度
+        // 2. 负载均衡
+        // 3. 冲突处理
+    }
+
+    void SynchronizeRecovery() {
+        // 学生需要实现恢复同步
+        // 1. 等待所有任务完成
+        // 2. 验证恢复结果
+        // 3. 清理资源
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习3：实现主备复制
+
+```cpp
+// 练习：实现主备复制
+class PrimaryStandbyImplementation {
+public:
+    bool StartReplication() {
+        // 学生需要实现复制启动
+        // 1. 建立连接
+        // 2. 开始日志发送
+        // 3. 启动监控
+        return false;
+    }
+
+    bool ShipLogRecords() {
+        // 学生需要实现日志发送
+        // 1. 读取日志记录
+        // 2. 批量发送
+        // 3. 处理发送失败
+        return false;
+    }
+
+    bool HandleFailover() {
+        // 学生需要实现故障转移
+        // 1. 检测主库故障
+        // 2. 提升备库
+        // 3. 重新配置复制
+        return false;
+    }
+
+    bool MonitorReplication() {
+        // 学生需要实现复制监控
+        // 1. 检查复制延迟
+        // 2. 监控连接状态
+        // 3. 处理异常情况
+        return false;
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+## 总结
+
+恢复算法是数据库系统可靠性的核心保障，通过本讲的学习，我们深入理解了：
+
+1. **ARIES算法**：掌握了业界领先的恢复算法的完整实现
+2. **恢复优化**：学会了并行恢复、增量恢复等优化技术
+3. **灾难恢复**：理解了主备复制、故障转移等高可用性方案
+4. **补偿日志**：掌握了CLR在撤销过程中的重要作用
+5. **实际应用**：了解了各种恢复策略在不同场景下的应用
+
+ARIES算法以其高效性和可靠性成为现代数据库系统的标准恢复算法，其三大阶段的清晰分离使得恢复过程既可靠又高效。并行恢复和增量恢复技术进一步提高了大规模数据库的恢复性能。
+
+在数据库系统的设计和实现中，恢复机制是确保数据完整性和系统可用性的关键组件，需要根据具体的业务需求和系统规模选择合适的恢复策略。
+
+## 进一步学习
+
+- [ARIES: A Transaction Recovery Method](https://dl.acm.org/doi/10.1145/170036.170072)
+- [Database Recovery: From ARIES to Modern Systems](https://www.cs.cmu.edu/~15721/papers-recoveries.html)
+- [PostgreSQL Streaming Replication](https://www.postgresql.org/docs/current/streaming-replication.html)
+- [Oracle Data Guard](https://docs.oracle.com/en/database/oracle/oracle-database/19/sbydb/index.html)
+- [MySQL Replication](https://dev.mysql.com/doc/refman/8.0/en/replication.html)

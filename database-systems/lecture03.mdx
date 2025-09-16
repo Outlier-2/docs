@@ -1,0 +1,476 @@
+---
+title: "Lecture 3: 数据库存储 I"
+description: "CMU 15-445 Lecture 3 - 磁盘存储基础、文件组织、缓冲池管理"
+---
+
+# Lecture 3: 数据库存储 I
+
+## 存储层次结构
+
+### 内存-存储层次
+现代计算机系统使用多层次的存储架构，每层都有不同的性能特征：
+
+```
+CPU Registers (1-3 cycles)
+    ↓
+CPU Cache (L1: 1-4 cycles, L2: 10-20 cycles, L3: 40-75 cycles)
+    ↓
+Main Memory (DRAM) (100-300 cycles)
+    ↓
+SSD (μs级)
+    ↓
+HDD (ms级)
+    ↓
+Tape Storage (seconds)
+```
+
+### 性能对比
+| 存储层次 | 访问时间 | 容量 | 成本/GB | 持久性 |
+|----------|----------|------|---------|---------|
+| CPU缓存 | 1-100ns | KB-MB | 高 | 否 |
+| 主存 | 100-300ns | GB-TB | 中 | 否 |
+| SSD | 10-100μs | TB | 中低 | 是 |
+| HDD | 5-20ms | TB-PB | 低 | 是 |
+
+## 磁盘存储基础
+
+### 硬盘驱动器 (HDD)
+
+#### 物理结构
+- **盘片(Platters)**：涂有磁性材料的圆形盘片
+- **磁头(Read/Write Heads)**：读写数据的电磁装置
+- **磁道(Tracks)**：盘片上的同心圆
+- **扇区(Sectors)**：磁道上的基本存储单元（通常512B或4KB）
+
+#### 访问时间组成
+```
+Total Access Time = Seek Time + Rotational Delay + Transfer Time
+
+Seek Time: 3-15ms (磁头移动到正确磁道)
+Rotational Delay: 0-8ms (等待数据旋转到磁头下)
+Transfer Time: 0.1-1ms (实际数据传输)
+```
+
+#### 磁盘调度算法
+```cpp
+// 先来先服务 (FCFS)
+void fcfs_scheduling(vector<int>& requests, int current_pos) {
+    for (int req : requests) {
+        // 直接处理每个请求
+        process_request(req);
+    }
+}
+
+// 扫描算法 (SCAN/Elevator)
+void scan_scheduling(vector<int>& requests, int current_pos) {
+    sort(requests.begin(), requests.end());
+    int direction = 1; // 1: 向上, -1: 向下
+
+    while (!requests.empty()) {
+        // 按方向处理请求
+        // 到达边界后反向
+    }
+}
+```
+
+### 固态硬盘 (SSD)
+
+#### 工作原理
+- **NAND闪存**：基于浮栅晶体管的非易失性存储
+- **页(Page)**：基本读写单元（通常4KB）
+- **块(Block)**：擦除单元（通常256个页）
+- **磨损均衡**：延长SSD寿命的关键技术
+
+#### 性能特征
+- **随机访问**：比HDD快100-1000倍
+- **顺序访问**：与HDD相比优势较小
+- **写入放大**：由于写入前需要擦除整块
+- **垃圾回收**：后台清理无效数据
+
+## 数据库文件组织
+
+### 堆文件 (Heap Files)
+
+#### 概念
+堆文件是最简单的文件组织方式，记录按插入顺序存储。
+
+#### 实现方式
+```cpp
+// 链表式堆文件
+class HeapFile {
+private:
+    vector<Page> pages;
+    vector<int> free_space;  // 每页的剩余空间
+
+public:
+    RecordId insert(const Record& record) {
+        // 查找有足够空间的页面
+        for (int i = 0; i < pages.size(); i++) {
+            if (free_space[i] >= record.size()) {
+                return pages[i].insert(record);
+            }
+        }
+
+        // 没有足够空间，创建新页面
+        pages.emplace_back();
+        return pages.back().insert(record);
+    }
+};
+```
+
+#### 优缺点
+**优点**：
+- 插入操作高效：O(1)
+- 实现简单
+
+**缺点**：
+- 查询效率低：需要全表扫描
+- 删除操作产生碎片
+
+### 页面结构
+
+#### 页面设计
+```cpp
+class Page {
+private:
+    char data[PAGE_SIZE];  // 页面数据
+    int slot_count;        // 槽位数组大小
+    int* slot_array;       // 槽位数组
+
+public:
+    RecordId insert(const Record& record) {
+        // 计算所需空间
+        int needed_space = record.size() + sizeof(int);
+
+        // 检查是否有足够空间
+        if (get_free_space() < needed_space) {
+            return INVALID_RECORD_ID;
+        }
+
+        // 在末尾插入记录
+        int offset = PAGE_SIZE - (slot_count + 1) * record.size();
+        memcpy(data + offset, record.data(), record.size());
+
+        // 更新槽位数组
+        slot_array[slot_count++] = offset;
+
+        return RecordId(this, slot_count - 1);
+    }
+
+    int get_free_space() const {
+        int used_space = slot_count * sizeof(int);
+        used_space += (slot_count * RECORD_SIZE);
+        return PAGE_SIZE - used_space;
+    }
+};
+```
+
+#### 槽位组织
+- **槽位数组**：存储记录在页面内的偏移量
+- **正向增长**：记录从页面末尾向前存储
+- **反向增长**：槽位数组从页面开头向后增长
+
+### 记录格式
+
+#### 定长记录
+```cpp
+struct FixedLengthRecord {
+    int id;
+    char name[50];
+    double score;
+    // 固定大小，访问高效
+};
+```
+
+#### 变长记录
+```cpp
+class VariableLengthRecord {
+private:
+    int record_id;
+    vector<Field> fields;
+
+public:
+    void serialize(char* buffer) const {
+        // 序列化记录头
+        int offset = 0;
+        memcpy(buffer + offset, &record_id, sizeof(int));
+        offset += sizeof(int);
+
+        // 序列化字段数量
+        int field_count = fields.size();
+        memcpy(buffer + offset, &field_count, sizeof(int));
+        offset += sizeof(int);
+
+        // 序列化每个字段
+        for (const auto& field : fields) {
+            field.serialize(buffer + offset);
+            offset += field.size();
+        }
+    }
+};
+```
+
+## 缓冲池管理
+
+### 缓冲池概述
+
+#### 目的
+- 减少磁盘I/O操作
+- 利用局部性原理
+- 提高查询性能
+
+#### 组成部分
+```
+Buffer Pool Manager
+├── Buffer Pool (内存中的页面数组)
+├── Page Table (页面ID到缓冲池槽位的映射)
+├── Replacement Policy (替换策略)
+└── Disk Manager (与磁盘交互)
+```
+
+### 替换策略
+
+#### LRU (Least Recently Used)
+```cpp
+class LRUReplacer {
+private:
+    list<pair<PageId, size_t>> lru_list;  // 页面ID到槽位号的映射
+    unordered_map<PageId, list<pair<PageId, size_t>>::iterator> page_map;
+
+public:
+    void victim(PageId* page_id) {
+        if (!lru_list.empty()) {
+            *page_id = lru_list.back().first;
+            page_map.erase(lru_list.back().first);
+            lru_list.pop_back();
+        }
+    }
+
+    void pin(PageId page_id) {
+        if (page_map.find(page_id) != page_map.end()) {
+            lru_list.erase(page_map[page_id]);
+            page_map.erase(page_id);
+        }
+    }
+
+    void unpin(PageId page_id, size_t slot) {
+        if (page_map.find(page_id) == page_map.end()) {
+            lru_list.push_front({page_id, slot});
+            page_map[page_id] = lru_list.begin();
+        }
+    }
+};
+```
+
+#### 时钟算法 (Clock)
+```cpp
+class ClockReplacer {
+private:
+    vector<ClockEntry> clock_entries;
+    size_t clock_hand;
+
+public:
+    bool victim(PageId* page_id) {
+        while (true) {
+            if (!clock_entries[clock_hand].reference_bit) {
+                *page_id = clock_entries[clock_hand].page_id;
+                clock_entries[clock_hand].is_valid = false;
+                advance_clock_hand();
+                return true;
+            }
+
+            clock_entries[clock_hand].reference_bit = false;
+            advance_clock_hand();
+        }
+        return false;
+    }
+
+private:
+    void advance_clock_hand() {
+        clock_hand = (clock_hand + 1) % clock_entries.size();
+    }
+};
+```
+
+### 缓冲池实现
+
+#### 核心功能
+```cpp
+class BufferPoolManager {
+private:
+    Page* pages;                  // 缓冲池页面数组
+    size_t pool_size;            // 缓冲池大小
+    unordered_map<PageId, size_t> page_table;  // 页面表
+    unique_ptr<Replacer> replacer;             // 替换策略
+    DiskManager* disk_manager;                 // 磁盘管理器
+
+public:
+    Page* fetch_page(PageId page_id) {
+        // 检查页面是否已在缓冲池中
+        if (page_table.find(page_id) != page_table.end()) {
+            size_t frame_id = page_table[page_id];
+            replacer->pin(page_id);
+            return &pages[frame_id];
+        }
+
+        // 页面不在缓冲池中，需要从磁盘读取
+        size_t frame_id = find_free_frame();
+        if (frame_id == INVALID_FRAME_ID) {
+            return nullptr;  // 缓冲池已满且无法替换
+        }
+
+        // 从磁盘读取页面
+        disk_manager->read_page(page_id, pages[frame_id].data());
+
+        // 更新页面表
+        page_table[page_id] = frame_id;
+        pages[frame_id].page_id_ = page_id;
+        pages[frame_id].pin_count_ = 1;
+
+        return &pages[frame_id];
+    }
+
+    bool unpin_page(PageId page_id, bool is_dirty) {
+        if (page_table.find(page_id) == page_table.end()) {
+            return false;
+        }
+
+        size_t frame_id = page_table[page_id];
+        if (pages[frame_id].pin_count_ <= 0) {
+            return false;
+        }
+
+        pages[frame_id].pin_count_--;
+        if (pages[frame_id].pin_count_ == 0) {
+            replacer->unpin(page_id, frame_id);
+        }
+
+        if (is_dirty) {
+            pages[frame_id].is_dirty_ = true;
+        }
+
+        return true;
+    }
+
+private:
+    size_t find_free_frame() {
+        // 查找空闲帧
+        for (size_t i = 0; i < pool_size; i++) {
+            if (pages[i].pin_count_ == 0 &&
+                page_table.find(pages[i].page_id_) == page_table.end()) {
+                return i;
+            }
+        }
+
+        // 没有空闲帧，尝试替换
+        PageId victim_page_id;
+        if (replacer->victim(&victim_page_id)) {
+            size_t frame_id = page_table[victim_page_id];
+
+            // 如果页面脏，写回磁盘
+            if (pages[frame_id].is_dirty_) {
+                disk_manager->write_page(victim_page_id, pages[frame_id].data());
+            }
+
+            // 从页面表中移除
+            page_table.erase(victim_page_id);
+
+            return frame_id;
+        }
+
+        return INVALID_FRAME_ID;
+    }
+};
+```
+
+## I/O优化策略
+
+### 预取 (Prefetching)
+```cpp
+class SequentialPrefetcher {
+private:
+    queue<PageId> prefetch_queue;
+    int prefetch_distance;
+
+public:
+    void on_page_access(PageId current_page) {
+        // 预取后续页面
+        for (int i = 1; i <= prefetch_distance; i++) {
+            PageId next_page = current_page + i;
+            if (should_prefetch(next_page)) {
+                prefetch_queue.push(next_page);
+            }
+        }
+
+        // 异步执行预取
+        execute_prefetches();
+    }
+};
+```
+
+### 批量I/O
+```cpp
+class BatchIOManager {
+public:
+    vector<Page> batch_read(const vector<PageId>& page_ids) {
+        vector<Page> result;
+        result.reserve(page_ids.size());
+
+        // 按磁盘位置排序，减少寻道时间
+        vector<pair<PageId, size_t>> sorted_pages;
+        for (size_t i = 0; i < page_ids.size(); i++) {
+            sorted_pages.emplace_back(page_ids[i], i);
+        }
+
+        sort(sorted_pages.begin(), sorted_pages.end(),
+             [](const auto& a, const auto& b) {
+                 return get_disk_location(a.first) < get_disk_location(b.first);
+             });
+
+        // 批量读取
+        for (const auto& [page_id, original_idx] : sorted_pages) {
+            Page page = disk_manager->read_page(page_id);
+            result[original_idx] = page;
+        }
+
+        return result;
+    }
+};
+```
+
+## 实践建议
+
+### 学习方法
+1. **理解硬件特性**：了解磁盘和SSD的工作原理
+2. **实现缓冲池**：动手实现一个简单的缓冲池管理器
+3. **性能测试**：比较不同替换策略的性能差异
+4. **分析瓶颈**：识别I/O密集型操作的优化机会
+
+### 实际应用
+- **数据库调优**：根据硬件特性调整缓冲池大小
+- **文件系统设计**：考虑访问模式和存储特性
+- **缓存策略**：应用层缓存与数据库缓存的协调
+
+## 课后练习
+
+### 编程题
+1. 实现一个LRU缓冲池管理器，支持页面的pin/unpin操作
+2. 设计一个变长记录的存储格式，支持高效的插入和查询
+3. 实现一个简单的磁盘调度算法，比较不同算法的性能
+
+### 思考题
+1. 分析SSD和HDD对数据库设计的不同影响
+2. 讨论缓冲池大小对查询性能的影响
+3. 比较不同替换策略的适用场景
+
+## 下节预告
+
+下一讲将继续深入**数据库存储 II**，包括：
+- 高级文件组织技术
+- 页面布局优化
+- 记录管理策略
+- 存储开销分析
+
+---
+
+**核心概念**：理解存储层次结构、掌握缓冲池管理、优化I/O操作是构建高性能数据库系统的基础！

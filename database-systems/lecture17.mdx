@@ -1,0 +1,2536 @@
+---
+title: 'Lecture 17: Concurrency Control Implementation'
+description: '深入探讨并发控制的实际实现，包括锁管理器实现、多版本并发控制、死锁处理和性能优化'
+date: '2024-02-17'
+tags: ['数据库系统', '并发控制', 'CMU 15-445']
+---
+
+# Lecture 17: Concurrency Control Implementation
+
+## 概述
+
+并发控制的实际实现涉及许多工程细节和优化策略。本讲将深入探讨并发控制系统的具体实现，包括锁管理器的工程实现、多版本并发控制的优化、死锁检测与处理机制，以及性能调优策略。
+
+## 锁管理器实现
+
+### 1. 高性能锁管理器
+
+```cpp
+// 高性能锁管理器实现
+class HighPerformanceLockManager {
+public:
+    // 锁请求
+    struct LockRequest {
+        TransactionId txn_id;
+        Key key;
+        LockType type;
+        LockMode mode;
+        uint64_t request_time;
+        bool granted;
+        std::condition_variable* cv;
+    };
+
+    // 锁表条目
+    struct LockTableEntry {
+        std::vector<LockRequest> requests;
+        std::shared_mutex entry_mutex;
+        uint64_t last_access_time;
+    };
+
+    // 事务锁信息
+    struct TransactionLockInfo {
+        std::unordered_set<Key> held_locks;
+        TransactionStatus status;
+        uint64_t start_time;
+        std::shared_ptr<TransactionState> state;
+    };
+
+    // 获取锁
+    bool AcquireLock(
+        TransactionId txn_id,
+        const Key& key,
+        LockType type,
+        LockMode mode = LockMode::NORMAL,
+        uint64_t timeout_ms = 0
+    ) {
+        // 获取或创建锁表条目
+        auto& entry = GetOrCreateLockEntry(key);
+
+        std::unique_lock<std::shared_mutex> entry_lock(entry.entry_mutex);
+
+        // 检查事务状态
+        if (!CheckTransactionState(txn_id)) {
+            return false;
+        }
+
+        // 检查是否已经持有锁
+        if (HasLock(txn_id, key, type)) {
+            return true;
+        }
+
+        // 检查锁兼容性
+        if (!IsLockCompatible(txn_id, key, type, entry)) {
+            // 锁冲突，需要等待
+            if (mode == LockMode::NOWAIT) {
+                return false;
+            }
+
+            // 检查死锁
+            if (WouldCauseDeadlock(txn_id, key, type)) {
+                throw DeadlockException("Deadlock detected");
+            }
+
+            // 等待锁
+            return WaitForLock(txn_id, key, type, entry, entry_lock, timeout_ms);
+        }
+
+        // 授予锁
+        GrantLock(txn_id, key, type, entry);
+        return true;
+    }
+
+    // 释放锁
+    void ReleaseLock(TransactionId txn_id, const Key& key) {
+        auto entry_it = lock_table_.find(key);
+        if (entry_it == lock_table_.end()) {
+            return;
+        }
+
+        auto& entry = entry_it->second;
+        std::unique_lock<std::shared_mutex> entry_lock(entry.entry_mutex);
+
+        // 移除锁请求
+        RemoveLockRequest(txn_id, key, entry);
+
+        // 唤醒等待的事务
+        WakeUpWaiters(entry);
+
+        // 清理空条目
+        if (entry.requests.empty()) {
+            lock_table_.erase(entry_it);
+        }
+    }
+
+    // 释放事务的所有锁
+    void ReleaseAllLocks(TransactionId txn_id) {
+        std::vector<Key> locks_to_release;
+
+        // 获取事务持有的所有锁
+        auto txn_it = transaction_locks_.find(txn_id);
+        if (txn_it != transaction_locks_.end()) {
+            locks_to_release.assign(txn_it->second.held_locks.begin(),
+                                   txn_it->second.held_locks.end());
+        }
+
+        // 逐个释放锁
+        for (const auto& key : locks_to_release) {
+            ReleaseLock(txn_id, key);
+        }
+
+        // 清理事务信息
+        transaction_locks_.erase(txn_id);
+    }
+
+    // 锁升级
+    bool UpgradeLock(TransactionId txn_id, const Key& key, LockType new_type) {
+        auto& entry = GetOrCreateLockEntry(key);
+        std::unique_lock<std::shared_mutex> entry_lock(entry.entry_mutex);
+
+        // 获取当前锁类型
+        auto current_type = GetCurrentLockType(txn_id, key, entry);
+        if (!current_type) {
+            return false;
+        }
+
+        // 检查升级是否合法
+        if (!IsValidUpgrade(*current_type, new_type)) {
+            return false;
+        }
+
+        // 检查升级后的兼容性
+        if (!IsUpgradeCompatible(txn_id, key, *current_type, new_type, entry)) {
+            return false;
+        }
+
+        // 执行升级
+        UpgradeLockInternal(txn_id, key, *current_type, new_type, entry);
+        return true;
+    }
+
+private:
+    // 锁表
+    std::unordered_map<Key, LockTableEntry> lock_table_;
+
+    // 事务锁信息
+    std::unordered_map<TransactionId, TransactionLockInfo> transaction_locks_;
+
+    // 等待图
+    std::unordered_map<TransactionId, std::unordered_set<TransactionId>> wait_for_graph_;
+
+    // 全局锁表锁
+    std::shared_mutex table_mutex_;
+
+    // 死锁检测器
+    std::unique_ptr<DeadlockDetector> deadlock_detector_;
+
+    // 获取或创建锁表条目
+    LockTableEntry& GetOrCreateLockEntry(const Key& key) {
+        std::shared_lock<std::shared_mutex> table_lock(table_mutex_);
+
+        auto it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            return it->second;
+        }
+
+        table_lock.unlock();
+        std::unique_lock<std::shared_mutex> unique_table_lock(table_mutex);
+
+        // 双重检查
+        it = lock_table_.find(key);
+        if (it != lock_table_.end()) {
+            return it->second;
+        }
+
+        // 创建新条目
+        auto& entry = lock_table_[key];
+        entry.last_access_time = GetTickCount();
+        return entry;
+    }
+
+    // 检查事务状态
+    bool CheckTransactionState(TransactionId txn_id) {
+        auto it = transaction_locks_.find(txn_id);
+        if (it == transaction_locks_.end()) {
+            // 创建新事务信息
+            TransactionLockInfo info;
+            info.status = TransactionStatus::ACTIVE;
+            info.start_time = GetTickCount();
+            transaction_locks_[txn_id] = info;
+            return true;
+        }
+
+        return it->second.status == TransactionStatus::ACTIVE;
+    }
+
+    // 检查是否已经持有锁
+    bool HasLock(TransactionId txn_id, const Key& key, LockType type) {
+        auto it = transaction_locks_.find(txn_id);
+        if (it == transaction_locks_.end()) {
+            return false;
+        }
+
+        return it->second.held_locks.find(key) != it->second.held_locks.end();
+    }
+
+    // 检查锁兼容性
+    bool IsLockCompatible(
+        TransactionId txn_id,
+        const Key& key,
+        LockType type,
+        const LockTableEntry& entry
+    ) {
+        for (const auto& request : entry.requests) {
+            if (request.granted && request.txn_id != txn_id) {
+                if (!AreLocksCompatible(request.type, type)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // 等待锁
+    bool WaitForLock(
+        TransactionId txn_id,
+        const Key& key,
+        LockType type,
+        LockTableEntry& entry,
+        std::unique_lock<std::shared_mutex>& entry_lock,
+        uint64_t timeout_ms
+    ) {
+        // 创建条件变量
+        std::condition_variable cv;
+        auto cv_ptr = std::make_shared<std::condition_variable>();
+
+        // 添加到等待队列
+        LockRequest request;
+        request.txn_id = txn_id;
+        request.key = key;
+        request.type = type;
+        request.request_time = GetTickCount();
+        request.granted = false;
+        request.cv = cv_ptr.get();
+
+        entry.requests.push_back(request);
+
+        // 更新等待图
+        UpdateWaitForGraph(txn_id, key, entry);
+
+        // 等待条件变量
+        bool result;
+        if (timeout_ms > 0) {
+            result = cv_ptr->wait_for(entry_lock, std::chrono::milliseconds(timeout_ms),
+                [&]() { return CheckLockCondition(txn_id, key, entry); });
+        } else {
+            cv_ptr->wait(entry_lock,
+                [&]() { return CheckLockCondition(txn_id, key, entry); });
+            result = true;
+        }
+
+        // 清理条件变量
+        RemoveConditionVariable(txn_id, key, entry);
+
+        return result;
+    }
+
+    // 检查锁条件
+    bool CheckLockCondition(
+        TransactionId txn_id,
+        const Key& key,
+        const LockTableEntry& entry
+    ) {
+        for (const auto& request : entry.requests) {
+            if (request.txn_id == txn_id) {
+                return request.granted;
+            }
+        }
+        return false;
+    }
+
+    // 授予锁
+    void GrantLock(
+        TransactionId txn_id,
+        const Key& key,
+        LockType type,
+        LockTableEntry& entry
+    ) {
+        // 更新请求状态
+        for (auto& request : entry.requests) {
+            if (request.txn_id == txn_id) {
+                request.granted = true;
+                break;
+            }
+        }
+
+        // 更新事务信息
+        auto& txn_info = transaction_locks_[txn_id];
+        txn_info.held_locks.insert(key);
+
+        // 更新访问时间
+        entry.last_access_time = GetTickCount();
+
+        // 通知条件变量
+        for (const auto& request : entry.requests) {
+            if (request.granted && request.cv) {
+                request.cv->notify_one();
+            }
+        }
+    }
+
+    // 移除锁请求
+    void RemoveLockRequest(
+        TransactionId txn_id,
+        const Key& key,
+        LockTableEntry& entry
+    ) {
+        auto it = std::find_if(entry.requests.begin(), entry.requests.end(),
+            [txn_id](const LockRequest& req) {
+                return req.txn_id == txn_id;
+            });
+
+        if (it != entry.requests.end()) {
+            entry.requests.erase(it);
+        }
+
+        // 更新事务信息
+        auto txn_it = transaction_locks_.find(txn_id);
+        if (txn_it != transaction_locks_.end()) {
+            txn_it->second.held_locks.erase(key);
+        }
+    }
+
+    // 唤醒等待者
+    void WakeUpWaiters(LockTableEntry& entry) {
+        // 检查等待队列中的请求
+        for (auto& request : entry.requests) {
+            if (!request.granted) {
+                // 检查是否可以授予锁
+                if (IsLockCompatible(request.txn_id, request.key, request.type, entry)) {
+                    GrantLock(request.txn_id, request.key, request.type, entry);
+                }
+            }
+        }
+    }
+
+    // 更新等待图
+    void UpdateWaitForGraph(
+        TransactionId txn_id,
+        const Key& key,
+        const LockTableEntry& entry
+    ) {
+        // 清理该键相关的等待关系
+        CleanupWaitForGraphEntries(key);
+
+        // 重建等待关系
+        for (const auto& request : entry.requests) {
+            if (request.granted) {
+                for (const auto& waiting_request : entry.requests) {
+                    if (!waiting_request.granted &&
+                        !AreLocksCompatible(request.type, waiting_request.type)) {
+                        wait_for_graph_[waiting_request.txn_id].insert(request.txn_id);
+                    }
+                }
+            }
+        }
+    }
+
+    // 清理等待图条目
+    void CleanupWaitForGraphEntries(const Key& key) {
+        for (auto& [txn_id, waiting_for] : wait_for_graph_) {
+            waiting_for.erase(
+                std::remove_if(waiting_for.begin(), waiting_for.end(),
+                    [this, key](TransactionId target) {
+                        return IsWaitingForKey(target, key);
+                    }),
+                waiting_for.end()
+            );
+        }
+
+        // 清理空条目
+        std::vector<TransactionId> to_remove;
+        for (const auto& [txn_id, waiting_for] : wait_for_graph_) {
+            if (waiting_for.empty()) {
+                to_remove.push_back(txn_id);
+            }
+        }
+
+        for (auto txn_id : to_remove) {
+            wait_for_graph_.erase(txn_id);
+        }
+    }
+
+    // 检查是否在等待指定键
+    bool IsWaitingForKey(TransactionId txn_id, const Key& key) {
+        auto entry_it = lock_table_.find(key);
+        if (entry_it == lock_table_.end()) {
+            return false;
+        }
+
+        for (const auto& request : entry_it->second.requests) {
+            if (request.txn_id == txn_id && !request.granted) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // 移除条件变量
+    void RemoveConditionVariable(
+        TransactionId txn_id,
+        const Key& key,
+        LockTableEntry& entry
+    ) {
+        for (auto& request : entry.requests) {
+            if (request.txn_id == txn_id) {
+                request.cv = nullptr;
+                break;
+            }
+        }
+    }
+
+    // 检查是否会死锁
+    bool WouldCauseDeadlock(TransactionId txn_id, const Key& key, LockType type) {
+        // 临时更新等待图
+        auto temp_graph = wait_for_graph_;
+
+        // 添加新的等待关系
+        auto entry_it = lock_table_.find(key);
+        if (entry_it != lock_table_.end()) {
+            for (const auto& request : entry_it->second.requests) {
+                if (request.granted && !AreLocksCompatible(request.type, type)) {
+                    temp_graph[txn_id].insert(request.txn_id);
+                }
+            }
+        }
+
+        // 检查环
+        return deadlock_detector_->HasCycle(temp_graph);
+    }
+
+    // 获取当前锁类型
+    std::optional<LockType> GetCurrentLockType(
+        TransactionId txn_id,
+        const Key& key,
+        const LockTableEntry& entry
+    ) {
+        for (const auto& request : entry.requests) {
+            if (request.txn_id == txn_id && request.granted) {
+                return request.type;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // 检查升级是否合法
+    bool IsValidUpgrade(LockType current, LockType new_type) {
+        static const std::unordered_map<LockType, std::unordered_set<LockType>> valid_upgrades = {
+            {LockType::SHARED, {LockType::EXCLUSIVE, LockType::UPDATE}},
+            {LockType::UPDATE, {LockType::EXCLUSIVE}},
+            {LockType::INTENTION_SHARED, {LockType::INTENTION_EXCLUSIVE, LockType::SHARED}},
+            {LockType::INTENTION_EXCLUSIVE, {LockType::EXCLUSIVE}}
+        };
+
+        auto it = valid_upgrades.find(current);
+        if (it != valid_upgrades.end()) {
+            return it->second.find(new_type) != it->second.end();
+        }
+
+        return false;
+    }
+
+    // 检查升级后的兼容性
+    bool IsUpgradeCompatible(
+        TransactionId txn_id,
+        const Key& key,
+        LockType current,
+        LockType new_type,
+        const LockTableEntry& entry
+    ) {
+        // 临时移除当前锁
+        auto temp_requests = entry.requests;
+        RemoveLockRequest(txn_id, key, const_cast<LockTableEntry&>(entry));
+
+        // 检查新锁类型的兼容性
+        bool compatible = IsLockCompatible(txn_id, key, new_type, entry);
+
+        // 恢复当前锁
+        const_cast<LockTableEntry&>(entry).requests = temp_requests;
+
+        return compatible;
+    }
+
+    // 执行锁升级
+    void UpgradeLockInternal(
+        TransactionId txn_id,
+        const Key& key,
+        LockType current,
+        LockType new_type,
+        LockTableEntry& entry
+    ) {
+        // 移除当前锁
+        RemoveLockRequest(txn_id, key, entry);
+
+        // 授予新锁
+        GrantLock(txn_id, key, new_type, entry);
+    }
+
+    // 获取当前时间戳
+    uint64_t GetTickCount() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    // 检查两个锁类型是否兼容
+    bool AreLocksCompatible(LockType existing, LockType requested) {
+        static const std::unordered_map<LockType, std::unordered_set<LockType>> compatibility_matrix = {
+            {LockType::SHARED, {LockType::SHARED, LockType::INTENTION_SHARED}},
+            {LockType::EXCLUSIVE, {}},
+            {LockType::INTENTION_SHARED, {LockType::SHARED, LockType::INTENTION_SHARED,
+                                        LockType::INTENTION_EXCLUSIVE, LockType::UPDATE}},
+            {LockType::INTENTION_EXCLUSIVE, {LockType::INTENTION_SHARED, LockType::INTENTION_EXCLUSIVE}},
+            {LockType::UPDATE, {LockType::INTENTION_SHARED, LockType::UPDATE}}
+        };
+
+        auto it = compatibility_matrix.find(existing);
+        if (it != compatibility_matrix.end()) {
+            return it->second.find(requested) != it->second.end();
+        }
+
+        return false;
+    }
+};
+```
+
+### 2. 分层锁管理器
+
+```cpp
+// 分层锁管理器（支持表锁和行锁）
+class HierarchicalLockManager {
+public:
+    // 锁粒度
+    enum class LockGranularity {
+        TABLE,
+        PAGE,
+        ROW
+    };
+
+    // 锁请求
+    struct HierarchicalLockRequest {
+        TransactionId txn_id;
+        std::string table_name;
+        std::optional<PageId> page_id;
+        std::optional<RowId> row_id;
+        LockType type;
+        LockGranularity granularity;
+    };
+
+    // 获取分层锁
+    bool AcquireLock(const HierarchicalLockRequest& request) {
+        // 检查锁兼容性
+        if (!CheckHierarchyCompatibility(request)) {
+            return false;
+        }
+
+        // 获取意向锁
+        if (!AcquireIntentionLocks(request)) {
+            return false;
+        }
+
+        // 获取目标锁
+        return AcquireTargetLock(request);
+    }
+
+    // 释放分层锁
+    void ReleaseLock(const HierarchicalLockRequest& request) {
+        // 释放目标锁
+        ReleaseTargetLock(request);
+
+        // 释放意向锁
+        ReleaseIntentionLocks(request);
+    }
+
+private:
+    // 表锁管理器
+    std::unordered_map<std::string, std::unique_ptr<LockManager>> table_lock_managers_;
+
+    // 页锁管理器
+    std::unordered_map<std::string, std::unordered_map<PageId, std::unique_ptr<LockManager>>> page_lock_managers_;
+
+    // 行锁管理器
+    std::unordered_map<std::string, std::unordered_map<RowId, std::unique_ptr<LockManager>>> row_lock_managers_;
+
+    // 检查层次兼容性
+    bool CheckHierarchyCompatibility(const HierarchicalLockRequest& request) {
+        switch (request.granularity) {
+            case LockGranularity::TABLE:
+                return true;  // 表锁不需要检查上层
+
+            case LockGranularity::PAGE:
+                // 检查表锁兼容性
+                return CheckTableLockCompatibility(request);
+
+            case LockGranularity::ROW:
+                // 检查表锁和页锁兼容性
+                return CheckPageLockCompatibility(request) &&
+                       CheckTableLockCompatibility(request);
+        }
+
+        return false;
+    }
+
+    // 检查表锁兼容性
+    bool CheckTableLockCompatibility(const HierarchicalLockRequest& request) {
+        auto table_it = table_lock_managers_.find(request.table_name);
+        if (table_it == table_lock_managers_.end()) {
+            return true;
+        }
+
+        // 检查事务是否持有适当的意向锁
+        return table_it->second->HasLock(request.txn_id, request.table_name,
+                                       GetRequiredIntentionLock(request.type));
+    }
+
+    // 检查页锁兼容性
+    bool CheckPageLockCompatibility(const HierarchicalLockRequest& request) {
+        if (!request.page_id) {
+            return true;
+        }
+
+        auto table_it = page_lock_managers_.find(request.table_name);
+        if (table_it == page_lock_managers_.end()) {
+            return true;
+        }
+
+        auto page_it = table_it->second.find(*request.page_id);
+        if (page_it == table_it->second.end()) {
+            return true;
+        }
+
+        // 检查事务是否持有适当的意向锁
+        return page_it->second->HasLock(request.txn_id, *request.page_id,
+                                       GetRequiredIntentionLock(request.type));
+    }
+
+    // 获取所需的意向锁类型
+    LockType GetRequiredIntentionLock(LockType target_type) {
+        switch (target_type) {
+            case LockType::SHARED:
+                return LockType::INTENTION_SHARED;
+            case LockType::EXCLUSIVE:
+                return LockType::INTENTION_EXCLUSIVE;
+            case LockType::UPDATE:
+                return LockType::INTENTION_EXCLUSIVE;
+            default:
+                return LockType::INTENTION_SHARED;
+        }
+    }
+
+    // 获取意向锁
+    bool AcquireIntentionLocks(const HierarchicalLockRequest& request) {
+        switch (request.granularity) {
+            case LockGranularity::TABLE:
+                return true;  // 不需要意向锁
+
+            case LockGranularity::PAGE:
+                return AcquireTableIntentionLock(request);
+
+            case LockGranularity::ROW:
+                return AcquireTableIntentionLock(request) &&
+                       AcquirePageIntentionLock(request);
+        }
+
+        return false;
+    }
+
+    // 获取表意向锁
+    bool AcquireTableIntentionLock(const HierarchicalLockRequest& request) {
+        auto& table_mgr = GetOrCreateTableLockManager(request.table_name);
+        LockType intention_type = GetRequiredIntentionLock(request.type);
+
+        return table_mgr.AcquireLock(request.txn_id, request.table_name, intention_type);
+    }
+
+    // 获取页意向锁
+    bool AcquirePageIntentionLock(const HierarchicalLockRequest& request) {
+        if (!request.page_id) {
+            return true;
+        }
+
+        auto& page_mgr = GetOrCreatePageLockManager(request.table_name, *request.page_id);
+        LockType intention_type = GetRequiredIntentionLock(request.type);
+
+        return page_mgr.AcquireLock(request.txn_id, *request.page_id, intention_type);
+    }
+
+    // 获取目标锁
+    bool AcquireTargetLock(const HierarchicalLockRequest& request) {
+        switch (request.granularity) {
+            case LockGranularity::TABLE:
+                return AcquireTableLock(request);
+
+            case LockGranularity::PAGE:
+                return AcquirePageLock(request);
+
+            case LockGranularity::ROW:
+                return AcquireRowLock(request);
+        }
+
+        return false;
+    }
+
+    // 获取表锁
+    bool AcquireTableLock(const HierarchicalLockRequest& request) {
+        auto& table_mgr = GetOrCreateTableLockManager(request.table_name);
+        return table_mgr.AcquireLock(request.txn_id, request.table_name, request.type);
+    }
+
+    // 获取页锁
+    bool AcquirePageLock(const HierarchicalLockRequest& request) {
+        if (!request.page_id) {
+            return false;
+        }
+
+        auto& page_mgr = GetOrCreatePageLockManager(request.table_name, *request.page_id);
+        return page_mgr.AcquireLock(request.txn_id, *request.page_id, request.type);
+    }
+
+    // 获取行锁
+    bool AcquireRowLock(const HierarchicalLockRequest& request) {
+        if (!request.row_id) {
+            return false;
+        }
+
+        auto& row_mgr = GetOrCreateRowLockManager(request.table_name, *request.row_id);
+        return row_mgr.AcquireLock(request.txn_id, *request.row_id, request.type);
+    }
+
+    // 释放意向锁
+    void ReleaseIntentionLocks(const HierarchicalLockRequest& request) {
+        switch (request.granularity) {
+            case LockGranularity::TABLE:
+                break;  // 不需要意向锁
+
+            case LockGranularity::PAGE:
+                ReleaseTableIntentionLock(request);
+                break;
+
+            case LockGranularity::ROW:
+                ReleaseTableIntentionLock(request);
+                ReleasePageIntentionLock(request);
+                break;
+        }
+    }
+
+    // 释放目标锁
+    void ReleaseTargetLock(const HierarchicalLockRequest& request) {
+        switch (request.granularity) {
+            case LockGranularity::TABLE:
+                ReleaseTableLock(request);
+                break;
+
+            case LockGranularity::PAGE:
+                ReleasePageLock(request);
+                break;
+
+            case LockGranularity::ROW:
+                ReleaseRowLock(request);
+                break;
+        }
+    }
+
+    // 辅助方法
+    LockManager& GetOrCreateTableLockManager(const std::string& table_name) {
+        auto it = table_lock_managers_.find(table_name);
+        if (it == table_lock_managers_.end()) {
+            table_lock_managers_[table_name] = std::make_unique<LockManager>();
+        }
+        return *table_lock_managers_[table_name];
+    }
+
+    LockManager& GetOrCreatePageLockManager(
+        const std::string& table_name,
+        const PageId& page_id
+    ) {
+        auto& page_mgrs = page_lock_managers_[table_name];
+        auto it = page_mgrs.find(page_id);
+        if (it == page_mgrs.end()) {
+            page_mgrs[page_id] = std::make_unique<LockManager>();
+        }
+        return *page_mgrs[page_id];
+    }
+
+    LockManager& GetOrCreateRowLockManager(
+        const std::string& table_name,
+        const RowId& row_id
+    ) {
+        auto& row_mgrs = row_lock_managers_[table_name];
+        auto it = row_mgrs.find(row_id);
+        if (it == row_mgrs.end()) {
+            row_mgrs[row_id] = std::make_unique<LockManager>();
+        }
+        return *row_mgrs[row_id];
+    }
+
+    // 释放锁的辅助方法（实现省略）
+    void ReleaseTableIntentionLock(const HierarchicalLockRequest& request) {}
+    void ReleasePageIntentionLock(const HierarchicalLockRequest& request) {}
+    void ReleaseTableLock(const HierarchicalLockRequest& request) {}
+    void ReleasePageLock(const HierarchicalLockRequest& request) {}
+    void ReleaseRowLock(const HierarchicalLockRequest& request) {}
+};
+```
+
+## 多版本并发控制实现
+
+### 1. 高效的MVCC实现
+
+```cpp
+// 高效的MVCC实现
+class EfficientMVCC {
+public:
+    // 版本链结构
+    struct VersionChain {
+        struct Version {
+            Value value;
+            Timestamp begin_ts;
+            Timestamp end_ts;
+            TransactionId creator;
+            bool committed;
+            Version* next;
+            Version* prev;
+        };
+
+        Version* head = nullptr;
+        Version* tail = nullptr;
+        std::shared_mutex chain_mutex;
+        int version_count = 0;
+    };
+
+    // 事务状态
+    struct TransactionState {
+        TransactionId id;
+        Timestamp start_ts;
+        Timestamp commit_ts;
+        TransactionStatus status;
+        std::unordered_map<Key, Version*> write_set;
+        std::unordered_set<Key> read_set;
+        std::unordered_map<Key, Value> old_values;
+    };
+
+    // 读取数据
+    bool Read(TransactionId txn_id, const Key& key, Value& value) {
+        auto txn_state = GetTransactionState(txn_id);
+        if (!txn_state) {
+            return false;
+        }
+
+        // 获取版本链
+        auto& chain = GetOrCreateVersionChain(key);
+        std::shared_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+        // 查找可见版本
+        Version* visible_version = FindVisibleVersion(chain, txn_state->start_ts);
+        if (!visible_version) {
+            return false;
+        }
+
+        value = visible_version->value;
+        txn_state->read_set.insert(key);
+
+        return true;
+    }
+
+    // 写入数据
+    bool Write(TransactionId txn_id, const Key& key, const Value& value) {
+        auto txn_state = GetTransactionState(txn_id);
+        if (!txn_state) {
+            return false;
+        }
+
+        // 获取版本链
+        auto& chain = GetOrCreateVersionChain(key);
+        std::unique_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+        // 创建新版本
+        Version* new_version = CreateVersion(chain, value, txn_state->start_ts, txn_id);
+
+        // 保存旧值用于回滚
+        Version* old_version = FindVisibleVersion(chain, txn_state->start_ts);
+        if (old_version) {
+            txn_state->old_values[key] = old_version->value;
+        }
+
+        txn_state->write_set[key] = new_version;
+
+        return true;
+    }
+
+    // 提交事务
+    bool Commit(TransactionId txn_id) {
+        auto txn_state = GetTransactionState(txn_id);
+        if (!txn_state) {
+            return false;
+        }
+
+        // 获取提交时间戳
+        Timestamp commit_ts = GetCommitTimestamp();
+
+        // 验证事务
+        if (!ValidateTransaction(txn_state, commit_ts)) {
+            Abort(txn_id);
+            return false;
+        }
+
+        // 提交版本
+        CommitVersions(txn_state, commit_ts);
+
+        // 更新事务状态
+        txn_state->status = TransactionStatus::COMMITTED;
+        txn_state->commit_ts = commit_ts;
+
+        // 清理事务
+        CleanupTransaction(txn_id);
+
+        return true;
+    }
+
+    // 终止事务
+    bool Abort(TransactionId txn_id) {
+        auto txn_state = GetTransactionState(txn_id);
+        if (!txn_state) {
+            return false;
+        }
+
+        // 回滚版本
+        RollbackVersions(txn_state);
+
+        // 更新事务状态
+        txn_state->status = TransactionStatus::ABORTED;
+
+        // 清理事务
+        CleanupTransaction(txn_id);
+
+        return true;
+    }
+
+    // 清理旧版本
+    void CleanupOldVersions() {
+        Timestamp oldest_active_ts = GetOldestActiveTimestamp();
+
+        for (auto& [key, chain] : version_chains_) {
+            std::unique_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+            Version* current = chain.head;
+            while (current) {
+                Version* next = current->next;
+
+                // 检查是否可以删除
+                if (current->end_ts < oldest_active_ts && current->committed) {
+                    RemoveVersion(chain, current);
+                }
+
+                current = next;
+            }
+        }
+    }
+
+private:
+    // 版本链存储
+    std::unordered_map<Key, VersionChain> version_chains_;
+
+    // 事务状态存储
+    std::unordered_map<TransactionId, TransactionState> transaction_states_;
+
+    // 版本池（用于内存管理）
+    std::unique_ptr<ObjectPool<Version>> version_pool_;
+
+    // 时间戳生成器
+    std::atomic<Timestamp> timestamp_counter_{1};
+
+    // 获取或创建版本链
+    VersionChain& GetOrCreateVersionChain(const Key& key) {
+        auto it = version_chains_.find(key);
+        if (it == version_chains_.end()) {
+            version_chains_[key] = VersionChain();
+        }
+        return version_chains_[key];
+    }
+
+    // 查找可见版本
+    Version* FindVisibleVersion(const VersionChain& chain, Timestamp timestamp) {
+        Version* current = chain.head;
+        Version* best_version = nullptr;
+        Timestamp best_ts = 0;
+
+        while (current) {
+            if (current->begin_ts <= timestamp &&
+                (current->end_ts > timestamp || !current->committed)) {
+                if (current->begin_ts > best_ts) {
+                    best_ts = current->begin_ts;
+                    best_version = current;
+                }
+            }
+            current = current->next;
+        }
+
+        return best_version;
+    }
+
+    // 创建版本
+    Version* CreateVersion(
+        VersionChain& chain,
+        const Value& value,
+        Timestamp begin_ts,
+        TransactionId creator
+    ) {
+        // 从版本池获取版本
+        Version* new_version = version_pool_->Allocate();
+        new_version->value = value;
+        new_version->begin_ts = begin_ts;
+        new_version->end_ts = std::numeric_limits<Timestamp>::max();
+        new_version->creator = creator;
+        new_version->committed = false;
+        new_version->next = nullptr;
+        new_version->prev = nullptr;
+
+        // 添加到版本链
+        if (!chain.head) {
+            chain.head = new_version;
+            chain.tail = new_version;
+        } else {
+            chain.tail->next = new_version;
+            new_version->prev = chain.tail;
+            chain.tail = new_version;
+        }
+
+        chain.version_count++;
+        return new_version;
+    }
+
+    // 验证事务
+    bool ValidateTransaction(TransactionState* txn_state, Timestamp commit_ts) {
+        // 检查写-写冲突
+        for (const auto& [key, version] : txn_state->write_set) {
+            auto& chain = GetOrCreateVersionChain(key);
+            std::shared_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+            Version* current = chain.head;
+            while (current) {
+                if (current != version &&
+                    current->begin_ts > txn_state->start_ts &&
+                    current->begin_ts < commit_ts &&
+                    current->committed) {
+                    return false;  // 写-写冲突
+                }
+                current = current->next;
+            }
+        }
+
+        // 检查写-读冲突
+        for (const auto& [key, version] : txn_state->write_set) {
+            // 检查是否有其他事务读取了该键
+            if (HasConcurrentRead(key, txn_state->start_ts, commit_ts, txn_state->id)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // 检查是否有并发读取
+    bool HasConcurrentRead(
+        const Key& key,
+        Timestamp start_ts,
+        Timestamp commit_ts,
+        TransactionId exclude_txn_id
+    ) {
+        for (const auto& [txn_id, txn_state] : transaction_states_) {
+            if (txn_id == exclude_txn_id) {
+                continue;
+            }
+
+            if (txn_state.read_set.find(key) != txn_state.read_set.end() &&
+                txn_state.start_ts > start_ts &&
+                txn_state.start_ts < commit_ts) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // 提交版本
+    void CommitVersions(TransactionState* txn_state, Timestamp commit_ts) {
+        for (const auto& [key, version] : txn_state->write_set) {
+            auto& chain = GetOrCreateVersionChain(key);
+            std::unique_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+            // 标记版本为已提交
+            version->committed = true;
+            version->begin_ts = commit_ts;
+
+            // 标记前一个版本为已结束
+            if (version->prev) {
+                version->prev->end_ts = commit_ts;
+            }
+        }
+    }
+
+    // 回滚版本
+    void RollbackVersions(TransactionState* txn_state) {
+        for (const auto& [key, version] : txn_state->write_set) {
+            auto& chain = GetOrCreateVersionChain(key);
+            std::unique_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+            // 从版本链中移除
+            RemoveVersion(chain, version);
+
+            // 恢复版本池
+            version_pool_->Deallocate(version);
+        }
+    }
+
+    // 移除版本
+    void RemoveVersion(VersionChain& chain, Version* version) {
+        if (version->prev) {
+            version->prev->next = version->next;
+        } else {
+            chain.head = version->next;
+        }
+
+        if (version->next) {
+            version->next->prev = version->prev;
+        } else {
+            chain.tail = version->prev;
+        }
+
+        chain.version_count--;
+    }
+
+    // 获取事务状态
+    TransactionState* GetTransactionState(TransactionId txn_id) {
+        auto it = transaction_states_.find(txn_id);
+        if (it != transaction_states_.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+
+    // 获取提交时间戳
+    Timestamp GetCommitTimestamp() {
+        return timestamp_counter_.fetch_add(1);
+    }
+
+    // 获取最旧的活动事务时间戳
+    Timestamp GetOldestActiveTimestamp() {
+        Timestamp oldest = std::numeric_limits<Timestamp>::max();
+
+        for (const auto& [txn_id, txn_state] : transaction_states_) {
+            if (txn_state.status == TransactionStatus::ACTIVE) {
+                oldest = std::min(oldest, txn_state.start_ts);
+            }
+        }
+
+        return oldest == std::numeric_limits<Timestamp>::max() ? 0 : oldest;
+    }
+
+    // 清理事务
+    void CleanupTransaction(TransactionId txn_id) {
+        transaction_states_.erase(txn_id);
+    }
+};
+```
+
+### 2. 内存优化的MVCC
+
+```cpp
+// 内存优化的MVCC实现
+class MemoryOptimizedMVCC {
+public:
+    // 紧凑的版本结构
+    struct CompactVersion {
+        // 使用位域来节省空间
+        uint32_t begin_ts_lower : 32;
+        uint32_t begin_ts_upper : 32;
+        uint32_t end_ts_lower : 32;
+        uint32_t end_ts_upper : 32;
+        uint32_t creator_id : 24;
+        uint32_t flags : 8;  // 包含committed标志和其他信息
+        uint32_t value_offset;  // 指向实际值的偏移量
+        uint32_t next_version_offset;  // 指向下一个版本的偏移量
+    };
+
+    // 版本存储区
+    class VersionStorage {
+    public:
+        VersionStorage(size_t initial_size = 1024 * 1024) {
+            storage_.resize(initial_size);
+            free_list_.push_back({0, initial_size});
+        }
+
+        // 分配版本
+        CompactVersion* AllocateVersion() {
+            // 查找合适的空闲块
+            for (auto it = free_list_.begin(); it != free_list_.end(); ++it) {
+                if (it->size >= sizeof(CompactVersion)) {
+                    CompactVersion* version = reinterpret_cast<CompactVersion*>(&storage_[it->offset]);
+
+                    // 更新空闲列表
+                    if (it->size > sizeof(CompactVersion)) {
+                        it->offset += sizeof(CompactVersion);
+                        it->size -= sizeof(CompactVersion);
+                    } else {
+                        free_list_.erase(it);
+                    }
+
+                    return version;
+                }
+            }
+
+            // 扩展存储
+            ExtendStorage();
+            return AllocateVersion();
+        }
+
+        // 释放版本
+        void DeallocateVersion(CompactVersion* version) {
+            size_t offset = reinterpret_cast<char*>(version) - storage_.data();
+            free_list_.push_back({offset, sizeof(CompactVersion)});
+        }
+
+        // 分配值存储
+        char* AllocateValue(size_t size) {
+            // 查找合适的空闲块
+            for (auto it = free_list_.begin(); it != free_list_.end(); ++it) {
+                if (it->size >= size) {
+                    char* value = &storage_[it->offset];
+
+                    // 更新空闲列表
+                    if (it->size > size) {
+                        it->offset += size;
+                        it->size -= size;
+                    } else {
+                        free_list_.erase(it);
+                    }
+
+                    return value;
+                }
+            }
+
+            // 扩展存储
+            ExtendStorage();
+            return AllocateValue(size);
+        }
+
+    private:
+        std::vector<char> storage_;
+        struct FreeBlock {
+            size_t offset;
+            size_t size;
+        };
+        std::vector<FreeBlock> free_list_;
+
+        // 扩展存储
+        void ExtendStorage() {
+            size_t new_size = storage_.size() * 2;
+            storage_.resize(new_size);
+            free_list_.push_back({storage_.size() / 2, storage_.size() / 2});
+        }
+    };
+
+    // 读取操作（内存优化）
+    bool ReadOptimized(TransactionId txn_id, const Key& key, Value& value) {
+        // 使用缓存优化的读取
+        auto& chain = version_chains_[key];
+
+        // 快速路径：检查缓存
+        if (chain.cached_version && IsVersionVisible(chain.cached_version, txn_id)) {
+            value = GetVersionValue(chain.cached_version);
+            return true;
+        }
+
+        // 慢速路径：遍历版本链
+        CompactVersion* current = chain.head;
+        CompactVersion* best_version = nullptr;
+        Timestamp best_ts = 0;
+
+        while (current) {
+            if (IsVersionVisible(current, txn_id)) {
+                Timestamp current_ts = GetVersionTimestamp(current);
+                if (current_ts > best_ts) {
+                    best_ts = current_ts;
+                    best_version = current;
+                }
+            }
+            current = GetNextVersion(current);
+        }
+
+        if (best_version) {
+            value = GetVersionValue(best_version);
+            // 更新缓存
+            chain.cached_version = best_version;
+            return true;
+        }
+
+        return false;
+    }
+
+    // 批量写入优化
+    bool WriteBatch(TransactionId txn_id, const std::vector<std::pair<Key, Value>>& writes) {
+        // 预分配所有需要的版本
+        std::vector<CompactVersion*> versions;
+        versions.reserve(writes.size());
+
+        for (const auto& [key, value] : writes) {
+            versions.push_back(version_storage_.AllocateVersion());
+        }
+
+        // 批量写入
+        for (size_t i = 0; i < writes.size(); ++i) {
+            const auto& [key, value] = writes[i];
+            CompactVersion* version = versions[i];
+
+            // 设置版本信息
+            InitializeVersion(version, value, txn_id);
+
+            // 添加到版本链
+            AddToVersionChain(key, version);
+        }
+
+        return true;
+    }
+
+private:
+    // 版本链信息
+    struct VersionChainInfo {
+        CompactVersion* head = nullptr;
+        CompactVersion* tail = nullptr;
+        CompactVersion* cached_version = nullptr;  // 最近访问的版本缓存
+        std::shared_mutex chain_mutex;
+        int version_count = 0;
+    };
+
+    std::unordered_map<Key, VersionChainInfo> version_chains_;
+    VersionStorage version_storage_;
+    std::unordered_map<TransactionId, TransactionState> transaction_states_;
+
+    // 检查版本可见性
+    bool IsVersionVisible(const CompactVersion* version, TransactionId txn_id) {
+        Timestamp txn_ts = GetTransactionTimestamp(txn_id);
+        Timestamp begin_ts = GetVersionBeginTimestamp(version);
+        Timestamp end_ts = GetVersionEndTimestamp(version);
+
+        return begin_ts <= txn_ts && end_ts > txn_ts && IsVersionCommitted(version);
+    }
+
+    // 获取版本时间戳
+    Timestamp GetVersionTimestamp(const CompactVersion* version) {
+        return (static_cast<uint64_t>(version->begin_ts_upper) << 32) | version->begin_ts_lower;
+    }
+
+    // 获取版本开始时间戳
+    Timestamp GetVersionBeginTimestamp(const CompactVersion* version) {
+        return (static_cast<uint64_t>(version->begin_ts_upper) << 32) | version->begin_ts_lower;
+    }
+
+    // 获取版本结束时间戳
+    Timestamp GetVersionEndTimestamp(const CompactVersion* version) {
+        return (static_cast<uint64_t>(version->end_ts_upper) << 32) | version->end_ts_lower;
+    }
+
+    // 检查版本是否已提交
+    bool IsVersionCommitted(const CompactVersion* version) {
+        return (version->flags & 0x01) != 0;
+    }
+
+    // 获取下一个版本
+    CompactVersion* GetNextVersion(const CompactVersion* version) {
+        if (version->next_version_offset == 0) {
+            return nullptr;
+        }
+        return reinterpret_cast<CompactVersion*>(version_storage_.storage_.data() + version->next_version_offset);
+    }
+
+    // 获取版本值
+    Value GetVersionValue(const CompactVersion* version) {
+        return Value(reinterpret_cast<char*>(version_storage_.storage_.data() + version->value_offset));
+    }
+
+    // 初始化版本
+    void InitializeVersion(CompactVersion* version, const Value& value, TransactionId txn_id) {
+        Timestamp ts = GetTransactionTimestamp(txn_id);
+
+        version->begin_ts_lower = static_cast<uint32_t>(ts);
+        version->begin_ts_upper = static_cast<uint32_t>(ts >> 32);
+        version->end_ts_lower = 0xFFFFFFFF;
+        version->end_ts_upper = 0xFFFFFFFF;
+        version->creator_id = txn_id;
+        version->flags = 0;  // 未提交
+        version->next_version_offset = 0;
+
+        // 分配值存储
+        size_t value_size = value.size();
+        char* value_storage = version_storage_.AllocateValue(value_size);
+        std::memcpy(value_storage, value.data(), value_size);
+        version->value_offset = value_storage - version_storage_.storage_.data();
+    }
+
+    // 添加到版本链
+    void AddToVersionChain(const Key& key, CompactVersion* version) {
+        auto& chain = version_chains_[key];
+        std::unique_lock<std::shared_mutex> chain_lock(chain.chain_mutex);
+
+        if (!chain.head) {
+            chain.head = version;
+            chain.tail = version;
+        } else {
+            // 设置链表指针
+            chain.tail->next_version_offset =
+                reinterpret_cast<char*>(version) - version_storage_.storage_.data();
+            chain.tail = version;
+        }
+
+        chain.version_count++;
+        chain.cached_version = version;  // 缓存新版本
+    }
+
+    // 获取事务时间戳
+    Timestamp GetTransactionTimestamp(TransactionId txn_id) {
+        auto it = transaction_states_.find(txn_id);
+        if (it != transaction_states_.end()) {
+            return it->second.start_ts;
+        }
+        return 0;  // 错误情况
+    }
+};
+```
+
+## 死锁检测与处理
+
+### 1. 高效死锁检测器
+
+```cpp
+// 高效死锁检测器
+class EfficientDeadlockDetector {
+public:
+    // 死锁检测策略
+    enum class DetectionStrategy {
+        TIMEOUT_BASED,
+        WAIT_FOR_GRAPH,
+        TIMESTAMP_BASED
+    };
+
+    // 死锁检测结果
+    struct DetectionResult {
+        bool has_deadlock;
+        std::vector<TransactionId> cycle;
+        TransactionId victim;
+        double detection_time_ms;
+    };
+
+    // 配置
+    struct Config {
+        DetectionStrategy strategy = DetectionStrategy::WAIT_FOR_GRAPH;
+        uint64_t detection_interval_ms = 1000;
+        uint64_t timeout_ms = 5000;
+        bool enable_early_detection = true;
+        size_t max_cycle_length = 10;
+    };
+
+    // 构造函数
+    explicit EfficientDeadlockDetector(const Config& config = Config{})
+        : config_(config), running_(false) {
+        if (config_.strategy == DetectionStrategy::WAIT_FOR_GRAPH) {
+            StartBackgroundDetection();
+        }
+    }
+
+    // 析构函数
+    ~EfficientDeadlockDetector() {
+        StopBackgroundDetection();
+    }
+
+    // 添加等待关系
+    void AddWaitRelation(TransactionId waiter, TransactionId waitee) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        wait_for_graph_[waitee].insert(waiter);
+        last_update_time_[waitee] = GetTickCount();
+
+        // 检查是否需要立即检测
+        if (config_.enable_early_detection &&
+            ShouldTriggerEarlyDetection(waiter, waitee)) {
+            TriggerImmediateDetection();
+        }
+    }
+
+    // 移除等待关系
+    void RemoveWaitRelation(TransactionId waiter, TransactionId waitee) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto it = wait_for_graph_.find(waitee);
+        if (it != wait_for_graph_.end()) {
+            it->second.erase(waiter);
+            if (it->second.empty()) {
+                wait_for_graph_.erase(it);
+            }
+        }
+    }
+
+    // 移除事务的所有等待关系
+    void RemoveTransaction(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        // 移除作为等待者的事务
+        for (auto& [waitee, waiters] : wait_for_graph_) {
+            waiters.erase(txn_id);
+        }
+
+        // 移除作为被等待者的事务
+        wait_for_graph_.erase(txn_id);
+        last_update_time_.erase(txn_id);
+    }
+
+    // 检测死锁
+    DetectionResult DetectDeadlock() {
+        auto start_time = std::chrono::steady_clock::now();
+
+        DetectionResult result;
+        result.has_deadlock = false;
+
+        switch (config_.strategy) {
+            case DetectionStrategy::WAIT_FOR_GRAPH:
+                result = DetectDeadlockWithWaitForGraph();
+                break;
+            case DetectionStrategy::TIMEOUT_BASED:
+                result = DetectDeadlockWithTimeout();
+                break;
+            case DetectionStrategy::TIMESTAMP_BASED:
+                result = DetectDeadlockWithTimestamp();
+                break;
+        }
+
+        auto end_time = std::chrono::steady_clock::now();
+        result.detection_time_ms =
+            std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
+        return result;
+    }
+
+    // 获取统计信息
+    struct Statistics {
+        uint64_t total_detections = 0;
+        uint64_t deadlocks_found = 0;
+        double average_detection_time_ms = 0;
+        uint64_t last_detection_time = 0;
+        std::vector<uint64_t> detection_times;
+    };
+
+    Statistics GetStatistics() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return stats_;
+    }
+
+private:
+    Config config_;
+    std::unordered_map<TransactionId, std::unordered_set<TransactionId>> wait_for_graph_;
+    std::unordered_map<TransactionId, uint64_t> last_update_time_;
+    std::mutex mutex_;
+    std::atomic<bool> running_;
+    std::unique_ptr<std::thread> detection_thread_;
+    Statistics stats_;
+
+    // 使用等待图检测死锁
+    DetectionResult DetectDeadlockWithWaitForGraph() {
+        DetectionResult result;
+        result.has_deadlock = false;
+
+        std::unordered_set<TransactionId> visited;
+        std::unordered_set<TransactionId> recursion_stack;
+        std::vector<TransactionId> current_path;
+
+        for (const auto& [txn_id, waiters] : wait_for_graph_) {
+            if (visited.find(txn_id) == visited.end()) {
+                current_path.clear();
+                if (FindCycleDFS(txn_id, visited, recursion_stack, current_path, result)) {
+                    break;
+                }
+            }
+        }
+
+        if (result.has_deadlock) {
+            result.victim = SelectVictim(result.cycle);
+        }
+
+        return result;
+    }
+
+    // 深度优先搜索查找环
+    bool FindCycleDFS(
+        TransactionId node,
+        std::unordered_set<TransactionId>& visited,
+        std::unordered_set<TransactionId>& recursion_stack,
+        std::vector<TransactionId>& current_path,
+        DetectionResult& result
+    ) {
+        visited.insert(node);
+        recursion_stack.insert(node);
+        current_path.push_back(node);
+
+        auto it = wait_for_graph_.find(node);
+        if (it != wait_for_graph_.end()) {
+            for (auto neighbor : it->second) {
+                if (visited.find(neighbor) == visited.end()) {
+                    if (FindCycleDFS(neighbor, visited, recursion_stack, current_path, result)) {
+                        return true;
+                    }
+                } else if (recursion_stack.find(neighbor) != recursion_stack.end()) {
+                    // 找到环
+                    result.has_deadlock = true;
+                    result.cycle = ExtractCycle(current_path, neighbor);
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.erase(node);
+        current_path.pop_back();
+        return false;
+    }
+
+    // 提取环路径
+    std::vector<TransactionId> ExtractCycle(
+        const std::vector<TransactionId>& path,
+        TransactionId start_node
+    ) {
+        std::vector<TransactionId> cycle;
+        auto it = std::find(path.rbegin(), path.rend(), start_node);
+        if (it != path.rend()) {
+            cycle.assign(it.base() - 1, path.end());
+        }
+        return cycle;
+    }
+
+    // 选择牺牲事务
+    TransactionId SelectVictim(const std::vector<TransactionId>& cycle) {
+        if (cycle.empty()) {
+            return INVALID_TRANSACTION_ID;
+        }
+
+        // 选择最年轻的事务（基于等待时间）
+        TransactionId victim = cycle[0];
+        uint64_t max_wait_time = 0;
+
+        for (auto txn_id : cycle) {
+            auto it = last_update_time_.find(txn_id);
+            if (it != last_update_time_.end()) {
+                uint64_t wait_time = GetTickCount() - it->second;
+                if (wait_time > max_wait_time) {
+                    max_wait_time = wait_time;
+                    victim = txn_id;
+                }
+            }
+        }
+
+        return victim;
+    }
+
+    // 使用超时检测死锁
+    DetectionResult DetectDeadlockWithTimeout() {
+        DetectionResult result;
+        result.has_deadlock = false;
+
+        uint64_t current_time = GetTickCount();
+
+        for (const auto& [txn_id, wait_time] : last_update_time_) {
+            if (current_time - wait_time > config_.timeout_ms) {
+                result.has_deadlock = true;
+                result.cycle.push_back(txn_id);
+                result.victim = txn_id;
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    // 使用时间戳检测死锁
+    DetectionResult DetectDeadlockWithTimestamp() {
+        // 基于时间戳的死锁检测实现
+        // 这里可以使用等待-死亡或伤害-等待策略
+        return DetectionResult{};
+    }
+
+    // 检查是否需要触发早期检测
+    bool ShouldTriggerEarlyDetection(TransactionId waiter, TransactionId waitee) {
+        // 检查等待链长度
+        int chain_length = CalculateWaitChainLength(waitee);
+        return chain_length >= config_.max_cycle_length - 1;
+    }
+
+    // 计算等待链长度
+    int CalculateWaitChainLength(TransactionId start_txn) {
+        std::unordered_set<TransactionId> visited;
+        return CalculateWaitChainLengthDFS(start_txn, visited);
+    }
+
+    int CalculateWaitChainLengthDFS(
+        TransactionId txn_id,
+        std::unordered_set<TransactionId>& visited
+    ) {
+        if (visited.find(txn_id) != visited.end()) {
+            return 0;  // 检测到环
+        }
+
+        visited.insert(txn_id);
+
+        auto it = wait_for_graph_.find(txn_id);
+        if (it == wait_for_graph_.end()) {
+            return 1;
+        }
+
+        int max_length = 0;
+        for (auto neighbor : it->second) {
+            max_length = std::max(max_length, CalculateWaitChainLengthDFS(neighbor, visited));
+        }
+
+        return max_length + 1;
+    }
+
+    // 触发立即检测
+    void TriggerImmediateDetection() {
+        std::thread detection_thread([this]() {
+            auto result = DetectDeadlock();
+            if (result.has_deadlock) {
+                HandleDeadlock(result);
+            }
+        });
+        detection_thread.detach();
+    }
+
+    // 处理死锁
+    void HandleDeadlock(const DetectionResult& result) {
+        // 终止牺牲事务
+        // 这里需要调用事务管理器的接口
+        std::cout << "Deadlock detected, victim: " << result.victim << std::endl;
+    }
+
+    // 启动后台检测
+    void StartBackgroundDetection() {
+        running_ = true;
+        detection_thread_ = std::make_unique<std::thread>([this]() {
+            while (running_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(config_.detection_interval_ms));
+
+                auto result = DetectDeadlock();
+                if (result.has_deadlock) {
+                    HandleDeadlock(result);
+                }
+
+                // 更新统计信息
+                std::lock_guard<std::mutex> lock(mutex_);
+                stats_.total_detections++;
+                if (result.has_deadlock) {
+                    stats_.deadlocks_found++;
+                }
+                stats_.detection_times.push_back(result.detection_time_ms);
+                stats_.last_detection_time = GetTickCount();
+            }
+        });
+    }
+
+    // 停止后台检测
+    void StopBackgroundDetection() {
+        running_ = false;
+        if (detection_thread_ && detection_thread_->joinable()) {
+            detection_thread_->join();
+        }
+    }
+
+    // 获取当前时间戳
+    uint64_t GetTickCount() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+
+    static constexpr TransactionId INVALID_TRANSACTION_ID = -1;
+};
+```
+
+### 2. 死锁预防策略
+
+```cpp
+// 死锁预防管理器
+class DeadlockPreventionManager {
+public:
+    // 预防策略
+    enum class PreventionStrategy {
+        WAIT_DIE,        // 等待-死亡
+        WOUND_WAIT,      // 伤害-等待
+        TIMEOUT_BASED,   // 基于超时
+        NO_WAIT          // 不等待
+    };
+
+    // 配置
+    struct Config {
+        PreventionStrategy strategy = PreventionStrategy::WAIT_DIE;
+        uint64_t timeout_ms = 5000;
+        bool enable_timestamp_ordering = true;
+    };
+
+    // 构造函数
+    explicit DeadlockPreventionManager(const Config& config = Config{})
+        : config_(config) {}
+
+    // 检查是否应该等待锁
+    bool ShouldWaitForLock(
+        TransactionId requester,
+        TransactionId holder,
+        const Key& key
+    ) {
+        switch (config_.strategy) {
+            case PreventionStrategy::WAIT_DIE:
+                return ShouldWaitWaitDie(requester, holder);
+            case PreventionStrategy::WOUND_WAIT:
+                return ShouldWaitWoundWait(requester, holder);
+            case PreventionStrategy::TIMEOUT_BASED:
+                return ShouldWaitTimeout(requester, holder);
+            case PreventionStrategy::NO_WAIT:
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    // 获取事务时间戳
+    void SetTransactionTimestamp(TransactionId txn_id, Timestamp timestamp) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        transaction_timestamps_[txn_id] = timestamp;
+    }
+
+    // 处理锁请求超时
+    void HandleLockTimeout(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        timeout_counts_[txn_id]++;
+    }
+
+    // 获取预防统计信息
+    struct PreventionStats {
+        uint64_t total_requests = 0;
+        uint64_t aborted_requests = 0;
+        uint64_t timeout_aborts = 0;
+        double abort_rate = 0.0;
+    };
+
+    PreventionStats GetStatistics() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        PreventionStats stats = stats_;
+        if (stats.total_requests > 0) {
+            stats.abort_rate = static_cast<double>(stats.aborted_requests) / stats.total_requests;
+        }
+        return stats;
+    }
+
+private:
+    Config config_;
+    std::unordered_map<TransactionId, Timestamp> transaction_timestamps_;
+    std::unordered_map<TransactionId, uint64_t> timeout_counts_;
+    mutable std::mutex mutex_;
+    PreventionStats stats_;
+
+    // 等待-死亡策略
+    bool ShouldWaitWaitDie(TransactionId requester, TransactionId holder) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto requester_ts = GetTransactionTimestampLocked(requester);
+        auto holder_ts = GetTransactionTimestampLocked(holder);
+
+        // 如果请求者比持有者老，则等待
+        if (requester_ts < holder_ts) {
+            return true;
+        }
+
+        // 请求者更年轻，终止请求者
+        stats_.aborted_requests++;
+        stats_.total_requests++;
+        return false;
+    }
+
+    // 伤害-等待策略
+    bool ShouldWaitWoundWait(TransactionId requester, TransactionId holder) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        auto requester_ts = GetTransactionTimestampLocked(requester);
+        auto holder_ts = GetTransactionTimestampLocked(holder);
+
+        // 如果请求者比持有者老，则伤害持有者
+        if (requester_ts < holder_ts) {
+            // 伤害持有者（这里需要外部处理）
+            return true;
+        }
+
+        // 请求者更年轻，则等待
+        return true;
+    }
+
+    // 基于超时的策略
+    bool ShouldWaitTimeout(TransactionId requester, TransactionId holder) {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        stats_.total_requests++;
+
+        // 检查超时计数
+        auto it = timeout_counts_.find(requester);
+        if (it != timeout_counts_.end() && it->second > 3) {
+            // 超过最大重试次数，终止请求
+            stats_.aborted_requests++;
+            stats_.timeout_aborts++;
+            return false;
+        }
+
+        return true;
+    }
+
+    // 获取事务时间戳（加锁版本）
+    Timestamp GetTransactionTimestampLocked(TransactionId txn_id) {
+        auto it = transaction_timestamps_.find(txn_id);
+        if (it != transaction_timestamps_.end()) {
+            return it->second;
+        }
+
+        // 如果没有时间戳，使用事务ID作为时间戳
+        return static_cast<Timestamp>(txn_id);
+    }
+};
+```
+
+## 性能优化策略
+
+### 1. 并发控制性能优化
+
+```cpp
+// 并发控制性能优化器
+class ConcurrencyControlOptimizer {
+public:
+    // 优化配置
+    struct OptimizationConfig {
+        bool enable_lock_coalescing = true;
+        bool enable_lock_elision = true;
+        bool enable_adaptive_isolation = true;
+        bool enable_batch_processing = true;
+        size_t max_batch_size = 100;
+        double conflict_threshold = 0.1;
+    };
+
+    // 构造函数
+    explicit ConcurrencyControlOptimizer(const OptimizationConfig& config = Config{})
+        : config_(config) {}
+
+    // 优化事务执行
+    void OptimizeTransaction(TransactionExecution* execution) {
+        if (config_.enable_lock_coalescing) {
+            OptimizeLockCoalescing(execution);
+        }
+
+        if (config_.enable_lock_elision) {
+            OptimizeLockElision(execution);
+        }
+
+        if (config_.enable_adaptive_isolation) {
+            OptimizeAdaptiveIsolation(execution);
+        }
+
+        if (config_.enable_batch_processing) {
+            OptimizeBatchProcessing(execution);
+        }
+    }
+
+    // 获取优化统计信息
+    struct OptimizationStats {
+        uint64_t total_transactions = 0;
+        uint64_t optimized_transactions = 0;
+        uint64_t lock_coalescing_savings = 0;
+        uint64_t lock_elision_savings = 0;
+        double average_improvement = 0.0;
+    };
+
+    OptimizationStats GetStatistics() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return stats_;
+    }
+
+private:
+    OptimizationConfig config_;
+    mutable std::mutex mutex_;
+    OptimizationStats stats_;
+
+    // 优化锁合并
+    void OptimizeLockCoalescing(TransactionExecution* execution) {
+        std::vector<LockRequest> coalesced_requests;
+
+        for (const auto& request : execution->lock_requests) {
+            // 检查是否可以与之前的请求合并
+            bool coalesced = false;
+            for (auto& existing : coalesced_requests) {
+                if (CanCoalesceLocks(request, existing)) {
+                    existing = CoalesceLocks(request, existing);
+                    coalesced = true;
+                    break;
+                }
+            }
+
+            if (!coalesced) {
+                coalesced_requests.push_back(request);
+            }
+        }
+
+        // 更新执行计划
+        execution->lock_requests = std::move(coalesced_requests);
+
+        // 更新统计信息
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.lock_coalescing_savings +=
+            execution->lock_requests.size() - coalesced_requests.size();
+    }
+
+    // 检查是否可以合并锁
+    bool CanCoalesceLocks(const LockRequest& req1, const LockRequest& req2) {
+        return req1.txn_id == req2.txn_id &&
+               req1.key == req2.key &&
+               AreLockTypesCoalescable(req1.type, req2.type);
+    }
+
+    // 检查锁类型是否可合并
+    bool AreLockTypesCoalescable(LockType type1, LockType type2) {
+        // 共享锁可以合并为共享锁
+        if (type1 == LockType::SHARED && type2 == LockType::SHARED) {
+            return true;
+        }
+
+        // 意向锁可以合并
+        if (type1 == LockType::INTENTION_SHARED && type2 == LockType::INTENTION_SHARED) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // 合并锁请求
+    LockRequest CoalesceLocks(const LockRequest& req1, const LockRequest& req2) {
+        LockRequest coalesced = req1;
+        // 合并逻辑
+        return coalesced;
+    }
+
+    // 优化锁消除
+    void OptimizeLockElision(TransactionExecution* execution) {
+        std::vector<LockRequest> filtered_requests;
+
+        for (const auto& request : execution->lock_requests) {
+            if (ShouldElideLock(request, execution)) {
+                continue;
+            }
+            filtered_requests.push_back(request);
+        }
+
+        execution->lock_requests = std::move(filtered_requests);
+
+        // 更新统计信息
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.lock_elision_savings +=
+            execution->lock_requests.size() - filtered_requests.size();
+    }
+
+    // 检查是否应该消除锁
+    bool ShouldElideLock(const LockRequest& request, const TransactionExecution* execution) {
+        // 只读事务且没有写冲突
+        if (request.type == LockType::SHARED && execution->is_read_only) {
+            return true;
+        }
+
+        // 短事务且冲突概率低
+        if (execution->duration_ms < 10 &&
+            GetConflictProbability(request.key) < config_.conflict_threshold) {
+            return true;
+        }
+
+        return false;
+    }
+
+    // 优化自适应隔离级别
+    void OptimizeAdaptiveIsolation(TransactionExecution* execution) {
+        double conflict_rate = GetConflictRate(execution->txn_id);
+
+        if (conflict_rate < 0.05) {
+            // 低冲突，使用较低的隔离级别
+            execution->isolation_level = IsolationLevel::READ_COMMITTED;
+        } else if (conflict_rate > 0.2) {
+            // 高冲突，使用较高的隔离级别
+            execution->isolation_level = IsolationLevel::SERIALIZABLE;
+        } else {
+            // 中等冲突，使用默认隔离级别
+            execution->isolation_level = IsolationLevel::REPEATABLE_READ;
+        }
+    }
+
+    // 优化批处理
+    void OptimizeBatchProcessing(TransactionExecution* execution) {
+        if (execution->operations.size() <= config_.max_batch_size) {
+            return;
+        }
+
+        // 将操作分成多个批次
+        std::vector<std::vector<Operation>> batches;
+        for (size_t i = 0; i < execution->operations.size(); i += config_.max_batch_size) {
+            auto end = std::min(i + config_.max_batch_size, execution->operations.size());
+            batches.emplace_back(execution->operations.begin() + i,
+                                 execution->operations.begin() + end);
+        }
+
+        execution->operation_batches = std::move(batches);
+        execution->use_batch_processing = true;
+    }
+
+    // 获取冲突概率
+    double GetConflictProbability(const Key& key) {
+        // 实现冲突概率估算
+        return 0.1;  // 简化实现
+    }
+
+    // 获取冲突率
+    double GetConflictRate(TransactionId txn_id) {
+        // 实现冲突率计算
+        return 0.1;  // 简化实现
+    }
+};
+```
+
+### 2. 并发控制监控与调优
+
+```cpp
+// 并发控制监控器
+class ConcurrencyControlMonitor {
+public:
+    // 性能指标
+    struct PerformanceMetrics {
+        uint64_t total_transactions = 0;
+        uint64_t committed_transactions = 0;
+        uint64_t aborted_transactions = 0;
+        uint64_t deadlock_count = 0;
+        double average_transaction_time_ms = 0.0;
+        double average_lock_wait_time_ms = 0.0;
+        double lock_contention_rate = 0.0;
+        std::vector<double> transaction_times;
+        std::vector<double> lock_wait_times;
+    };
+
+    // 配置
+    struct MonitorConfig {
+        uint64_t collection_interval_ms = 1000;
+        uint64_t history_size = 1000;
+        bool enable_real_time_alerts = true;
+        double deadlock_alert_threshold = 0.01;
+        double contention_alert_threshold = 0.3;
+    };
+
+    // 构造函数
+    explicit ConcurrencyControlMonitor(const MonitorConfig& config = Config{})
+        : config_(config), running_(false) {
+        StartMonitoring();
+    }
+
+    // 析构函数
+    ~ConcurrencyControlMonitor() {
+        StopMonitoring();
+    }
+
+    // 记录事务开始
+    void RecordTransactionStart(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        transaction_start_times_[txn_id] = GetTickCount();
+    }
+
+    // 记录事务提交
+    void RecordTransactionCommit(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        RecordTransactionEnd(txn_id, TransactionStatus::COMMITTED);
+    }
+
+    // 记录事务终止
+    void RecordTransactionAbort(TransactionId txn_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        RecordTransactionEnd(txn_id, TransactionStatus::ABORTED);
+    }
+
+    // 记录死锁
+    void RecordDeadlock(const std::vector<TransactionId>& cycle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_metrics_.deadlock_count++;
+
+        if (config_.enable_real_time_alerts) {
+            CheckDeadlockAlert();
+        }
+    }
+
+    // 记录锁等待时间
+    void RecordLockWaitTime(TransactionId txn_id, double wait_time_ms) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        current_metrics_.lock_wait_times.push_back(wait_time_ms);
+
+        // 保持历史大小限制
+        if (current_metrics_.lock_wait_times.size() > config_.history_size) {
+            current_metrics_.lock_wait_times.erase(
+                current_metrics_.lock_wait_times.begin());
+        }
+    }
+
+    // 获取当前指标
+    PerformanceMetrics GetCurrentMetrics() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return current_metrics_;
+    }
+
+    // 获取历史指标
+    std::vector<PerformanceMetrics> GetHistoricalMetrics() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return historical_metrics_;
+    }
+
+    // 生成性能报告
+    std::string GeneratePerformanceReport() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        std::stringstream report;
+        report << "Concurrency Control Performance Report\n";
+        report << "=====================================\n\n";
+
+        report << "Total Transactions: " << current_metrics_.total_transactions << "\n";
+        report << "Committed Transactions: " << current_metrics_.committed_transactions << "\n";
+        report << "Aborted Transactions: " << current_metrics_.aborted_transactions << "\n";
+        report << "Deadlock Count: " << current_metrics_.deadlock_count << "\n";
+
+        double commit_rate = current_metrics_.total_transactions > 0 ?
+            static_cast<double>(current_metrics_.committed_transactions) / current_metrics_.total_transactions : 0.0;
+        report << "Commit Rate: " << (commit_rate * 100) << "%\n";
+
+        report << "Average Transaction Time: " << current_metrics_.average_transaction_time_ms << " ms\n";
+        report << "Average Lock Wait Time: " << current_metrics_.average_lock_wait_time_ms << " ms\n";
+        report << "Lock Contention Rate: " << (current_metrics_.lock_contention_rate * 100) << "%\n";
+
+        return report.str();
+    }
+
+private:
+    MonitorConfig config_;
+    mutable std::mutex mutex_;
+    PerformanceMetrics current_metrics_;
+    std::vector<PerformanceMetrics> historical_metrics_;
+    std::unordered_map<TransactionId, uint64_t> transaction_start_times_;
+    std::atomic<bool> running_;
+    std::unique_ptr<std::thread> monitoring_thread_;
+
+    // 记录事务结束
+    void RecordTransactionEnd(TransactionId txn_id, TransactionStatus status) {
+        auto start_it = transaction_start_times_.find(txn_id);
+        if (start_it == transaction_start_times_.end()) {
+            return;
+        }
+
+        uint64_t start_time = start_it->second;
+        uint64_t end_time = GetTickCount();
+        double duration_ms = static_cast<double>(end_time - start_time);
+
+        // 更新指标
+        current_metrics_.total_transactions++;
+        current_metrics_.transaction_times.push_back(duration_ms);
+
+        if (status == TransactionStatus::COMMITTED) {
+            current_metrics_.committed_transactions++;
+        } else {
+            current_metrics_.aborted_transactions++;
+        }
+
+        // 保持历史大小限制
+        if (current_metrics_.transaction_times.size() > config_.history_size) {
+            current_metrics_.transaction_times.erase(
+                current_metrics_.transaction_times.begin());
+        }
+
+        // 计算平均值
+        UpdateAverageMetrics();
+
+        // 清理开始时间记录
+        transaction_start_times_.erase(start_it);
+    }
+
+    // 更新平均值指标
+    void UpdateAverageMetrics() {
+        if (!current_metrics_.transaction_times.empty()) {
+            current_metrics_.average_transaction_time_ms =
+                std::accumulate(current_metrics_.transaction_times.begin(),
+                              current_metrics_.transaction_times.end(), 0.0) /
+                current_metrics_.transaction_times.size();
+        }
+
+        if (!current_metrics_.lock_wait_times.empty()) {
+            current_metrics_.average_lock_wait_time_ms =
+                std::accumulate(current_metrics_.lock_wait_times.begin(),
+                              current_metrics_.lock_wait_times.end(), 0.0) /
+                current_metrics_.lock_wait_times.size();
+        }
+
+        // 计算锁争用率
+        current_metrics_.lock_contention_rate =
+            current_metrics_.average_lock_wait_time_ms /
+            (current_metrics_.average_transaction_time_ms + 0.001);  // 避免除零
+    }
+
+    // 检查死锁警报
+    void CheckDeadlockAlert() {
+        double deadlock_rate = current_metrics_.total_transactions > 0 ?
+            static_cast<double>(current_metrics_.deadlock_count) / current_metrics_.total_transactions : 0.0;
+
+        if (deadlock_rate > config_.deadlock_alert_threshold) {
+            std::cout << "ALERT: High deadlock rate detected: " << (deadlock_rate * 100) << "%\n";
+        }
+    }
+
+    // 启动监控
+    void StartMonitoring() {
+        running_ = true;
+        monitoring_thread_ = std::make_unique<std::thread>([this]() {
+            while (running_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(config_.collection_interval_ms));
+
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    // 保存历史指标
+                    historical_metrics_.push_back(current_metrics_);
+
+                    // 保持历史大小限制
+                    if (historical_metrics_.size() > config_.history_size) {
+                        historical_metrics_.erase(historical_metrics_.begin());
+                    }
+                }
+            }
+        });
+    }
+
+    // 停止监控
+    void StopMonitoring() {
+        running_ = false;
+        if (monitoring_thread_ && monitoring_thread_->joinable()) {
+            monitoring_thread_->join();
+        }
+    }
+
+    // 获取当前时间戳
+    uint64_t GetTickCount() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+    }
+};
+```
+
+## 实践练习
+
+### 练习1：实现高性能锁管理器
+
+```cpp
+// 练习：实现高性能锁管理器
+class HighPerformanceLockManagerImpl {
+public:
+    bool AcquireLock(TransactionId txn_id, const Key& key, LockType type) {
+        // 学生需要实现高性能锁获取逻辑
+        // 1. 使用细粒度锁
+        // 2. 优化锁冲突处理
+        // 3. 实现锁升级
+        return false;
+    }
+
+    void ReleaseLock(TransactionId txn_id, const Key& key) {
+        // 学生需要实现高性能锁释放逻辑
+        // 1. 高效的锁查找
+        // 2. 唤醒等待事务
+        // 3. 内存优化
+    }
+
+    bool UpgradeLock(TransactionId txn_id, const Key& key, LockType new_type) {
+        // 学生需要实现锁升级逻辑
+        // 1. 检查升级合法性
+        // 2. 处理升级冲突
+        // 3. 原子性升级
+        return false;
+    }
+
+    size_t GetLockCount() const {
+        // 学生需要实现锁计数统计
+        return 0;
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习2：实现内存优化的MVCC
+
+```cpp
+// 练习：实现内存优化的多版本并发控制
+class MemoryOptimizedMVCCImpl {
+public:
+    bool Read(TransactionId txn_id, const Key& key, Value& value) {
+        // 学生需要实现内存优化的读取逻辑
+        // 1. 紧凑的版本存储
+        // 2. 版本缓存优化
+        // 3. 快速可见性检查
+        return false;
+    }
+
+    bool Write(TransactionId txn_id, const Key& key, const Value& value) {
+        // 学生需要实现内存优化的写入逻辑
+        // 1. 批量版本创建
+        // 2. 内存池管理
+        // 3. 版本链优化
+        return false;
+    }
+
+    void CleanupOldVersions() {
+        // 学生需要实现版本清理逻辑
+        // 1. 识别过期版本
+        // 2. 批量清理
+        // 3. 内存回收
+    }
+
+    size_t GetVersionCount() const {
+        // 学生需要实现版本计数
+        return 0;
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+};
+```
+
+### 练习3：实现死锁检测器
+
+```cpp
+// 练习：实现高效死锁检测器
+class EfficientDeadlockDetectorImpl {
+public:
+    void AddWaitRelation(TransactionId waiter, TransactionId waitee) {
+        // 学生需要实现等待关系添加逻辑
+        // 1. 更新等待图
+        // 2. 早期死锁检测
+        // 3. 性能优化
+    }
+
+    bool DetectDeadlock(std::vector<TransactionId>& cycle) {
+        // 学生需要实现死锁检测逻辑
+        // 1. 环检测算法
+        // 2. 性能优化
+        // 3. 并发安全
+        return false;
+    }
+
+    TransactionId SelectVictim(const std::vector<TransactionId>& cycle) {
+        // 学生需要实现牺牲事务选择逻辑
+        // 1. 基于时间戳
+        // 2. 基于等待时间
+        // 3. 考虑事务优先级
+        return INVALID_TRANSACTION_ID;
+    }
+
+    void RemoveTransaction(TransactionId txn_id) {
+        // 学生需要实现事务移除逻辑
+        // 1. 清理等待关系
+        // 2. 内存回收
+        // 3. 图维护
+    }
+
+private:
+    // 学生需要定义必要的数据结构
+    static constexpr TransactionId INVALID_TRANSACTION_ID = -1;
+};
+```
+
+## 总结
+
+并发控制的实际实现涉及许多工程细节和优化策略。通过本讲的学习，我们掌握了：
+
+1. **高性能锁管理器**：理解了细粒度锁、锁升级、分层锁等优化技术
+2. **高效的MVCC实现**：学会了版本链管理、内存优化、批量处理等方法
+3. **死锁检测与处理**：掌握了高效的死锁检测算法和预防策略
+4. **性能优化策略**：理解了锁合并、锁消除、自适应隔离等优化技术
+5. **监控与调优**：学会了如何监控并发控制性能并进行调优
+
+实际实现中需要考虑很多因素：
+- **内存使用**：优化数据结构和内存分配
+- **并发性能**：减少锁争用，提高并发度
+- **可扩展性**：支持大量并发事务
+- **容错性**：处理各种异常情况
+- **监控能力**：提供详细的性能指标
+
+通过合理的设计和优化，可以构建出高性能、高可靠性的并发控制系统。
+
+## 进一步学习
+
+- [Database System Implementation](https://www.db-book.com/)
+- [PostgreSQL Concurrency Control](https://www.postgresql.org/docs/current/mvcc.html)
+- [Oracle Transaction Management](https://docs.oracle.com/en/database/oracle/oracle-database/21/cncpt/transactions.html)
+- [Concurrency Control Research Papers](https://dl.acm.org/topic/ccs/concurrency-control)
+- [Performance Tuning for Database Systems](https://www.percona.com/blog/)

@@ -1,0 +1,720 @@
+---
+title: "第3讲：进程与进程管理"
+description: "南京大学操作系统2025 - 进程的概念和表示、进程状态与转换、进程控制与调度"
+---
+
+# 第3讲：进程与进程管理
+
+## 进程的概念
+
+### 什么是进程？
+
+进程是程序执行的实例，是操作系统进行资源分配和调度的基本单位。
+
+**进程的特征**
+- **动态性**：进程是程序的执行过程，有创建、执行、消亡的生命周期
+- **并发性**：多个进程可以并发执行
+- **独立性**：进程是独立运行的基本单位
+- **异步性**：进程按异步方式执行，相互制约
+
+### 进程与程序的区别
+
+| 特征 | 程序 | 进程 |
+|------|------|------|
+| 定义 | 静态的指令集合 | 动态的执行实例 |
+| 存在 | 永久存储在磁盘 | 临时存在于内存 |
+| 状态 | 无状态概念 | 有创建、就绪、运行等状态 |
+| 资源 | 不占用系统资源 | 占用内存、CPU等资源 |
+| 并发 | 不能并发执行 | 可以并发执行 |
+
+## 进程的表示
+
+### 进程控制块 (PCB)
+
+进程控制块是进程存在的唯一标识，包含进程的所有信息。
+
+```c
+struct task_struct {
+    // 进程标识符
+    pid_t pid;                    // 进程ID
+    pid_t tgid;                   // 线程组ID
+
+    // 进程状态
+    volatile long state;          // 进程状态
+    int exit_state;               // 退出状态
+
+    // 进程优先级
+    int prio;                     // 动态优先级
+    int static_prio;              // 静态优先级
+    int normal_prio;              // 标准优先级
+
+    // 进程关系
+    struct task_struct *parent;    // 父进程
+    struct list_head children;     // 子进程链表
+    struct list_head sibling;      // 兄弟进程链表
+
+    // 进程调度信息
+    struct sched_entity se;       // 调度实体
+    int policy;                   // 调度策略
+    int nr_cpus_allowed;          // 允许运行的CPU数量
+
+    // 内存管理
+    struct mm_struct *mm;         // 内存描述符
+    struct mm_struct *active_mm;  // 活动内存描述符
+
+    // 文件系统信息
+    struct fs_struct *fs;         // 文件系统信息
+    struct files_struct *files;   // 打开文件表
+
+    // 信号处理
+    sigset_t blocked;             // 阻塞信号集
+    sigset_t pending;             // 待处理信号集
+    sigset_t saved_sigmask;       // 保存的信号掩码
+
+    // 时间信息
+    cputime_t utime;              // 用户态CPU时间
+    cputime_t stime;              // 内核态CPU时间
+    struct timespec start_time;    // 进程启动时间
+
+    // 进程上下文
+    struct thread_info thread;    // 线程信息
+    unsigned long sp;             // 栈指针
+    unsigned long ip;             // 指令指针
+
+    // 其他信息
+    comm[TASK_COMM_LEN];          // 进程名
+    uid_t uid, gid;               // 用户ID和组ID
+    struct cred *cred;            // 凭证信息
+};
+```
+
+### 进程上下文
+
+进程上下文是进程执行时需要的所有信息，包括：
+
+**硬件上下文**
+- 程序计数器 (PC)
+- 栈指针 (SP)
+- 通用寄存器
+- 状态寄存器
+
+**软件上下文**
+- 进程控制块 (PCB)
+- 内存管理信息
+- 打开文件表
+- 信号处理信息
+
+```python
+# 进程上下文管理示例
+class ProcessContext:
+    def __init__(self, pid):
+        self.pid = pid
+        self.registers = {
+            'pc': 0,      # 程序计数器
+            'sp': 0,      # 栈指针
+            'r1': 0,      # 通用寄存器
+            'r2': 0,
+            # ... 其他寄存器
+        }
+        self.page_table = None      # 页表
+        self.open_files = []        # 打开文件列表
+        self.signal_handlers = {}   # 信号处理函数
+
+    def save_context(self):
+        # 保存当前进程上下文
+        for reg in self.registers:
+            self.registers[reg] = read_register(reg)
+
+        # 保存内存管理信息
+        self.page_table = current_page_table()
+
+        # 保存文件描述符表
+        self.open_files = get_open_files()
+
+    def restore_context(self):
+        # 恢复进程上下文
+        for reg in self.registers:
+            write_register(reg, self.registers[reg])
+
+        # 恢复页表
+        set_page_table(self.page_table)
+
+        # 恢复文件描述符表
+        restore_open_files(self.open_files)
+```
+
+## 进程状态与转换
+
+### 进程的基本状态
+
+```
+创建 → 就绪 → 运行 → 等待 → 终止
+       ↑      ↓       ↓
+       ←──────┴───────┘
+```
+
+**状态定义**
+- **创建状态**：进程正在被创建，尚未进入就绪队列
+- **就绪状态**：进程已获得除CPU外的所有资源，等待CPU调度
+- **运行状态**：进程正在CPU上执行
+- **等待状态**：进程因等待某个事件而暂停执行
+- **终止状态**：进程执行完毕或被强制终止
+
+### 状态转换条件
+
+| 转换 | 触发条件 | 操作 |
+|------|----------|------|
+| 创建→就绪 | 资源分配完成 | 进入就绪队列 |
+| 就绪→运行 | 获得CPU时间片 | 开始执行 |
+| 运行→就绪 | 时间片用完或被抢占 | 返回就绪队列 |
+| 运行→等待 | 请求I/O或等待事件 | 进入等待队列 |
+| 等待→就绪 | 等待的事件发生 | 返回就绪队列 |
+| 运行→终止 | 进程结束或异常 | 释放资源并退出 |
+
+### Linux进程状态
+
+```c
+/* Linux进程状态定义 */
+#define TASK_RUNNING        0   /* 运行状态 */
+#define TASK_INTERRUPTIBLE  1   /* 可中断等待 */
+#define TASK_UNINTERRUPTIBLE 2 /* 不可中断等待 */
+#define TASK_STOPPED        4   /* 暂停状态 */
+#define TASK_TRACED         8   /* 跟踪状态 */
+#define TASK_DEAD           16  /* 死亡状态 */
+#define TASK_WAKEKILL       32  /* 唤醒并杀死 */
+#define TASK_WAKING         64  /* 正在唤醒 */
+#define TASK_PARKED         128 /* 暂停状态 */
+```
+
+### 进程状态管理示例
+
+```c
+// 进程状态转换函数
+void set_task_state(struct task_struct *p, long state)
+{
+    /*
+     * 设置进程状态
+     * @p: 进程描述符
+     * @state: 新状态
+     */
+
+    // 使用内存屏障确保状态变更的原子性
+    smp_wmb();
+
+    // 设置新状态
+    p->state = state;
+}
+
+// 进程调度函数
+void schedule(void)
+{
+    struct task_struct *prev, *next;
+
+    prev = current;
+
+    // 如果当前进程是运行状态，则设为就绪状态
+    if (prev->state == TASK_RUNNING)
+        prev->state = TASK_INTERRUPTIBLE;
+
+    // 选择下一个要运行的进程
+    next = pick_next_task();
+
+    // 如果选择的进程不是当前进程，则进行上下文切换
+    if (likely(prev != next)) {
+        context_switch(prev, next);
+    }
+}
+```
+
+## 进程控制
+
+### 进程创建
+
+**fork()系统调用**
+```c
+// fork系统调用实现原理
+pid_t sys_fork(void)
+{
+    struct task_struct *p;
+
+    // 创建新的进程描述符
+    p = copy_process(CLONE_VM, 0, 0, NULL, NULL, 0);
+
+    // 如果创建失败，返回错误码
+    if (IS_ERR(p))
+        return PTR_ERR(p);
+
+    // 返回子进程的PID
+    return p->pid;
+}
+
+// 复制进程
+static struct task_struct *copy_process(unsigned long clone_flags,
+                                        unsigned long stack_start,
+                                        unsigned long stack_size,
+                                        int __user *child_tidptr,
+                                        int pidfd,
+                                        int node)
+{
+    struct task_struct *p;
+    int retval;
+
+    // 分配进程描述符
+    p = dup_task_struct(current);
+    if (!p)
+        return ERR_PTR(-ENOMEM);
+
+    // 初始化进程描述符
+    retval = copy_creds(p, current);
+    if (retval < 0)
+        goto bad_fork_free;
+
+    // 复制内存管理信息
+    retval = copy_mm(clone_flags, p);
+    if (retval < 0)
+        goto bad_fork_cleanup_creds;
+
+    // 复制文件信息
+    retval = copy_files(clone_flags, p);
+    if (retval < 0)
+        goto bad_fork_cleanup_mm;
+
+    // 复制信号处理信息
+    retval = copy_sighand(clone_flags, p);
+    if (retval < 0)
+        goto bad_fork_cleanup_files;
+
+    // 设置进程ID
+    p->pid = alloc_pid(p->nsproxy->pid_ns_for_children);
+
+    // 设置进程状态为就绪
+    p->state = TASK_RUNNING;
+
+    // 返回新进程
+    return p;
+}
+```
+
+**exec()系统调用**
+```c
+// exec系统调用
+int sys_execve(const char __user *filename,
+               const char __user *const __user *__argv,
+               const char __user *const __user *__envp)
+{
+    struct filename *path;
+    int error;
+
+    // 获取可执行文件路径
+    path = getname(filename);
+    if (IS_ERR(path))
+        return PTR_ERR(path);
+
+    // 执行程序
+    error = do_execve(path->name, __argv, __envp);
+
+    // 释放路径名
+    putname(path);
+
+    return error;
+}
+
+// 执行新的程序
+int do_execve(struct filename *filename,
+              const char __user *const __user *__argv,
+              const char __user *const __user *__envp)
+{
+    struct linux_binprm bprm;
+    struct file *file;
+    int retval;
+
+    // 打开可执行文件
+    file = open_exec(filename);
+    if (IS_ERR(file))
+        return PTR_ERR(file);
+
+    // 设置执行参数
+    memset(&bprm, 0, sizeof(bprm));
+    bprm.file = file;
+    bprm.filename = filename;
+
+    // 加载程序到内存
+    retval = load_elf_binary(&bprm);
+    if (retval < 0)
+        goto out;
+
+    // 启动新程序
+    start_thread(current_pt_regs(), bprm.p, bprm.p);
+
+    return 0;
+}
+```
+
+### 进程终止
+
+```c
+// 进程终止系统调用
+void sys_exit(int error_code)
+{
+    do_exit((error_code & 0xff) << 8);
+}
+
+// 进程退出处理
+void do_exit(long code)
+{
+    struct task_struct *tsk = current;
+
+    // 设置进程状态为死亡
+    tsk->state = TASK_DEAD;
+
+    // 释放内存资源
+    exit_mm(tsk);
+
+    // 关闭所有打开的文件
+    exit_files(tsk);
+
+    // 释放信号处理资源
+    exit_sighand(tsk);
+
+    // 释放凭证信息
+    exit_creds(tsk);
+
+    // 通知父进程
+    exit_notify(tsk);
+
+    // 调度其他进程
+    schedule();
+}
+```
+
+## 进程调度
+
+### 调度算法分类
+
+**非抢占式调度**
+- 先来先服务 (FCFS)
+- 最短作业优先 (SJF)
+
+**抢占式调度**
+- 时间片轮转 (Round Robin)
+- 优先级调度
+- 多级反馈队列
+
+### Linux调度器 (CFS)
+
+**完全公平调度器**
+```c
+// 调度实体结构
+struct sched_entity {
+    struct load_weight      load;           // 负载权重
+    struct rb_node          run_node;       // 红黑树节点
+    u64                     exec_start;      // 开始执行时间
+    u64                     sum_exec_runtime; // 总执行时间
+    u64                     vruntime;        // 虚拟运行时间
+    s64                     vlag;           // 虚拟延迟
+    u64                     prev_sum_exec_runtime;
+
+    // 调度统计信息
+    u64                     nr_migrations;
+    struct sched_statistics statistics;
+
+    // 调度实体所属的队列
+    struct cfs_rq           *cfs_rq;
+    struct cfs_rq           *my_q;
+};
+
+// 调度队列结构
+struct cfs_rq {
+    struct load_weight      load;           // 队列负载
+    u64                     min_vruntime;    // 最小虚拟运行时间
+    struct rb_root_cached   tasks_timeline;  // 红黑树根
+    struct sched_entity     *curr;          // 当前运行实体
+    struct sched_entity     *next;          // 下一个实体
+    struct sched_entity     *last;          // 上一个实体
+};
+```
+
+**CFS调度算法**
+```c
+// 选择下一个要运行的进程
+struct task_struct *pick_next_task_fair(struct rq *rq)
+{
+    struct cfs_rq *cfs_rq = &rq->cfs;
+    struct sched_entity *se;
+    struct task_struct *p;
+
+    // 如果队列为空，返回NULL
+    if (!cfs_rq->nr_running)
+        return NULL;
+
+    // 获取红黑树最左边的节点（vruntime最小的）
+    se = __pick_first_entity(cfs_rq);
+    if (!se)
+        return NULL;
+
+    // 获取对应的进程描述符
+    p = task_of(se);
+
+    return p;
+}
+
+// 更新进程的虚拟运行时间
+static void update_curr(struct cfs_rq *cfs_rq)
+{
+    struct sched_entity *curr = cfs_rq->curr;
+    u64 now = rq_clock_task(rq_of(cfs_rq));
+    u64 delta_exec;
+
+    if (unlikely(!curr))
+        return;
+
+    // 计算实际运行时间
+    delta_exec = now - curr->exec_start;
+    if (unlikely(delta_exec <= 0))
+        return;
+
+    // 更新虚拟运行时间
+    curr->vruntime += calc_delta_fair(delta_exec, curr);
+
+    // 更新执行开始时间
+    curr->exec_start = now;
+
+    // 更新队列的最小虚拟运行时间
+    update_min_vruntime(cfs_rq);
+}
+```
+
+### 进程调度示例
+
+```python
+# 简化的进程调度器实现
+class ProcessScheduler:
+    def __init__(self):
+        self.ready_queue = []      # 就绪队列
+        self.waiting_queue = []    # 等待队列
+        self.current_process = None
+        self.time_slice = 10       # 时间片长度
+
+    def add_process(self, process):
+        """添加进程到就绪队列"""
+        process.state = 'READY'
+        self.ready_queue.append(process)
+
+    def schedule(self):
+        """进程调度"""
+        # 如果当前进程正在运行，检查是否需要切换
+        if self.current_process:
+            if self.current_process.state == 'RUNNING':
+                # 时间片用完，切换到就绪状态
+                if self.current_process.time_used >= self.time_slice:
+                    self.current_process.state = 'READY'
+                    self.current_process.time_used = 0
+                    self.ready_queue.append(self.current_process)
+            elif self.current_process.state == 'WAITING':
+                # 进程进入等待状态
+                self.waiting_queue.append(self.current_process)
+
+        # 选择下一个要运行的进程
+        if self.ready_queue:
+            # 选择就绪队列中的第一个进程
+            self.current_process = self.ready_queue.pop(0)
+            self.current_process.state = 'RUNNING'
+            return self.current_process
+        else:
+            self.current_process = None
+            return None
+
+    def wake_up_process(self, process):
+        """唤醒等待的进程"""
+        if process in self.waiting_queue:
+            self.waiting_queue.remove(process)
+            self.ready_queue.append(process)
+            process.state = 'READY'
+
+    def context_switch(self, old_process, new_process):
+        """上下文切换"""
+        if old_process:
+            old_process.save_context()
+        if new_process:
+            new_process.restore_context()
+```
+
+## 实验M1：实现简单的进程管理
+
+### 实验目标
+
+实现一个简单的进程管理系统，包括进程创建、状态管理和基本调度。
+
+### 实验代码框架
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define MAX_PROCESSES 64
+#define TIME_QUANTUM 5
+
+// 进程状态枚举
+typedef enum {
+    PROCESS_CREATED,
+    PROCESS_READY,
+    PROCESS_RUNNING,
+    PROCESS_WAITING,
+    PROCESS_TERMINATED
+} ProcessState;
+
+// 进程控制块
+typedef struct {
+    pid_t pid;                    // 进程ID
+    ProcessState state;           // 进程状态
+    char name[256];               // 进程名称
+    int priority;                 // 优先级
+    int time_used;                // 已使用时间片
+    int total_time;               // 总运行时间
+    void (*entry_point)(void);    // 入口函数
+} Process;
+
+// 进程管理器
+typedef struct {
+    Process processes[MAX_PROCESSES];  // 进程数组
+    int process_count;                 // 进程数量
+    Process *current_process;          // 当前运行进程
+} ProcessManager;
+
+// 初始化进程管理器
+void init_process_manager(ProcessManager *pm) {
+    pm->process_count = 0;
+    pm->current_process = NULL;
+    memset(pm->processes, 0, sizeof(pm->processes));
+}
+
+// 创建进程
+Process* create_process(ProcessManager *pm, const char *name,
+                      void (*entry_point)(void), int priority) {
+    if (pm->process_count >= MAX_PROCESSES) {
+        return NULL;
+    }
+
+    Process *proc = &pm->processes[pm->process_count];
+    proc->pid = pm->process_count + 1;
+    proc->state = PROCESS_CREATED;
+    strncpy(proc->name, name, sizeof(proc->name) - 1);
+    proc->priority = priority;
+    proc->time_used = 0;
+    proc->total_time = 0;
+    proc->entry_point = entry_point;
+
+    pm->process_count++;
+
+    printf("Created process: %s (PID: %d)\n", proc->name, proc->pid);
+    return proc;
+}
+
+// 进程调度
+void schedule(ProcessManager *pm) {
+    // 简单的轮转调度
+    if (pm->current_process) {
+        if (pm->current_process->state == PROCESS_RUNNING) {
+            if (pm->current_process->time_used >= TIME_QUANTUM) {
+                pm->current_process->state = PROCESS_READY;
+                pm->current_process->time_used = 0;
+            }
+        }
+    }
+
+    // 寻找下一个就绪进程
+    for (int i = 0; i < pm->process_count; i++) {
+        if (pm->processes[i].state == PROCESS_READY) {
+            if (pm->current_process) {
+                pm->current_process->state = PROCESS_READY;
+            }
+            pm->current_process = &pm->processes[i];
+            pm->current_process->state = PROCESS_RUNNING;
+            printf("Scheduled process: %s (PID: %d)\n",
+                   pm->current_process->name, pm->current_process->pid);
+            break;
+        }
+    }
+}
+
+// 模拟进程运行
+void simulate_process_run(ProcessManager *pm, int time_units) {
+    for (int i = 0; i < time_units; i++) {
+        if (pm->current_process) {
+            pm->current_process->time_used++;
+            pm->current_process->total_time++;
+            printf("Process %s running (Time: %d)\n",
+                   pm->current_process->name, pm->current_process->time_used);
+        }
+
+        // 每个时间单位后进行调度
+        schedule(pm);
+    }
+}
+
+// 示例进程函数
+void process1_func(void) {
+    printf("Process 1 is running\n");
+}
+
+void process2_func(void) {
+    printf("Process 2 is running\n");
+}
+
+void process3_func(void) {
+    printf("Process 3 is running\n");
+}
+
+int main() {
+    ProcessManager pm;
+
+    // 初始化进程管理器
+    init_process_manager(&pm);
+
+    // 创建进程
+    Process *p1 = create_process(&pm, "Process1", process1_func, 1);
+    Process *p2 = create_process(&pm, "Process2", process2_func, 2);
+    Process *p3 = create_process(&pm, "Process3", process3_func, 3);
+
+    // 设置进程状态为就绪
+    p1->state = PROCESS_READY;
+    p2->state = PROCESS_READY;
+    p3->state = PROCESS_READY;
+
+    // 运行调度模拟
+    printf("Starting process scheduling simulation...\n");
+    simulate_process_run(&pm, 20);
+
+    printf("\nSimulation completed.\n");
+    return 0;
+}
+```
+
+### 实验扩展
+
+1. **优先级调度**：修改调度算法，实现基于优先级的调度
+2. **进程间通信**：添加管道或消息队列机制
+3. **进程同步**：实现简单的信号量或互斥锁
+4. **进程监控**：添加进程状态监控和统计功能
+
+## 课后练习
+
+1. **思考题**：分析CFS调度器的公平性原理，说明如何通过虚拟运行时间实现公平调度。
+
+2. **编程题**：完善实验M1的代码，实现进程的创建、调度和终止的完整流程。
+
+3. **设计题**：设计一个支持多级反馈队列的调度算法，并分析其优缺点。
+
+## 下一讲预告
+
+第4讲：地址空间与内存管理 - 地址空间的概念、内存分配策略、虚拟内存技术。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第3讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect3.md](https://jyywiki.cn/OS/2025/lect3.md)*

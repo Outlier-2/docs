@@ -1,0 +1,197 @@
+---
+title: "Lecture 1: 课程概述与关系模型"
+description: "CMU 15-445 Lecture 1 - 数据库系统介绍、关系模型基础、SQL入门"
+---
+
+# Lecture 1: 课程概述与关系模型
+
+## 课程介绍
+
+### 为什么学习数据库系统？
+- **数据爆炸时代**：现代应用处理海量数据，需要高效的数据管理
+- **核心技术栈**：数据库是几乎所有企业级应用的基础设施
+- **就业市场需求**：数据库工程师、系统架构师等高薪职位
+- **理论基础**：为分布式系统、大数据处理等领域奠定基础
+
+### 课程安排
+- 26讲核心内容，涵盖数据库系统的各个方面
+- 4个大型编程项目，实践理论知识
+- 理论与实践相结合，深入理解系统原理
+
+## 数据库系统基础
+
+### 什么是数据库系统？
+数据库系统(DBMS)是一个**软件系统**，用于：
+- **数据存储**：高效地存储和管理大量数据
+- **数据检索**：快速查询和获取所需信息
+- **数据完整性**：确保数据的一致性和正确性
+- **并发控制**：处理多个用户同时访问
+- **故障恢复**：在系统崩溃后恢复数据
+
+### DBMS的核心组件
+```
+应用程序
+    ↓
+查询处理器 → 查询优化器 → 执行引擎
+    ↓
+存储管理器 → 缓冲池管理器 → 磁盘存储
+    ↓
+事务管理器 → 锁管理器 → 日志管理器
+```
+
+## 关系模型
+
+### 关系模型的核心概念
+关系模型由E.F. Codd于1970年提出，是现代数据库系统的基础。
+
+#### 关系（表）
+- **关系**：二维表，包含行和列
+- **元组**：表中的一行，表示一个实体
+- **属性**：表中的一列，描述实体的特征
+- **域**：属性的取值范围
+
+#### 关键概念
+```sql
+-- 学生表示例
+CREATE TABLE Students (
+    student_id INT PRIMARY KEY,     -- 主键
+    name VARCHAR(50) NOT NULL,      -- 非空约束
+    email VARCHAR(100) UNIQUE,      -- 唯一约束
+    age INT CHECK (age >= 18),      -- 检查约束
+    department_id INT,              -- 外键
+    FOREIGN KEY (department_id) REFERENCES Departments(dept_id)
+);
+```
+
+### 关系代数
+关系代数是关系模型的数学基础，提供了一组操作来处理关系。
+
+#### 基本操作
+- **选择(σ)**：从关系中选择满足条件的元组
+  ```
+  σ_age≥18(Students)  -- 选择年龄≥18的学生
+  ```
+
+- **投影(π)**：从关系中选择指定的属性
+  ```
+  π_name,age(Students)  -- 只显示姓名和年龄
+  ```
+
+- **并(∪)**：两个关系的并集
+- **差(-)**：两个关系的差集
+- **笛卡尔积(×)**：两个关系的所有组合
+
+#### 导出操作
+- **连接(⨝)**：基于条件的连接操作
+- **交集(∩)**：两个关系的交集
+- **除(÷)**：用于处理"所有"类型的查询
+
+## SQL基础
+
+### SQL概述
+SQL（结构化查询语言）是关系数据库的标准语言。
+
+#### SQL的组成部分
+- **DDL (Data Definition Language)**：数据定义语言
+- **DML (Data Manipulation Language)**：数据操作语言
+- **DCL (Data Control Language)**：数据控制语言
+
+### 基本SQL操作
+
+#### 数据定义（DDL）
+```sql
+-- 创建表
+CREATE TABLE Courses (
+    course_id VARCHAR(10) PRIMARY KEY,
+    course_name VARCHAR(100) NOT NULL,
+    credits INT,
+    department VARCHAR(50)
+);
+
+-- 修改表结构
+ALTER TABLE Students ADD COLUMN gpa DECIMAL(3,2);
+
+-- 删除表
+DROP TABLE Courses;
+```
+
+#### 数据操作（DML）
+```sql
+-- 插入数据
+INSERT INTO Students (student_id, name, email, age)
+VALUES (1001, '张三', 'zhang@example.com', 20);
+
+-- 查询数据
+SELECT * FROM Students WHERE age >= 20;
+
+-- 更新数据
+UPDATE Students SET age = 21 WHERE student_id = 1001;
+
+-- 删除数据
+DELETE FROM Students WHERE student_id = 1001;
+```
+
+#### 复杂查询
+```sql
+-- 多表连接查询
+SELECT s.name, c.course_name, e.grade
+FROM Students s
+JOIN Enrollments e ON s.student_id = e.student_id
+JOIN Courses c ON e.course_id = c.course_id
+WHERE e.grade >= 90;
+
+-- 分组聚合
+SELECT department, COUNT(*) as student_count, AVG(age) as avg_age
+FROM Students
+GROUP BY department
+HAVING COUNT(*) > 10;
+```
+
+## 数据完整性
+
+### 完整性约束
+- **实体完整性**：主键唯一且非空
+- **参照完整性**：外键引用必须存在
+- **用户定义完整性**：业务规则约束
+
+### 数据库设计原则
+- **规范化**：减少数据冗余
+- **数据一致性**：确保数据的准确性
+- **性能考虑**：查询效率与存储空间的平衡
+
+## 实践建议
+
+### 学习方法
+1. **理论与实践结合**：理解概念后立即动手实践
+2. **多做练习**：通过SQL练习巩固关系代数概念
+3. **阅读源码**：研究开源数据库系统的实现
+4. **参与项目**：构建小型数据库系统
+
+### 推荐资源
+- 教材：《Database System Concepts》
+- 在线资源：SQLZoo、LeetCode数据库题目
+- 开源项目：SQLite、PostgreSQL源码
+
+## 课后练习
+
+### 概念题
+1. 解释关系模型的核心概念
+2. 比较关系代数与SQL的异同
+3. 说明数据库系统的主要组件及其作用
+
+### 编程题
+1. 创建一个简单的学生-课程数据库模式
+2. 编写复杂的SQL查询，包括多表连接和子查询
+3. 实现基本的关系代数操作
+
+## 下节预告
+
+下一讲将深入探讨**高级SQL**，包括：
+- 复杂查询技术
+- 窗口函数和递归查询
+- 查询优化基础
+- 性能调优技巧
+
+---
+
+**记住**：理解关系模型是掌握数据库系统的基础，扎实的理论基础将帮助你在后续学习中更加顺利！

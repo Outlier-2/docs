@@ -1,0 +1,560 @@
+---
+title: "Week 3：TCP进阶"
+description: "CS144 Week 3 - TCP状态机、流量控制、完成TCP实现"
+---
+
+# Week 3：TCP进阶
+
+## 课程概述
+
+Week 3 completes our implementation of TCP, focusing on the state machine, flow control, and advanced features.
+
+## TCP状态机详解
+
+### 完整的TCP状态转换图
+
+```
+                              +---------+
+                              | CLOSED  |
+                              +---------+
+                                 |     ^
+                  application   |     |   close
+                                |     |    or timeout
+                  +-------------+     |    +-------------+
+                  |                           |    +-------------+
+                  v                           |    |    LISTEN   |
+            +-----------+                    |    +-------------+
+            | SYN_SENT  |                    |          ^
+            +-----------+                    |          | passive
+                 | active                     |          | open
+                 | open                       |          |
+                 v                            |          |
+        +-----------------+                   |          v
+        | SYN_RECEIVED    |                   |     +-------------+
+        +-----------------+                   |     | ESTABLISHED |
+           ^               |                   |     +-------------+
+           |               | close             |          |     close
+           |               v                   |          v
+    +--------------+  +--------------+       +--------------+
+    | FIN_WAIT_1   |  | CLOSE_WAIT   |       | FIN_WAIT_2   |
+    +--------------+  +--------------+       +--------------+
+        |               |                      |              |
+        | close         | close                | close        |
+        v               v                      v              v
+    +--------------+  +--------------+      +--------------+  +--------------+
+    | CLOSING      |  | LAST_ACK     |      | TIME_WAIT    |  | CLOSED       |
+    +--------------+  +--------------+      +--------------+  +--------------+
+        |               |                      |              |
+        +---------------+                      +--------------+
+                        ack                   timeout 2MSL
+```
+
+### 状态机实现
+
+```cpp
+class TCPStateMachine {
+private:
+    enum State {
+        CLOSED,
+        LISTEN,
+        SYN_SENT,
+        SYN_RECEIVED,
+        ESTABLISHED,
+        FIN_WAIT_1,
+        FIN_WAIT_2,
+        CLOSING,
+        TIME_WAIT,
+        CLOSE_WAIT,
+        LAST_ACK
+    };
+
+    State current_state;
+
+public:
+    void process_event(const Event& event) {
+        switch (current_state) {
+            case CLOSED:
+                handle_closed_state(event);
+                break;
+            case LISTEN:
+                handle_listen_state(event);
+                break;
+            // ... 其他状态处理
+        }
+    }
+
+private:
+    void handle_closed_state(const Event& event) {
+        if (event.type == ACTIVE_OPEN) {
+            send_syn();
+            current_state = SYN_SENT;
+        } else if (event.type == PASSIVE_OPEN) {
+            current_state = LISTEN;
+        }
+    }
+
+    void handle_listen_state(const Event& event) {
+        if (event.type == SYN_RECEIVED) {
+            send_syn_ack();
+            current_state = SYN_RECEIVED;
+        }
+    }
+};
+```
+
+## 流量控制 (Flow Control)
+
+### 接收窗口 (Receive Window)
+
+接收窗口用于防止发送方发送数据过快，导致接收方缓冲区溢出。
+
+```cpp
+class FlowControl {
+private:
+    uint32_t window_size;      // 当前窗口大小
+    uint32_t max_window_size;  // 最大窗口大小
+    uint32_t free_space;       // 可用空间
+    std::queue<std::string> buffer; // 接收缓冲区
+
+public:
+    void receive_data(const std::string& data) {
+        if (data.size() <= free_space) {
+            buffer.push(data);
+            free_space -= data.size();
+            window_size = free_space;
+        } else {
+            // 缓冲区溢出，丢弃数据包
+        }
+    }
+
+    void deliver_data() {
+        if (!buffer.empty()) {
+            std::string data = buffer.front();
+            buffer.pop();
+            free_space += data.size();
+            window_size = free_space;
+        }
+    }
+
+    uint32_t get_window_size() const {
+        return window_size;
+    }
+};
+```
+
+### 零窗口探测
+
+当接收方窗口为0时，发送方需要定期探测窗口状态：
+
+```cpp
+class ZeroWindowProbe {
+private:
+    Timer probe_timer;
+    bool window_zero;
+
+public:
+    void send_probe() {
+        if (window_zero) {
+            Packet probe;
+            probe.seq_num = next_seq;
+            probe.data = "";  // 零长度数据包
+            send_packet(probe);
+            probe_timer.start(1000);  // 1秒后重试
+        }
+    }
+
+    void receive_ack(uint32_t ack_num, uint32_t window_size) {
+        if (window_size > 0) {
+            window_zero = false;
+            probe_timer.stop();
+        } else {
+            window_zero = true;
+            probe_timer.start(1000);
+        }
+    }
+};
+```
+
+## 拥塞控制 (Congestion Control)
+
+### 慢启动 (Slow Start)
+
+```cpp
+class CongestionControl {
+private:
+    uint32_t cwnd;        // 拥塞窗口
+    uint32_t ssthresh;    // 慢启动阈值
+    bool slow_start;      // 是否处于慢启动阶段
+
+public:
+    CongestionControl() : cwnd(1), ssthresh(UINT32_MAX), slow_start(true) {}
+
+    void ack_received(uint32_t bytes_acked) {
+        if (slow_start) {
+            // 慢启动：指数增长
+            cwnd += bytes_acked;
+            if (cwnd >= ssthresh) {
+                slow_start = false;
+            }
+        } else {
+            // 拥塞避免：线性增长
+            cwnd += bytes_acked * bytes_acked / cwnd;
+        }
+    }
+
+    void packet_lost() {
+        ssthresh = cwnd / 2;
+        cwnd = 1;
+        slow_start = true;
+    }
+
+    uint32_t get_window_size() const {
+        return std::min(cwnd, flow_control.get_window_size());
+    }
+};
+```
+
+### 快速恢复 (Fast Recovery)
+
+```cpp
+class FastRecovery {
+private:
+    bool in_recovery;
+    uint32_t recovery_point;
+
+public:
+    void on_dup_ack(uint32_t ack_num) {
+        if (!in_recovery) {
+            ssthresh = cwnd / 2;
+            cwnd = ssthresh + 3;  // 加上3个重复ACK
+            in_recovery = true;
+            recovery_point = ack_num;
+        } else if (ack_num == recovery_point) {
+            // 新数据确认，退出快速恢复
+            in_recovery = false;
+            cwnd = ssthresh;
+        } else {
+            // 在快速恢复阶段，增加窗口
+            cwnd++;
+        }
+    }
+
+    void on_timeout() {
+        in_recovery = false;
+        packet_lost();  // 调用拥塞控制的packet_lost
+    }
+};
+```
+
+## TCP实现整合
+
+### 完整的TCP实现结构
+
+```cpp
+class TCPConnection {
+private:
+    TCPStateMachine state_machine;
+    TCPSender sender;
+    TCPReceiver receiver;
+    FlowControl flow_control;
+    CongestionControl congestion_control;
+    TimerManager timer_manager;
+
+public:
+    void send_data(const std::string& data) {
+        if (state_machine.get_state() == ESTABLISHED) {
+            uint32_t window_size = congestion_control.get_window_size();
+            sender.send(data, window_size);
+        }
+    }
+
+    void receive_packet(const Packet& pkt) {
+        // 更新状态机
+        state_machine.process_event(pkt);
+
+        if (state_machine.get_state() == ESTABLISHED) {
+            // 处理数据包
+            receiver.receive_packet(pkt);
+
+            // 更新流量控制
+            flow_control.receive_data(pkt.data);
+
+            // 更新拥塞控制
+            if (pkt.ack) {
+                congestion_control.ack_received(pkt.ack_num - last_ack);
+                last_ack = pkt.ack_num;
+            }
+        }
+    }
+
+    void handle_timeout() {
+        sender.handle_timeout();
+        congestion_control.on_timeout();
+    }
+};
+```
+
+### 线程安全的TCP实现
+
+```cpp
+class ThreadSafeTCP {
+private:
+    std::mutex mutex;
+    TCPConnection connection;
+    std::queue<std::string> send_queue;
+    std::queue<std::string> receive_queue;
+
+public:
+    void send(const std::string& data) {
+        std::lock_guard<std::mutex> lock(mutex);
+        send_queue.push(data);
+    }
+
+    void receive(std::string& data) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!receive_queue.empty()) {
+            data = receive_queue.front();
+            receive_queue.pop();
+        }
+    }
+
+    void process_network_events() {
+        std::lock_guard<std::mutex> lock(mutex);
+
+        // 处理发送队列
+        while (!send_queue.empty()) {
+            connection.send_data(send_queue.front());
+            send_queue.pop();
+        }
+
+        // 处理接收事件
+        // ...
+    }
+};
+```
+
+## 实验项目：Checkpoint 2 & 3
+
+### Checkpoint 2：TCP基础实现
+
+#### 目标
+- 实现基本的TCP连接管理
+- 实现可靠数据传输
+- 实现流量控制
+
+#### 实现步骤
+1. 完成TCP状态机
+2. 实现滑动窗口协议
+3. 添加流量控制机制
+4. 实现超时重传
+
+### Checkpoint 3：完整TCP实现
+
+#### 目标
+- 完成拥塞控制
+- 实现快速重传
+- 优化性能
+- 处理边界情况
+
+#### 关键实现
+
+```cpp
+class FullTCPImplementation {
+private:
+    // 网络接口
+    NetworkInterface network;
+
+    // TCP组件
+    TCPConnection tcp_conn;
+
+    // 性能监控
+    PerformanceMonitor monitor;
+
+public:
+    void run() {
+        while (true) {
+            // 接收网络数据包
+            auto packet = network.receive();
+
+            // 处理TCP逻辑
+            tcp_conn.receive_packet(packet);
+
+            // 发送待发送的数据包
+            tcp_conn.flush_send_buffer();
+
+            // 处理超时事件
+            tcp_conn.handle_timeouts();
+
+            // 监控性能
+            monitor.update_stats();
+        }
+    }
+};
+```
+
+## 性能优化
+
+### 延迟确认 (Delayed ACK)
+
+```cpp
+class DelayedAck {
+private:
+    Timer delay_timer;
+    std::vector<uint32_t> pending_acks;
+    bool delay_enabled;
+
+public:
+    void schedule_ack(uint32_t ack_num) {
+        pending_acks.push_back(ack_num);
+
+        if (!delay_timer.running()) {
+            delay_timer.start(200);  // 200ms延迟
+        }
+
+        // 如果累计了2个ACK，立即发送
+        if (pending_acks.size() >= 2) {
+            send_immediate_ack();
+        }
+    }
+
+    void timeout_handler() {
+        if (!pending_acks.empty()) {
+            send_immediate_ack();
+        }
+    }
+};
+```
+
+### Nagle算法
+
+```cpp
+class NagleAlgorithm {
+private:
+    bool nagle_enabled;
+    std::string pending_data;
+    Timer last_send;
+
+public:
+    void send_data(const std::string& data) {
+        if (!nagle_enabled) {
+            send_immediately(data);
+            return;
+        }
+
+        pending_data += data;
+
+        // 如果有未确认的数据，等待
+        if (has_unacked_data()) {
+            // 等待ACK或积累足够的数据
+            if (pending_data.size() >= MSS) {
+                send_immediately(pending_data);
+                pending_data.clear();
+            }
+        } else {
+            // 没有未确认的数据，立即发送
+            send_immediately(pending_data);
+            pending_data.clear();
+        }
+    }
+};
+```
+
+## 调试和测试
+
+### 测试场景
+
+#### 1. 正常连接建立和断开
+```cpp
+void test_normal_connection() {
+    TCPClient client;
+    TCPServer server;
+
+    client.connect("127.0.0.1", 8080);
+    server.accept();
+
+    client.send("Hello");
+    auto received = server.receive();
+
+    client.disconnect();
+    server.disconnect();
+}
+```
+
+#### 2. 数据包丢失测试
+```cpp
+void test_packet_loss() {
+    LossyNetwork network(0.1);  // 10%丢包率
+    TCPConnection conn(network);
+
+    conn.send("Test data");
+
+    // 验证重传机制工作正常
+    assert(conn.get_retransmission_count() > 0);
+}
+```
+
+#### 3. 拥塞控制测试
+```cpp
+void test_congestion_control() {
+    TCPConnection conn;
+
+    // 模拟网络拥塞
+    for (int i = 0; i < 100; i++) {
+        conn.send("Large data chunk " + std::to_string(i));
+    }
+
+    // 验证窗口大小调整
+    assert(conn.get_congestion_window() < conn.get_initial_window());
+}
+```
+
+### 性能指标
+
+```cpp
+class PerformanceMetrics {
+private:
+    uint64_t total_bytes_sent;
+    uint64_t total_bytes_received;
+    uint64_t total_packets_sent;
+    uint64_t total_packets_received;
+    double average_rtt;
+    double throughput;
+
+public:
+    void update_metrics(const ConnectionStats& stats) {
+        total_bytes_sent += stats.bytes_sent;
+        total_bytes_received += stats.bytes_received;
+
+        // 计算吞吐量
+        double elapsed = get_elapsed_time();
+        throughput = total_bytes_sent / elapsed;
+
+        // 更新平均RTT
+        average_rtt = 0.9 * average_rtt + 0.1 * stats.current_rtt;
+    }
+};
+```
+
+## 课后练习
+
+### 理论问题
+1. 解释TCP状态转换的完整流程
+2. 比较慢启动和拥塞避免的区别
+3. 什么是零窗口探测？它如何工作？
+
+### 实践练习
+1. 实现完整的TCP状态机
+2. 实现拥塞控制算法
+3. 测试TCP在丢包环境下的表现
+
+### 挑战项目
+1. 实现TCP的保活机制
+2. 添加对IPv6的支持
+3. 实现TCP的负载均衡
+
+## 下周预告
+
+Week 4将开始学习分组交换和路由器的工作原理。
+
+---
+*继续学习：[Week 4：分组交换I](./week4)*

@@ -1,0 +1,951 @@
+---
+title: "第4讲：地址空间与内存管理"
+description: "南京大学操作系统2025 - 地址空间的概念、内存分配策略、虚拟内存技术"
+---
+
+# 第4讲：地址空间与内存管理
+
+## 地址空间的概念
+
+### 什么是地址空间？
+
+地址空间是进程可以访问的内存地址范围，是操作系统为每个进程提供的独立内存视图。
+
+**地址空间的特性**
+- **独立性**：每个进程都有独立的地址空间
+- **连续性**：地址空间在逻辑上是连续的
+- **保护性**：进程不能直接访问其他进程的地址空间
+- **虚拟化**：使用虚拟地址，通过MMU转换为物理地址
+
+### 地址空间布局
+
+```
+0xFFFFFFFF ┌─────────────────────────────────────┐
+            │           内核空间                 │
+            │   (所有进程共享)                   │
+0xC0000000  ├─────────────────────────────────────┤
+            │              栈                    │
+            │   (向下增长)                        │
+            ├─────────────────────────────────────┤
+            │              ↓                     │
+            │                                     │
+            │                                     │
+            │                                     │
+            │              ↑                     │
+            ├─────────────────────────────────────┤
+            │              堆                    │
+            │   (向上增长)                        │
+            ├─────────────────────────────────────┤
+            │           BSS段                    │
+            │   (未初始化数据)                    │
+            ├─────────────────────────────────────┤
+            │           数据段                    │
+            │   (已初始化数据)                    │
+            ├─────────────────────────────────────┤
+            │           代码段                    │
+            │   (程序指令)                        │
+0x00000000  └─────────────────────────────────────┘
+```
+
+### 地址空间管理结构
+
+```c
+// 内存描述符
+struct mm_struct {
+    struct vm_area_struct *mmap;     // VMA链表
+    struct rb_root mm_rb;           // VMA红黑树
+    struct list_head mmlist;         // 所有mm_struct的链表
+
+    // 地址空间范围
+    unsigned long start_code, end_code;   // 代码段范围
+    unsigned long start_data, end_data;   // 数据段范围
+    unsigned long start_brk, brk;         // 堆的范围
+    unsigned long start_stack;           // 栈的起始地址
+
+    // 页表相关
+    pgd_t *pgd;                         // 页全局目录
+    atomic_t mm_users;                  // 用户数
+    atomic_t mm_count;                  // 引用计数
+
+    // 信号处理相关的栈
+    unsigned long arg_start, arg_end;    // 命令行参数范围
+    unsigned long env_start, env_end;    // 环境变量范围
+
+    // 锁
+    struct rw_semaphore mmap_sem;       // 内存映射信号量
+    spinlock_t page_table_lock;         // 页表锁
+
+    // 统计信息
+    unsigned long hiwater_rss;          // RSS高水位
+    unsigned long hiwater_vm;           // 虚存高水位
+    unsigned long total_vm;             // 总虚拟页面数
+    unsigned long locked_vm;            // 锁定的页面数
+};
+
+// 虚拟内存区域
+struct vm_area_struct {
+    struct mm_struct *vm_mm;           // 所属的内存描述符
+    unsigned long vm_start;             // 区域起始地址
+    unsigned long vm_end;               // 区域结束地址
+    struct vm_area_struct *vm_next;     // 下一个VMA
+
+    // 访问权限
+    pgprot_t vm_page_prot;             // 页面保护
+    unsigned long vm_flags;             // 标志位
+
+    // 操作函数
+    struct vm_operations_struct *vm_ops;  // VMA操作
+
+    // 文件映射相关
+    unsigned long vm_pgoff;            // 文件偏移
+    struct file *vm_file;              // 映射的文件
+    void *vm_private_data;             // 私有数据
+
+    // 链表和红黑树节点
+    struct list_head vm_list;          // VMA链表
+    struct rb_node vm_rb;              // 红黑树节点
+};
+```
+
+## 内存分配策略
+
+### 连续内存分配
+
+**固定分区分配**
+```c
+// 固定分区表示例
+typedef struct {
+    int size;               // 分区大小
+    int process_id;         // 占用的进程ID
+    int is_free;           // 是否空闲
+    void *start_addr;      // 起始地址
+} FixedPartition;
+
+// 固定分区内存管理器
+typedef struct {
+    FixedPartition partitions[MAX_PARTITIONS];
+    int partition_count;
+} FixedPartitionManager;
+
+// 初始化固定分区
+void init_fixed_partitions(FixedPartitionManager *mgr) {
+    // 预定义的分区大小
+    int sizes[] = {16, 32, 64, 128, 256};
+    int count = sizeof(sizes) / sizeof(sizes[0]);
+
+    mgr->partition_count = count;
+    void *current_addr = (void*)0x10000000;
+
+    for (int i = 0; i < count; i++) {
+        mgr->partitions[i].size = sizes[i];
+        mgr->partitions[i].process_id = -1;
+        mgr->partitions[i].is_free = 1;
+        mgr->partitions[i].start_addr = current_addr;
+        current_addr += sizes[i] * 1024;  // KB
+    }
+}
+
+// 分配内存
+void* allocate_fixed(FixedPartitionManager *mgr, int size, int process_id) {
+    for (int i = 0; i < mgr->partition_count; i++) {
+        if (mgr->partitions[i].is_free &&
+            mgr->partitions[i].size >= size) {
+            mgr->partitions[i].is_free = 0;
+            mgr->partitions[i].process_id = process_id;
+            return mgr->partitions[i].start_addr;
+        }
+    }
+    return NULL;  // 分配失败
+}
+```
+
+**可变分区分配**
+```c
+// 内存块结构
+typedef struct memory_block {
+    int size;                    // 块大小
+    int is_free;                // 是否空闲
+    struct memory_block *next;  // 下一个块
+    struct memory_block *prev;  // 前一个块
+} MemoryBlock;
+
+// 可变分区内存管理器
+typedef struct {
+    MemoryBlock *free_list;     // 空闲块链表
+    MemoryBlock *allocated_list; // 已分配块链表
+    void *memory_pool;          // 内存池
+    int total_size;             // 总大小
+} VariablePartitionManager;
+
+// 首次适应算法
+void* allocate_first_fit(VariablePartitionManager *mgr, int size) {
+    MemoryBlock *block = mgr->free_list;
+
+    // 查找第一个足够大的空闲块
+    while (block) {
+        if (block->is_free && block->size >= size) {
+            // 如果块太大，则分割
+            if (block->size > size + sizeof(MemoryBlock)) {
+                MemoryBlock *new_block = (MemoryBlock*)((char*)block + size);
+                new_block->size = block->size - size;
+                new_block->is_free = 1;
+                new_block->next = block->next;
+                new_block->prev = block;
+
+                block->size = size;
+                block->next = new_block;
+
+                // 更新空闲链表
+                if (block->prev) {
+                    block->prev->next = new_block;
+                } else {
+                    mgr->free_list = new_block;
+                }
+                if (new_block->next) {
+                    new_block->next->prev = new_block;
+                }
+            }
+
+            block->is_free = 0;
+            return (void*)(block + 1);
+        }
+        block = block->next;
+    }
+
+    return NULL;  // 分配失败
+}
+
+// 最佳适应算法
+void* allocate_best_fit(VariablePartitionManager *mgr, int size) {
+    MemoryBlock *block = mgr->free_list;
+    MemoryBlock *best_block = NULL;
+    int best_size = INT_MAX;
+
+    // 查找最小的足够大的空闲块
+    while (block) {
+        if (block->is_free && block->size >= size) {
+            if (block->size < best_size) {
+                best_size = block->size;
+                best_block = block;
+            }
+        }
+        block = block->next;
+    }
+
+    if (best_block) {
+        // 分配最佳块
+        if (best_block->size > size + sizeof(MemoryBlock)) {
+            MemoryBlock *new_block = (MemoryBlock*)((char*)best_block + size);
+            new_block->size = best_block->size - size;
+            new_block->is_free = 1;
+            new_block->next = best_block->next;
+            new_block->prev = best_block;
+
+            best_block->size = size;
+            best_block->next = new_block;
+
+            // 更新空闲链表
+            if (best_block->prev) {
+                best_block->prev->next = new_block;
+            } else {
+                mgr->free_list = new_block;
+            }
+            if (new_block->next) {
+                new_block->next->prev = new_block;
+            }
+        }
+
+        best_block->is_free = 0;
+        return (void*)(best_block + 1);
+    }
+
+    return NULL;
+}
+```
+
+### 伙伴系统
+
+```c
+// 伙伴系统实现
+#define MAX_ORDER 11  // 2^11 = 2048 pages
+
+// 伙伴系统块
+typedef struct buddy_block {
+    int order;                   // 块的阶数
+    int is_free;                // 是否空闲
+    struct buddy_block *next;   // 下一个块
+    struct buddy_block *prev;   // 前一个块
+} BuddyBlock;
+
+// 伙伴系统管理器
+typedef struct {
+    BuddyBlock *free_lists[MAX_ORDER];  // 各阶数的空闲链表
+    void *memory_pool;                   // 内存池
+    int total_pages;                     // 总页数
+} BuddySystem;
+
+// 初始化伙伴系统
+void buddy_init(BuddySystem *buddy, void *memory, int size) {
+    int total_pages = size / PAGE_SIZE;
+    int order = 0;
+
+    // 计算最大阶数
+    while ((1 << order) < total_pages && order < MAX_ORDER) {
+        order++;
+    }
+
+    buddy->total_pages = total_pages;
+    buddy->memory_pool = memory;
+
+    // 初始化空闲链表
+    for (int i = 0; i < MAX_ORDER; i++) {
+        buddy->free_lists[i] = NULL;
+    }
+
+    // 创建初始块
+    if (order > 0) {
+        BuddyBlock *block = (BuddyBlock*)memory;
+        block->order = order - 1;
+        block->is_free = 1;
+        block->next = NULL;
+        block->prev = NULL;
+        buddy->free_lists[order - 1] = block;
+    }
+}
+
+// 获取伙伴块
+BuddyBlock* get_buddy(BuddySystem *buddy, BuddyBlock *block) {
+    unsigned long addr = (unsigned long)block;
+    unsigned long buddy_addr = addr ^ (1 << block->order);
+
+    return (BuddyBlock*)buddy_addr;
+}
+
+// 分配内存
+void* buddy_alloc(BuddySystem *buddy, int size) {
+    int pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+    int order = 0;
+
+    // 计算所需阶数
+    while ((1 << order) < pages && order < MAX_ORDER) {
+        order++;
+    }
+
+    // 查找合适的块
+    for (int i = order; i < MAX_ORDER; i++) {
+        if (buddy->free_lists[i]) {
+            BuddyBlock *block = buddy->free_lists[i];
+            buddy->free_lists[i] = block->next;
+
+            // 如果块太大，则分割
+            while (i > order) {
+                i--;
+                BuddyBlock *new_block = (BuddyBlock*)((char*)block + (1 << i) * PAGE_SIZE);
+                new_block->order = i;
+                new_block->is_free = 1;
+                new_block->next = buddy->free_lists[i];
+                new_block->prev = NULL;
+
+                if (buddy->free_lists[i]) {
+                    buddy->free_lists[i]->prev = new_block;
+                }
+                buddy->free_lists[i] = new_block;
+
+                block->order = i;
+            }
+
+            block->is_free = 0;
+            return (void*)((char*)block + sizeof(BuddyBlock));
+        }
+    }
+
+    return NULL;  // 分配失败
+}
+
+// 释放内存
+void buddy_free(BuddySystem *buddy, void *ptr) {
+    BuddyBlock *block = (BuddyBlock*)((char*)ptr - sizeof(BuddyBlock));
+    block->is_free = 1;
+
+    // 尝试合并伙伴块
+    while (block->order < MAX_ORDER - 1) {
+        BuddyBlock *buddy = get_buddy(buddy, block);
+
+        // 检查伙伴是否空闲且阶数相同
+        if (!buddy || !buddy->is_free || buddy->order != block->order) {
+            break;
+        }
+
+        // 从空闲链表中移除伙伴块
+        if (buddy->prev) {
+            buddy->prev->next = buddy->next;
+        } else {
+            buddy->free_lists[buddy->order] = buddy->next;
+        }
+        if (buddy->next) {
+            buddy->next->prev = buddy->prev;
+        }
+
+        // 合并块
+        block = (block < buddy) ? block : buddy;
+        block->order++;
+    }
+
+    // 添加到空闲链表
+    block->next = buddy->free_lists[block->order];
+    block->prev = NULL;
+
+    if (buddy->free_lists[block->order]) {
+        buddy->free_lists[block->order]->prev = block;
+    }
+    buddy->free_lists[block->order] = block;
+}
+```
+
+## 虚拟内存技术
+
+### 虚拟内存的基本概念
+
+虚拟内存是一种内存管理技术，它使得程序认为它拥有连续的可用内存空间，而实际上物理内存可能被分散在物理内存的不同位置，甚至暂时存储在磁盘上。
+
+**虚拟内存的优势**
+- **内存隔离**：每个进程有独立的地址空间
+- **内存保护**：防止进程非法访问其他进程内存
+- **内存共享**：多个进程可以共享相同的内存区域
+- **按需分配**：只在需要时才分配物理内存
+- **内存扩展**：可以使用磁盘空间扩展可用内存
+
+### 页表机制
+
+```c
+// 页表项结构
+typedef struct {
+    unsigned long present    : 1;  // 页是否在内存中
+    unsigned long rw         : 1;  // 读写权限
+    unsigned long user       : 1;  // 用户态访问权限
+    unsigned long pwt        : 1;  // 写通缓存
+    unsigned long pcd        : 1;  // 禁用缓存
+    unsigned long accessed   : 1;  // 是否被访问
+    unsigned long dirty      : 1;  // 是否被修改
+    unsigned long pat        : 1;  // 页属性表
+    unsigned long global     : 1;  // 全局页
+    unsigned long avail      : 3;  // 可用位
+    unsigned long frame      : 20; // 物理页框号
+} PTE;
+
+// 页目录项结构
+typedef struct {
+    unsigned long present    : 1;  // 页目录项是否有效
+    unsigned long rw         : 1;  // 读写权限
+    unsigned long user       : 1;  // 用户态访问权限
+    unsigned long pwt        : 1;  // 写通缓存
+    unsigned long pcd        : 1;  // 禁用缓存
+    unsigned long accessed   : 1;  // 是否被访问
+    unsigned long dirty      : 1;  // 是否被修改
+    unsigned long ps         : 1;  // 页大小
+    unsigned long global     : 1;  // 全局页
+    unsigned long avail      : 3;  // 可用位
+    unsigned long pt_base    : 20; // 页表基址
+} PDE;
+
+// 虚拟地址到物理地址的转换
+unsigned long virtual_to_physical(unsigned long vaddr, PDE *pgd) {
+    // 提取各级索引
+    int pgd_idx = (vaddr >> 22) & 0x3FF;
+    int pte_idx = (vaddr >> 12) & 0x3FF;
+    int offset = vaddr & 0xFFF;
+
+    // 检查页目录项
+    if (!pgd[pgd_idx].present) {
+        return 0;  // 页表不存在
+    }
+
+    // 获取页表
+    PTE *pt = (PTE*)(pgd[pgd_idx].pt_base << 12);
+
+    // 检查页表项
+    if (!pt[pte_idx].present) {
+        return 0;  // 页不存在
+    }
+
+    // 计算物理地址
+    return (pt[pte_idx].frame << 12) | offset;
+}
+```
+
+### 页面置换算法
+
+**最近最少使用 (LRU)**
+```c
+// LRU页面置换算法
+typedef struct {
+    int page_id;          // 页面ID
+    int last_access;      // 最后访问时间
+    int is_valid;         // 是否有效
+} LRUPage;
+
+typedef struct {
+    LRUPage *pages;       // 页面数组
+    int page_count;       // 页面数量
+    int capacity;         // 容量
+    int time_counter;     // 时间计数器
+} LRUManager;
+
+// 初始化LRU管理器
+void lru_init(LRUManager *lru, int capacity) {
+    lru->pages = (LRUPage*)malloc(capacity * sizeof(LRUPage));
+    lru->page_count = 0;
+    lru->capacity = capacity;
+    lru->time_counter = 0;
+
+    for (int i = 0; i < capacity; i++) {
+        lru->pages[i].is_valid = 0;
+    }
+}
+
+// 访问页面
+int lru_access(LRUManager *lru, int page_id) {
+    lru->time_counter++;
+
+    // 检查页面是否在内存中
+    for (int i = 0; i < lru->page_count; i++) {
+        if (lru->pages[i].page_id == page_id && lru->pages[i].is_valid) {
+            lru->pages[i].last_access = lru->time_counter;
+            return 1;  // 命中
+        }
+    }
+
+    // 页面不在内存中，需要调入
+    if (lru->page_count < lru->capacity) {
+        // 还有空闲空间
+        lru->pages[lru->page_count].page_id = page_id;
+        lru->pages[lru->page_count].last_access = lru->time_counter;
+        lru->pages[lru->page_count].is_valid = 1;
+        lru->page_count++;
+    } else {
+        // 需要替换页面
+        int lru_index = 0;
+        int oldest_time = lru->pages[0].last_access;
+
+        // 找到最久未使用的页面
+        for (int i = 1; i < lru->page_count; i++) {
+            if (lru->pages[i].last_access < oldest_time) {
+                oldest_time = lru->pages[i].last_access;
+                lru_index = i;
+            }
+        }
+
+        // 替换页面
+        lru->pages[lru_index].page_id = page_id;
+        lru->pages[lru_index].last_access = lru->time_counter;
+    }
+
+    return 0;  // 未命中
+}
+```
+
+**时钟算法 (Clock)**
+```c
+// 时钟页面置换算法
+typedef struct {
+    int page_id;          // 页面ID
+    int reference_bit;    // 访问位
+    int is_valid;         // 是否有效
+} ClockPage;
+
+typedef struct {
+    ClockPage *pages;     // 页面数组
+    int page_count;       // 页面数量
+    int capacity;         // 容量
+    int clock_hand;       // 时钟指针
+} ClockManager;
+
+// 初始化时钟管理器
+void clock_init(ClockManager *clock, int capacity) {
+    clock->pages = (ClockPage*)malloc(capacity * sizeof(ClockPage));
+    clock->page_count = 0;
+    clock->capacity = capacity;
+    clock->clock_hand = 0;
+
+    for (int i = 0; i < capacity; i++) {
+        clock->pages[i].is_valid = 0;
+        clock->pages[i].reference_bit = 0;
+    }
+}
+
+// 访问页面
+int clock_access(ClockManager *clock, int page_id) {
+    // 检查页面是否在内存中
+    for (int i = 0; i < clock->page_count; i++) {
+        if (clock->pages[i].page_id == page_id && clock->pages[i].is_valid) {
+            clock->pages[i].reference_bit = 1;
+            return 1;  // 命中
+        }
+    }
+
+    // 页面不在内存中，需要调入
+    if (clock->page_count < clock->capacity) {
+        // 还有空闲空间
+        clock->pages[clock->page_count].page_id = page_id;
+        clock->pages[clock->page_count].reference_bit = 1;
+        clock->pages[clock->page_count].is_valid = 1;
+        clock->page_count++;
+    } else {
+        // 需要替换页面
+        while (1) {
+            if (clock->pages[clock->clock_hand].reference_bit == 0) {
+                // 找到可替换的页面
+                clock->pages[clock->clock_hand].page_id = page_id;
+                clock->pages[clock->clock_hand].reference_bit = 1;
+                break;
+            } else {
+                // 清除访问位
+                clock->pages[clock->clock_hand].reference_bit = 0;
+            }
+
+            clock->clock_hand = (clock->clock_hand + 1) % clock->capacity;
+        }
+    }
+
+    return 0;  // 未命中
+}
+```
+
+### 缺页中断处理
+
+```c
+// 缺页中断处理程序
+void handle_page_fault(unsigned long fault_addr) {
+    unsigned long vaddr = fault_addr & PAGE_MASK;
+    PDE *pgd = current->mm->pgd;
+
+    // 检查虚拟地址是否有效
+    if (!is_valid_address(vaddr)) {
+        send_sig(SIGSEGV, current, 0);
+        return;
+    }
+
+    // 检查页目录项
+    int pgd_idx = vaddr >> 22;
+    if (!pgd[pgd_idx].present) {
+        // 页表不存在，需要创建
+        PTE *pt = alloc_page_table();
+        if (!pt) {
+            // 内存不足，调用OOM killer
+            out_of_memory();
+            return;
+        }
+
+        pgd[pgd_idx].pt_base = (unsigned long)pt >> 12;
+        pgd[pgd_idx].present = 1;
+        pgd[pgd_idx].rw = 1;
+        pgd[pgd_idx].user = 1;
+    }
+
+    // 检查页表项
+    int pte_idx = (vaddr >> 12) & 0x3FF;
+    PTE *pt = (PTE*)(pgd[pgd_idx].pt_base << 12);
+
+    if (!pt[pte_idx].present) {
+        // 页不存在，需要分配
+        unsigned long page = alloc_page();
+        if (!page) {
+            // 内存不足，需要页面置换
+            page = handle_page_replacement();
+            if (!page) {
+                out_of_memory();
+                return;
+            }
+        }
+
+        // 建立页表项
+        pt[pte_idx].frame = page >> 12;
+        pt[pte_idx].present = 1;
+        pt[pte_idx].rw = 1;
+        pt[pte_idx].user = 1;
+
+        // 如果是文件映射，需要从磁盘读取数据
+        if (is_file_mapped(vaddr)) {
+            read_page_from_disk(vaddr, page);
+        }
+    }
+
+    // 更新访问位
+    pt[pte_idx].accessed = 1;
+}
+```
+
+## 实验M2：地址空间管理
+
+### 实验目标
+
+实现一个简单的地址空间管理系统，包括虚拟内存映射、页面分配和缺页处理。
+
+### 实验代码框架
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#define PAGE_SIZE 4096
+#define PAGE_SHIFT 12
+#define PAGE_MASK (~(PAGE_SIZE - 1))
+#define VADDR_SPACE_SIZE (1UL << 32)
+#define NUM_PAGES (VADDR_SPACE_SIZE / PAGE_SIZE)
+#define MAX_FRAMES 1024
+
+// 页表项
+typedef struct {
+    uint32_t present    : 1;
+    uint32_t rw         : 1;
+    uint32_t user       : 1;
+    uint32_t accessed   : 1;
+    uint32_t dirty      : 1;
+    uint32_t frame      : 20;
+} PageTableEntry;
+
+// 页目录项
+typedef struct {
+    uint32_t present    : 1;
+    uint32_t rw         : 1;
+    uint32_t user       : 1;
+    uint32_t accessed   : 1;
+    uint32_t pt_base    : 28;
+} PageDirectoryEntry;
+
+// 地址空间管理器
+typedef struct {
+    PageDirectoryEntry *page_directory;  // 页目录
+    uint32_t *frame_bitmap;              // 物理帧位图
+    uint32_t total_frames;               // 总帧数
+    uint32_t free_frames;                // 空闲帧数
+} AddressSpaceManager;
+
+// 初始化地址空间管理器
+void init_address_space(AddressSpaceManager *asmgr, uint32_t num_frames) {
+    asmgr->total_frames = num_frames;
+    asmgr->free_frames = num_frames;
+
+    // 分配页目录
+    asmgr->page_directory = (PageDirectoryEntry*)malloc(PAGE_SIZE);
+    memset(asmgr->page_directory, 0, PAGE_SIZE);
+
+    // 分配物理帧位图
+    asmgr->frame_bitmap = (uint32_t*)malloc((num_frames + 31) / 32 * sizeof(uint32_t));
+    memset(asmgr->frame_bitmap, 0, (num_frames + 31) / 32 * sizeof(uint32_t));
+}
+
+// 分配物理帧
+uint32_t allocate_frame(AddressSpaceManager *asmgr) {
+    for (uint32_t i = 0; i < asmgr->total_frames; i++) {
+        uint32_t bitmap_idx = i / 32;
+        uint32_t bit_idx = i % 32;
+
+        if (!(asmgr->frame_bitmap[bitmap_idx] & (1 << bit_idx))) {
+            asmgr->frame_bitmap[bitmap_idx] |= (1 << bit_idx);
+            asmgr->free_frames--;
+            return i;
+        }
+    }
+    return (uint32_t)-1;  // 分配失败
+}
+
+// 释放物理帧
+void free_frame(AddressSpaceManager *asmgr, uint32_t frame) {
+    if (frame < asmgr->total_frames) {
+        uint32_t bitmap_idx = frame / 32;
+        uint32_t bit_idx = frame % 32;
+
+        asmgr->frame_bitmap[bitmap_idx] &= ~(1 << bit_idx);
+        asmgr->free_frames++;
+    }
+}
+
+// 获取页表项
+PageTableEntry* get_page_table_entry(AddressSpaceManager *asmgr, uint32_t vaddr) {
+    uint32_t pgd_idx = vaddr >> 22;
+    uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+
+    // 检查页目录项
+    if (!asmgr->page_directory[pgd_idx].present) {
+        return NULL;
+    }
+
+    // 获取页表
+    PageTableEntry *page_table = (PageTableEntry*)
+        (asmgr->page_directory[pgd_idx].pt_base << 12);
+
+    return &page_table[pte_idx];
+}
+
+// 分配页表
+PageTableEntry* allocate_page_table(AddressSpaceManager *asmgr, uint32_t vaddr) {
+    uint32_t pgd_idx = vaddr >> 22;
+
+    // 分配页表
+    uint32_t frame = allocate_frame(asmgr);
+    if (frame == (uint32_t)-1) {
+        return NULL;
+    }
+
+    // 初始化页表
+    PageTableEntry *page_table = (PageTableEntry*)(frame << PAGE_SHIFT);
+    memset(page_table, 0, PAGE_SIZE);
+
+    // 设置页目录项
+    asmgr->page_directory[pgd_idx].present = 1;
+    asmgr->page_directory[pgd_idx].rw = 1;
+    asmgr->page_directory[pgd_idx].user = 1;
+    asmgr->page_directory[pgd_idx].pt_base = frame;
+
+    uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+    return &page_table[pte_idx];
+}
+
+// 映射虚拟页面
+int map_page(AddressSpaceManager *asmgr, uint32_t vaddr, uint32_t paddr, int rw, int user) {
+    uint32_t pgd_idx = vaddr >> 22;
+    uint32_t pte_idx = (vaddr >> 12) & 0x3FF;
+
+    // 获取或创建页表
+    PageTableEntry *pte = get_page_table_entry(asmgr, vaddr);
+    if (!pte) {
+        pte = allocate_page_table(asmgr, vaddr);
+        if (!pte) {
+            return -1;
+        }
+    }
+
+    // 检查页面是否已映射
+    if (pte->present) {
+        return -1;
+    }
+
+    // 建立映射
+    pte->present = 1;
+    pte->rw = rw;
+    pte->user = user;
+    pte->frame = paddr >> PAGE_SHIFT;
+
+    return 0;
+}
+
+// 处理缺页中断
+int handle_page_fault(AddressSpaceManager *asmgr, uint32_t fault_addr) {
+    uint32_t vaddr = fault_addr & PAGE_MASK;
+
+    // 分配物理帧
+    uint32_t frame = allocate_frame(asmgr);
+    if (frame == (uint32_t)-1) {
+        return -1;
+    }
+
+    // 建立映射
+    if (map_page(asmgr, vaddr, frame << PAGE_SHIFT, 1, 1) != 0) {
+        free_frame(asmgr, frame);
+        return -1;
+    }
+
+    printf("Mapped virtual address 0x%08x to physical frame %d\n", vaddr, frame);
+    return 0;
+}
+
+// 虚拟地址到物理地址转换
+uint32_t virtual_to_physical(AddressSpaceManager *asmgr, uint32_t vaddr) {
+    PageTableEntry *pte = get_page_table_entry(asmgr, vaddr);
+
+    if (!pte || !pte->present) {
+        return (uint32_t)-1;
+    }
+
+    return (pte->frame << PAGE_SHIFT) | (vaddr & (PAGE_SIZE - 1));
+}
+
+// 打印地址空间信息
+void print_address_space_info(AddressSpaceManager *asmgr) {
+    printf("Address Space Information:\n");
+    printf("Total frames: %d\n", asmgr->total_frames);
+    printf("Free frames: %d\n", asmgr->free_frames);
+    printf("Used frames: %d\n", asmgr->total_frames - asmgr->free_frames);
+
+    // 统计页目录使用情况
+    int used_pdes = 0;
+    for (int i = 0; i < 1024; i++) {
+        if (asmgr->page_directory[i].present) {
+            used_pdes++;
+        }
+    }
+    printf("Used page directory entries: %d\n", used_pdes);
+}
+
+int main() {
+    AddressSpaceManager asmgr;
+
+    // 初始化地址空间管理器
+    init_address_space(&asmgr, MAX_FRAMES);
+
+    // 模拟缺页中断
+    uint32_t test_addresses[] = {
+        0x08048000,  // 代码段
+        0x08049000,  // 数据段
+        0x40000000,  // 堆
+        0x7ffffff0   // 栈
+    };
+
+    printf("Simulating page faults and address mapping...\n");
+
+    for (int i = 0; i < sizeof(test_addresses) / sizeof(test_addresses[0]); i++) {
+        uint32_t vaddr = test_addresses[i];
+
+        // 尝试地址转换（应该失败）
+        uint32_t paddr = virtual_to_physical(&asmgr, vaddr);
+        if (paddr == (uint32_t)-1) {
+            printf("Page fault at 0x%08x\n", vaddr);
+
+            // 处理缺页中断
+            if (handle_page_fault(&asmgr, vaddr) == 0) {
+                // 再次尝试地址转换
+                paddr = virtual_to_physical(&asmgr, vaddr);
+                printf("Mapped to physical address 0x%08x\n", paddr);
+            } else {
+                printf("Failed to handle page fault\n");
+            }
+        } else {
+            printf("Virtual address 0x%08x already mapped to 0x%08x\n", vaddr, paddr);
+        }
+        printf("\n");
+    }
+
+    // 打印地址空间信息
+    print_address_space_info(&asmgr);
+
+    return 0;
+}
+```
+
+### 实验扩展
+
+1. **页面置换算法**：实现LRU或Clock页面置换算法
+2. **写时复制**：实现写时复制机制
+3. **内存映射文件**：添加文件映射功能
+4. **内存保护**：实现更细粒度的内存保护机制
+
+## 课后练习
+
+1. **思考题**：比较连续内存分配和非连续内存分配的优缺点，分析它们在AI时代的适用性。
+
+2. **编程题**：完善实验M2的代码，实现一个完整的地址空间管理系统。
+
+3. **设计题**：设计一个适合AI应用的内存管理策略，考虑大规模数据处理的需求。
+
+## 下一讲预告
+
+第5讲：系统调用接口 - 系统调用的实现机制、标准库与系统调用、系统调用的性能优化。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第4讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect4.md](https://jyywiki.cn/OS/2025/lect4.md)*

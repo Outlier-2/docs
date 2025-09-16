@@ -1,0 +1,1506 @@
+---
+title: "Week 9 - Flask后端"
+description: "CS50第9周（2025版本）：学习Flask框架、Web后端开发和数据库集成"
+---
+
+# Week 9 - Flask后端
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/9" title="CS50 2025 - Week 9" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **Flask基础**：框架介绍、路由、模板系统
+- **Web应用架构**：MVC模式、请求响应循环
+- **数据库集成**：SQLAlchemy、ORM操作
+- **用户认证**：会话管理、用户登录注册
+- **API开发**：RESTful API设计
+- **部署基础**：服务器配置、环境管理
+
+## 核心概念
+
+### Flask框架介绍
+
+#### Flask的特点
+
+Flask是一个轻量级的Python Web框架，具有以下特点：
+
+- **轻量级**：核心简单，易于学习和使用
+- **灵活性强**：可以根据需要选择扩展
+- **丰富的扩展**：拥有大量第三方扩展
+- **社区活跃**：文档完善，社区支持良好
+
+#### 第一个Flask应用
+
+```python
+# app.py
+from flask import Flask
+
+# 创建Flask应用实例
+app = Flask(__name__)
+
+# 定义路由
+@app.route('/')
+def index():
+    return 'Hello, Flask!'
+
+@app.route('/hello/<name>')
+def hello(name):
+    return f'Hello, {name}!'
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+### 路由和视图函数
+
+#### 基本路由
+
+```python
+from flask import Flask, render_template, request, redirect, url_for
+
+app = Flask(__name__)
+
+# 首页路由
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# 关于页面
+@app.route('/about')
+def about():
+    return render_template('about.html')
+
+# 用户详情页
+@app.route('/user/<username>')
+def user_profile(username):
+    return f'用户: {username}'
+
+# 文章详情页
+@app.route('/post/<int:post_id>')
+def show_post(post_id):
+    return f'文章ID: {post_id}'
+
+# 带约束的路由
+@app.route('/path/<path:subpath>')
+def show_subpath(subpath):
+    return f'子路径: {subpath}'
+```
+
+#### HTTP方法
+
+```python
+# 不同的HTTP方法
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        # 验证用户
+        return redirect(url_for('dashboard'))
+    return render_template('login.html')
+
+# RESTful API设计
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    # 获取用户列表
+    pass
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    # 创建新用户
+    pass
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    # 更新用户信息
+    pass
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    # 删除用户
+    pass
+```
+
+### 模板系统
+
+#### Jinja2模板语法
+
+```html
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{% endblock %} - 我的网站</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav>
+        <a href="{{ url_for('index') }}">首页</a>
+        <a href="{{ url_for('about') }}">关于</a>
+        {% if current_user.is_authenticated %}
+            <a href="{{ url_for('dashboard') }}">仪表板</a>
+            <a href="{{ url_for('logout') }}">退出</a>
+        {% else %}
+            <a href="{{ url_for('login') }}">登录</a>
+            <a href="{{ url_for('register') }}">注册</a>
+        {% endif %}
+    </nav>
+
+    <main>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <div class="alerts">
+                    {% for message in messages %}
+                        <div class="alert">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2024 我的网站</p>
+    </footer>
+</body>
+</html>
+```
+
+#### 模板继承和包含
+
+```html
+<!-- templates/index.html -->
+{% extends "base.html" %}
+
+{% block title %}首页{% endblock %}
+
+{% block content %}
+    <h1>欢迎来到我的网站</h1>
+
+    <div class="posts">
+        {% for post in posts %}
+            <article class="post">
+                <h2>{{ post.title }}</h2>
+                <p class="meta">
+                    作者: {{ post.author }} |
+                    时间: {{ post.created_at.strftime('%Y-%m-%d') }}
+                </p>
+                <p>{{ post.content[:200] }}...</p>
+                <a href="{{ url_for('post_detail', post_id=post.id) }}">阅读更多</a>
+            </article>
+        {% else %}
+            <p>暂无文章</p>
+        {% endfor %}
+    </div>
+{% endblock %}
+```
+
+### 表单处理
+
+#### Flask-WTF表单
+
+```python
+# forms.py
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, TextAreaField, SubmitField
+from wtforms.validators import DataRequired, Email, Length, EqualTo
+
+class LoginForm(FlaskForm):
+    username = StringField('用户名', validators=[DataRequired(), Length(min=4, max=20)])
+    password = PasswordField('密码', validators=[DataRequired()])
+    submit = SubmitField('登录')
+
+class RegisterForm(FlaskForm):
+    username = StringField('用户名', validators=[DataRequired(), Length(min=4, max=20)])
+    email = StringField('邮箱', validators=[DataRequired(), Email()])
+    password = PasswordField('密码', validators=[DataRequired(), Length(min=6)])
+    confirm_password = PasswordField('确认密码',
+                                   validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('注册')
+
+class PostForm(FlaskForm):
+    title = StringField('标题', validators=[DataRequired(), Length(max=100)])
+    content = TextAreaField('内容', validators=[DataRequired(), Length(min=10)])
+    submit = SubmitField('发布')
+```
+
+#### 表单处理视图
+
+```python
+# app.py
+from flask import render_template, redirect, url_for, flash
+from forms import LoginForm, RegisterForm, PostForm
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        username = form.username.data
+        password = form.password.data
+
+        # 验证用户
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            login_user(user)
+            flash('登录成功!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('用户名或密码错误', 'danger')
+
+    return render_template('login.html', form=form)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    form = RegisterForm()
+    if form.validate_on_submit():
+        username = form.username.data
+        email = form.email.data
+        password = form.password.data
+
+        # 检查用户是否存在
+        if User.query.filter_by(username=username).first():
+            flash('用户名已存在', 'danger')
+            return render_template('register.html', form=form)
+
+        # 创建新用户
+        user = User(username=username, email=email)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        flash('注册成功! 请登录', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('register.html', form=form)
+```
+
+### 数据库集成
+
+#### SQLAlchemy配置
+
+```python
+# app.py
+from flask import Flask
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key-here'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# 用户模型
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(20), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128))
+    posts = db.relationship('Post', backref='author', lazy=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+# 文章模型
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+```
+
+#### 数据库操作
+
+```python
+# 数据库操作示例
+@app.route('/create_post', methods=['GET', 'POST'])
+@login_required
+def create_post():
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(
+            title=form.title.data,
+            content=form.content.data,
+            user_id=current_user.id
+        )
+        db.session.add(post)
+        db.session.commit()
+        flash('文章发布成功!', 'success')
+        return redirect(url_for('index'))
+
+    return render_template('create_post.html', form=form)
+
+@app.route('/post/<int:post_id>')
+def post_detail(post_id):
+    post = Post.query.get_or_404(post_id)
+    return render_template('post_detail.html', post=post)
+
+@app.route('/post/<int:post_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_post(post_id):
+    post = Post.query.get_or_404(post_id)
+
+    if post.author != current_user:
+        flash('你没有权限编辑这篇文章', 'danger')
+        return redirect(url_for('post_detail', post_id=post_id))
+
+    form = PostForm()
+    if form.validate_on_submit():
+        post.title = form.title.data
+        post.content = form.content.data
+        db.session.commit()
+        flash('文章更新成功!', 'success')
+        return redirect(url_for('post_detail', post_id=post_id))
+
+    elif request.method == 'GET':
+        form.title.data = post.title
+        form.content.data = post.content
+
+    return render_template('edit_post.html', form=form, post=post)
+
+@app.route('/post/<int:post_id>/delete', methods=['POST'])
+@login_required
+def delete_post(post_id):
+    post = Post.query.get_or_404(post_id)
+
+    if post.author != current_user:
+        flash('你没有权限删除这篇文章', 'danger')
+        return redirect(url_for('post_detail', post_id=post_id))
+
+    db.session.delete(post)
+    db.session.commit()
+    flash('文章删除成功!', 'success')
+    return redirect(url_for('index'))
+```
+
+### API开发
+
+#### RESTful API实现
+
+```python
+# api.py
+from flask import jsonify, request
+from models import User, Post, db
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    users = User.query.all()
+    return jsonify([{
+        'id': user.id,
+        'username': user.username,
+        'email': user.email
+    } for user in users])
+
+@app.route('/api/users/<int:user_id>', methods=['GET'])
+def get_user(user_id):
+    user = User.query.get_or_404(user_id)
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'email': user.email
+    })
+
+@app.route('/api/posts', methods=['GET'])
+def get_posts():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+
+    posts = Post.query.order_by(Post.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    return jsonify({
+        'posts': [{
+            'id': post.id,
+            'title': post.title,
+            'content': post.content,
+            'author': post.author.username,
+            'created_at': post.created_at.isoformat()
+        } for post in posts.items],
+        'total': posts.total,
+        'pages': posts.pages,
+        'current_page': posts.page
+    })
+
+@app.route('/api/posts', methods=['POST'])
+def create_post_api():
+    data = request.get_json()
+
+    if not data or not data.get('title') or not data.get('content'):
+        return jsonify({'error': '标题和内容不能为空'}), 400
+
+    post = Post(
+        title=data['title'],
+        content=data['content'],
+        user_id=data.get('user_id', 1)
+    )
+
+    db.session.add(post)
+    db.session.commit()
+
+    return jsonify({
+        'id': post.id,
+        'title': post.title,
+        'content': post.content,
+        'created_at': post.created_at.isoformat()
+    }), 201
+```
+
+### 文件上传
+
+#### 文件上传处理
+
+```python
+# 文件上传配置
+import os
+from werkzeug.utils import secure_filename
+
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB最大文件大小
+
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/upload', methods=['GET', 'POST'])
+@login_required
+def upload_file():
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            flash('没有选择文件', 'danger')
+            return redirect(request.url)
+
+        file = request.files['file']
+        if file.filename == '':
+            flash('没有选择文件', 'danger')
+            return redirect(request.url)
+
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            # 创建用户专属文件夹
+            user_folder = os.path.join(app.config['UPLOAD_FOLDER'], str(current_user.id))
+            os.makedirs(user_folder, exist_ok=True)
+
+            file_path = os.path.join(user_folder, filename)
+            file.save(file_path)
+
+            flash('文件上传成功!', 'success')
+            return redirect(url_for('uploaded_files'))
+        else:
+            flash('不支持的文件类型', 'danger')
+
+    return render_template('upload.html')
+
+@app.route('/uploaded_files')
+@login_required
+def uploaded_files():
+    user_folder = os.path.join(app.config['UPLOAD_FOLDER'], str(current_user.id))
+
+    if not os.path.exists(user_folder):
+        return render_template('uploaded_files.html', files=[])
+
+    files = []
+    for filename in os.listdir(user_folder):
+        file_path = os.path.join(user_folder, filename)
+        if os.path.isfile(file_path):
+            files.append({
+                'filename': filename,
+                'size': os.path.getsize(file_path),
+                'modified': os.path.getmtime(file_path)
+            })
+
+    return render_template('uploaded_files.html', files=files)
+```
+
+### 实用项目示例
+
+#### 博客系统完整实现
+
+```python
+# blog.py - 完整的博客系统
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, TextAreaField, SubmitField
+from wtforms.validators import DataRequired, Email, Length, EqualTo
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+import os
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key-here'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# 数据库模型
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(20), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128))
+    posts = db.relationship('Post', backref='author', lazy=True)
+    comments = db.relationship('Comment', backref='author', lazy=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    comments = db.relationship('Comment', backref='post', lazy=True, cascade='all, delete-orphan')
+
+class Comment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'), nullable=False)
+
+# 表单类
+class LoginForm(FlaskForm):
+    username = StringField('用户名', validators=[DataRequired(), Length(min=4, max=20)])
+    password = PasswordField('密码', validators=[DataRequired()])
+    submit = SubmitField('登录')
+
+class RegisterForm(FlaskForm):
+    username = StringField('用户名', validators=[DataRequired(), Length(min=4, max=20)])
+    email = StringField('邮箱', validators=[DataRequired(), Email()])
+    password = PasswordField('密码', validators=[DataRequired(), Length(min=6)])
+    confirm_password = PasswordField('确认密码', validators=[DataRequired(), EqualTo('password')])
+    submit = SubmitField('注册')
+
+class PostForm(FlaskForm):
+    title = StringField('标题', validators=[DataRequired(), Length(max=100)])
+    content = TextAreaField('内容', validators=[DataRequired(), Length(min=10)])
+    submit = SubmitField('发布')
+
+class CommentForm(FlaskForm):
+    content = TextAreaField('评论内容', validators=[DataRequired(), Length(min=1)])
+    submit = SubmitField('发表评论')
+
+# 登录管理
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# 路由
+@app.route('/')
+def index():
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(Post.created_at.desc()).paginate(
+        page=page, per_page=5, error_out=False
+    )
+    return render_template('index.html', posts=posts)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+
+    form = RegisterForm()
+    if form.validate_on_submit():
+        if User.query.filter_by(username=form.username.data).first():
+            flash('用户名已存在', 'danger')
+            return render_template('register.html', form=form)
+
+        if User.query.filter_by(email=form.email.data).first():
+            flash('邮箱已被注册', 'danger')
+            return render_template('register.html', form=form)
+
+        user = User(username=form.username.data, email=form.email.data)
+        user.set_password(form.password.data)
+        db.session.add(user)
+        db.session.commit()
+
+        flash('注册成功! 请登录', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('register.html', form=form)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and user.check_password(form.password.data):
+            login_user(user)
+            next_page = request.args.get('next')
+            return redirect(next_page) if next_page else redirect(url_for('index'))
+        else:
+            flash('用户名或密码错误', 'danger')
+
+    return render_template('login.html', form=form)
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('index'))
+
+@app.route('/post/<int:post_id>')
+def post_detail(post_id):
+    post = Post.query.get_or_404(post_id)
+    comments = Comment.query.filter_by(post_id=post_id).order_by(Comment.created_at.desc()).all()
+    form = CommentForm()
+    return render_template('post_detail.html', post=post, comments=comments, form=form)
+
+@app.route('/create_post', methods=['GET', 'POST'])
+@login_required
+def create_post():
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(
+            title=form.title.data,
+            content=form.content.data,
+            user_id=current_user.id
+        )
+        db.session.add(post)
+        db.session.commit()
+        flash('文章发布成功!', 'success')
+        return redirect(url_for('post_detail', post_id=post.id))
+
+    return render_template('create_post.html', form=form)
+
+@app.route('/post/<int:post_id>/comment', methods=['POST'])
+@login_required
+def add_comment(post_id):
+    post = Post.query.get_or_404(post_id)
+    form = CommentForm()
+
+    if form.validate_on_submit():
+        comment = Comment(
+            content=form.content.data,
+            user_id=current_user.id,
+            post_id=post_id
+        )
+        db.session.add(comment)
+        db.session.commit()
+        flash('评论发表成功!', 'success')
+
+    return redirect(url_for('post_detail', post_id=post_id))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    user_posts = Post.query.filter_by(user_id=current_user.id).order_by(Post.created_at.desc()).all()
+    return render_template('dashboard.html', posts=user_posts)
+
+# 创建数据库表
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+## 练习题与答案
+
+### 1. Flask基础练习
+
+**问题：** 创建一个简单的任务管理应用，支持添加、删除和标记任务完成状态。
+
+**答案：**
+```python
+# task_manager.py
+from flask import Flask, render_template, redirect, url_for, flash, request
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# 数据库模型
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(120))
+    tasks = db.relationship('Task', backref='user', lazy=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Task(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    completed = db.Column(db.Boolean, default=False)
+    priority = db.Column(db.String(20), default='medium')
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# 路由
+@app.route('/')
+def index():
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            login_user(user)
+            return redirect(url_for('dashboard'))
+        else:
+            flash('用户名或密码错误')
+
+    return render_template('login.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+
+        if User.query.filter_by(username=username).first():
+            flash('用户名已存在')
+            return render_template('register.html')
+
+        user = User(username=username)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+
+        flash('注册成功! 请登录')
+        return redirect(url_for('login'))
+
+    return render_template('register.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    tasks = Task.query.filter_by(user_id=current_user.id).all()
+    return render_template('dashboard.html', tasks=tasks)
+
+@app.route('/add_task', methods=['POST'])
+@login_required
+def add_task():
+    title = request.form['title']
+    description = request.form['description']
+    priority = request.form['priority']
+
+    if title:
+        task = Task(
+            title=title,
+            description=description,
+            priority=priority,
+            user_id=current_user.id
+        )
+        db.session.add(task)
+        db.session.commit()
+        flash('任务添加成功!')
+
+    return redirect(url_for('dashboard'))
+
+@app.route('/complete_task/<int:task_id>')
+@login_required
+def complete_task(task_id):
+    task = Task.query.get_or_404(task_id)
+
+    if task.user_id != current_user.id:
+        flash('你没有权限操作这个任务')
+        return redirect(url_for('dashboard'))
+
+    task.completed = not task.completed
+    db.session.commit()
+
+    return redirect(url_for('dashboard'))
+
+@app.route('/delete_task/<int:task_id>')
+@login_required
+def delete_task(task_id):
+    task = Task.query.get_or_404(task_id)
+
+    if task.user_id != current_user.id:
+        flash('你没有权限删除这个任务')
+        return redirect(url_for('dashboard'))
+
+    db.session.delete(task)
+    db.session.commit()
+    flash('任务删除成功!')
+
+    return redirect(url_for('dashboard'))
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+### 2. 数据库操作练习
+
+**问题：** 实现一个图书管理系统，支持图书的增删改查和借阅功能。
+
+**答案：**
+```python
+# library_system.py
+from flask import Flask, render_template, redirect, url_for, flash, request
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'library-secret-key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///library.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+# 数据库模型
+class Book(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    author = db.Column(db.String(100), nullable=False)
+    isbn = db.Column(db.String(20), unique=True, nullable=False)
+    publisher = db.Column(db.String(100))
+    publish_year = db.Column(db.Integer)
+    category = db.Column(db.String(50))
+    total_copies = db.Column(db.Integer, default=1)
+    available_copies = db.Column(db.Integer, default=1)
+    borrows = db.relationship('Borrow', backref='book', lazy=True)
+
+class Reader(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    phone = db.Column(db.String(20))
+    address = db.Column(db.Text)
+    join_date = db.Column(db.DateTime, default=datetime.utcnow)
+    borrows = db.relationship('Borrow', backref='reader', lazy=True)
+
+class Borrow(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    book_id = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=False)
+    reader_id = db.Column(db.Integer, db.ForeignKey('reader.id'), nullable=False)
+    borrow_date = db.Column(db.DateTime, default=datetime.utcnow)
+    due_date = db.Column(db.DateTime)
+    return_date = db.Column(db.DateTime)
+    status = db.Column(db.String(20), default='borrowed')  # borrowed, returned, overdue
+
+# 路由
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/books')
+def books():
+    page = request.args.get('page', 1, type=int)
+    books = Book.query.paginate(page=page, per_page=10, error_out=False)
+    return render_template('books.html', books=books)
+
+@app.route('/add_book', methods=['GET', 'POST'])
+def add_book():
+    if request.method == 'POST':
+        book = Book(
+            title=request.form['title'],
+            author=request.form['author'],
+            isbn=request.form['isbn'],
+            publisher=request.form['publisher'],
+            publish_year=int(request.form['publish_year']) if request.form['publish_year'] else None,
+            category=request.form['category'],
+            total_copies=int(request.form['total_copies']),
+            available_copies=int(request.form['total_copies'])
+        )
+
+        try:
+            db.session.add(book)
+            db.session.commit()
+            flash('图书添加成功!')
+            return redirect(url_for('books'))
+        except Exception as e:
+            db.session.rollback()
+            flash(f'添加失败: {str(e)}')
+
+    return render_template('add_book.html')
+
+@app.route('/book/<int:book_id>')
+def book_detail(book_id):
+    book = Book.query.get_or_404(book_id)
+    borrows = Borrow.query.filter_by(book_id=book_id).order_by(Borrow.borrow_date.desc()).limit(10).all()
+    return render_template('book_detail.html', book=book, borrows=borrows)
+
+@app.route('/readers')
+def readers():
+    page = request.args.get('page', 1, type=int)
+    readers = Reader.query.paginate(page=page, per_page=10, error_out=False)
+    return render_template('readers.html', readers=readers)
+
+@app.route('/add_reader', methods=['GET', 'POST'])
+def add_reader():
+    if request.method == 'POST':
+        reader = Reader(
+            name=request.form['name'],
+            email=request.form['email'],
+            phone=request.form['phone'],
+            address=request.form['address']
+        )
+
+        try:
+            db.session.add(reader)
+            db.session.commit()
+            flash('读者添加成功!')
+            return redirect(url_for('readers'))
+        except Exception as e:
+            db.session.rollback()
+            flash(f'添加失败: {str(e)}')
+
+    return render_template('add_reader.html')
+
+@app.route('/borrow_book/<int:book_id>', methods=['GET', 'POST'])
+def borrow_book(book_id):
+    book = Book.query.get_or_404(book_id)
+
+    if book.available_copies <= 0:
+        flash('该图书暂无可用副本!')
+        return redirect(url_for('book_detail', book_id=book_id))
+
+    if request.method == 'POST':
+        reader_id = request.form['reader_id']
+        days = int(request.form.get('days', 14))
+
+        reader = Reader.query.get_or_404(reader_id)
+
+        borrow = Borrow(
+            book_id=book_id,
+            reader_id=reader_id,
+            due_date=datetime.utcnow() + timedelta(days=days)
+        )
+
+        book.available_copies -= 1
+
+        try:
+            db.session.add(borrow)
+            db.session.commit()
+            flash('借阅成功!')
+            return redirect(url_for('book_detail', book_id=book_id))
+        except Exception as e:
+            db.session.rollback()
+            flash(f'借阅失败: {str(e)}')
+
+    readers = Reader.query.all()
+    return render_template('borrow_book.html', book=book, readers=readers)
+
+@app.route('/return_book/<int:borrow_id>')
+def return_book(borrow_id):
+    borrow = Borrow.query.get_or_404(borrow_id)
+
+    if borrow.status == 'returned':
+        flash('该图书已归还!')
+        return redirect(url_for('book_detail', book_id=borrow.book_id))
+
+    borrow.return_date = datetime.utcnow()
+    borrow.status = 'returned'
+    borrow.book.available_copies += 1
+
+    try:
+        db.session.commit()
+        flash('归还成功!')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'归还失败: {str(e)}')
+
+    return redirect(url_for('book_detail', book_id=borrow.book_id))
+
+@app.route('/search')
+def search():
+    query = request.args.get('q', '')
+    search_type = request.args.get('type', 'title')
+
+    if not query:
+        return render_template('search.html', results=[], query=query, search_type=search_type)
+
+    if search_type == 'title':
+        results = Book.query.filter(Book.title.contains(query)).all()
+    elif search_type == 'author':
+        results = Book.query.filter(Book.author.contains(query)).all()
+    elif search_type == 'isbn':
+        results = Book.query.filter(Book.isbn.contains(query)).all()
+    else:
+        results = []
+
+    return render_template('search.html', results=results, query=query, search_type=search_type)
+
+@app.route('/reports')
+def reports():
+    # 统计信息
+    total_books = Book.query.count()
+    total_readers = Reader.query.count()
+    active_borrows = Borrow.query.filter_by(status='borrowed').count()
+    overdue_borrows = Borrow.query.filter(
+        Borrow.status == 'borrowed',
+        Borrow.due_date < datetime.utcnow()
+    ).count()
+
+    # 最受欢迎的图书
+    popular_books = db.session.query(
+        Book.title,
+        Book.author,
+        db.func.count(Borrow.id).label('borrow_count')
+    ).join(Borrow).group_by(Book.id).order_by(db.func.count(Borrow.id).desc()).limit(10).all()
+
+    return render_template('reports.html',
+                         total_books=total_books,
+                         total_readers=total_readers,
+                         active_borrows=active_borrows,
+                         overdue_borrows=overdue_borrows,
+                         popular_books=popular_books)
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+### 3. API开发练习
+
+**问题：** 为博客系统开发完整的RESTful API，支持用户认证和数据验证。
+
+**答案：**
+```python
+# blog_api.py
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
+import re
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'api-secret-key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog_api.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = 'jwt-secret-key'
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)
+
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+# 数据库模型
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True)
+    posts = db.relationship('Post', backref='author', lazy=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    is_published = db.Column(db.Boolean, default=True)
+
+# 数据验证函数
+def validate_email(email):
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return re.match(pattern, email) is not None
+
+def validate_password(password):
+    return len(password) >= 6
+
+# API路由
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.get_json()
+
+    if not data:
+        return jsonify({'error': '请求数据不能为空'}), 400
+
+    required_fields = ['username', 'email', 'password']
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return jsonify({'error': f'{field} 不能为空'}), 400
+
+    if not validate_email(data['email']):
+        return jsonify({'error': '邮箱格式不正确'}), 400
+
+    if not validate_password(data['password']):
+        return jsonify({'error': '密码长度至少6位'}), 400
+
+    if User.query.filter_by(username=data['username']).first():
+        return jsonify({'error': '用户名已存在'}), 400
+
+    if User.query.filter_by(email=data['email']).first():
+        return jsonify({'error': '邮箱已被注册'}), 400
+
+    user = User(username=data['username'], email=data['email'])
+    user.set_password(data['password'])
+
+    try:
+        db.session.add(user)
+        db.session.commit()
+
+        access_token = create_access_token(identity=user.id)
+
+        return jsonify({
+            'message': '注册成功',
+            'access_token': access_token,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            }
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': '注册失败'}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.get_json()
+
+    if not data or not data.get('username') or not data.get('password'):
+        return jsonify({'error': '用户名和密码不能为空'}), 400
+
+    user = User.query.filter_by(username=data['username']).first()
+
+    if not user or not user.check_password(data['password']):
+        return jsonify({'error': '用户名或密码错误'}), 401
+
+    if not user.is_active:
+        return jsonify({'error': '账户已被禁用'}), 401
+
+    access_token = create_access_token(identity=user.id)
+
+    return jsonify({
+        'message': '登录成功',
+        'access_token': access_token,
+        'user': {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email
+        }
+    })
+
+@app.route('/api/posts', methods=['GET'])
+def get_posts():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+    status = request.args.get('status', 'published')
+
+    query = Post.query
+
+    if status == 'published':
+        query = query.filter_by(is_published=True)
+    elif status == 'draft':
+        query = query.filter_by(is_published=False)
+
+    posts = query.order_by(Post.created_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    return jsonify({
+        'posts': [{
+            'id': post.id,
+            'title': post.title,
+            'content': post.content[:200] + '...' if len(post.content) > 200 else post.content,
+            'author': post.author.username,
+            'created_at': post.created_at.isoformat(),
+            'updated_at': post.updated_at.isoformat(),
+            'is_published': post.is_published
+        } for post in posts.items],
+        'pagination': {
+            'total': posts.total,
+            'pages': posts.pages,
+            'current_page': posts.page,
+            'per_page': per_page,
+            'has_next': posts.has_next,
+            'has_prev': posts.has_prev
+        }
+    })
+
+@app.route('/api/posts/<int:post_id>', methods=['GET'])
+def get_post(post_id):
+    post = Post.query.get_or_404(post_id)
+
+    return jsonify({
+        'id': post.id,
+        'title': post.title,
+        'content': post.content,
+        'author': post.author.username,
+        'created_at': post.created_at.isoformat(),
+        'updated_at': post.updated_at.isoformat(),
+        'is_published': post.is_published
+    })
+
+@app.route('/api/posts', methods=['POST'])
+@jwt_required()
+def create_post():
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+
+    if not data or not data.get('title') or not data.get('content'):
+        return jsonify({'error': '标题和内容不能为空'}), 400
+
+    if len(data['title']) > 200:
+        return jsonify({'error': '标题长度不能超过200字符'}), 400
+
+    if len(data['content']) < 10:
+        return jsonify({'error': '内容长度不能少于10字符'}), 400
+
+    post = Post(
+        title=data['title'],
+        content=data['content'],
+        user_id=current_user_id,
+        is_published=data.get('is_published', True)
+    )
+
+    try:
+        db.session.add(post)
+        db.session.commit()
+
+        return jsonify({
+            'message': '文章创建成功',
+            'post': {
+                'id': post.id,
+                'title': post.title,
+                'content': post.content,
+                'created_at': post.created_at.isoformat(),
+                'is_published': post.is_published
+            }
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': '文章创建失败'}), 500
+
+@app.route('/api/posts/<int:post_id>', methods=['PUT'])
+@jwt_required()
+def update_post(post_id):
+    current_user_id = get_jwt_identity()
+    post = Post.query.get_or_404(post_id)
+
+    if post.user_id != current_user_id:
+        return jsonify({'error': '你没有权限编辑这篇文章'}), 403
+
+    data = request.get_json()
+
+    if 'title' in data:
+        if len(data['title']) > 200:
+            return jsonify({'error': '标题长度不能超过200字符'}), 400
+        post.title = data['title']
+
+    if 'content' in data:
+        if len(data['content']) < 10:
+            return jsonify({'error': '内容长度不能少于10字符'}), 400
+        post.content = data['content']
+
+    if 'is_published' in data:
+        post.is_published = data['is_published']
+
+    try:
+        db.session.commit()
+
+        return jsonify({
+            'message': '文章更新成功',
+            'post': {
+                'id': post.id,
+                'title': post.title,
+                'content': post.content,
+                'updated_at': post.updated_at.isoformat(),
+                'is_published': post.is_published
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': '文章更新失败'}), 500
+
+@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
+@jwt_required()
+def delete_post(post_id):
+    current_user_id = get_jwt_identity()
+    post = Post.query.get_or_404(post_id)
+
+    if post.user_id != current_user_id:
+        return jsonify({'error': '你没有权限删除这篇文章'}), 403
+
+    try:
+        db.session.delete(post)
+        db.session.commit()
+
+        return jsonify({'message': '文章删除成功'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': '文章删除失败'}), 500
+
+@app.route('/api/users/me', methods=['GET'])
+@jwt_required()
+def get_current_user():
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+
+    if not user:
+        return jsonify({'error': '用户不存在'}), 404
+
+    return jsonify({
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'created_at': user.created_at.isoformat(),
+        'is_active': user.is_active
+    })
+
+@app.route('/api/users/me/posts', methods=['GET'])
+@jwt_required()
+def get_user_posts():
+    current_user_id = get_jwt_identity()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 10, type=int)
+
+    posts = Post.query.filter_by(user_id=current_user_id).order_by(
+        Post.created_at.desc()
+    ).paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'posts': [{
+            'id': post.id,
+            'title': post.title,
+            'content': post.content[:200] + '...' if len(post.content) > 200 else post.content,
+            'created_at': post.created_at.isoformat(),
+            'updated_at': post.updated_at.isoformat(),
+            'is_published': post.is_published
+        } for post in posts.items],
+        'pagination': {
+            'total': posts.total,
+            'pages': posts.pages,
+            'current_page': posts.page,
+            'per_page': per_page,
+            'has_next': posts.has_next,
+            'has_prev': posts.has_prev
+        }
+    })
+
+# 错误处理
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': '资源不存在'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': '服务器内部错误'}), 500
+
+@app.errorhandler(422)
+def validation_error(error):
+    return jsonify({'error': '数据验证失败'}), 422
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+if __name__ == '__main__':
+    app.run(debug=True)
+```
+
+## 学习建议
+
+1. **掌握基础**：理解Flask的核心概念和MVC架构
+2. **实践项目**：通过实际项目巩固所学知识
+3. **学习扩展**：了解常用的Flask扩展和最佳实践
+4. **安全考虑**：注意Web应用的安全性问题
+5. **部署知识**：学习如何部署Flask应用到生产环境
+
+## 扩展资源
+
+- **官方资源**：
+  - [Flask官方文档](https://flask.palletsprojects.com/)
+  - [CS50 Week 9 Lecture](https://cs50.harvard.edu/x/2025/weeks/9/)
+  - [CS50 Week 9 Notes](https://cs50.harvard.edu/x/2025/notes/9/)
+
+- **学习平台**：
+  - [Flask Mega-Tutorial](https://blog.miguelgrinberg.com/post/the-flask-mega-tutorial-part-i-hello-world)
+  - [Real Python Flask教程](https://realpython.com/tutorials/flask/)
+  - [Flask官方教程](https://flask.palletsprojects.com/en/2.3.x/tutorial/)
+
+- **数据库相关**：
+  - [SQLAlchemy文档](https://www.sqlalchemy.org/)
+  - [Flask-SQLAlchemy文档](https://flask-sqlalchemy.palletsprojects.com/)
+  - [Flask-Migrate文档](https://flask-migrate.readthedocs.io/)
+
+- **认证和安全**：
+  - [Flask-Login文档](https://flask-login.readthedocs.io/)
+  - [Flask-JWT-Extended文档](https://flask-jwt-extended.readthedocs.io/)
+  - [Web应用安全最佳实践](https://owasp.org/www-project-top-ten/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 10: 项目展示" icon="arrow-right" href="./week10">
+    完成最终项目并展示成果
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 9的学习！Flask是Python中最流行的Web框架之一，掌握它将使你能够构建功能强大的Web应用。现在你已经具备了全栈开发的基础能力，可以开始设计和实现自己的Web项目了。*

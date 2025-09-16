@@ -1,0 +1,1372 @@
+---
+title: "函数式数据结构的深度实现"
+description: "深入理解函数式数据结构的设计原理、实现策略和性能优化"
+category: "函数式编程"
+tags: ["函数式数据结构", "不可变性", "结构共享", "持久化"]
+difficulty: "高级"
+---
+
+# 函数式数据结构的深度实现
+
+## 概念概览
+
+函数式数据结构是函数式编程的核心组成部分，它们强调不可变性、持久化和结构共享。本章深入探讨各种函数式数据结构的设计原理、实现策略和性能优化技术，帮助学员掌握高级数据结构的函数式实现方法。
+
+## 不可变数据结构的理论基础
+
+### 1. 不可变性的数学基础
+
+#### 1.1 函数式数据结构的定义
+
+**函数式数据结构**满足以下特性：
+
+1. **不可变性**：一旦创建就不能被修改
+2. **持久化**：所有版本都被保留，可以随时访问
+3. **结构共享**：不同版本共享相同的子结构
+4. **引用透明性**：相同的输入总是产生相同的输出
+
+#### 1.2 不可变性的形式化定义
+
+给定数据结构 $D$ 和操作 $op: D \rightarrow D$，不可变性要求：
+
+$$\forall d \in D, \exists d' \in D: op(d) = d' \land d' \neq d$$
+
+这意味着任何"修改"操作都会创建新的数据结构实例。
+
+### 2. 不可变性的实现策略
+
+#### 2.1 完全复制策略
+
+```python
+from typing import List, Any
+from copy import deepcopy
+
+class NaiveImmutableList:
+    """朴素不可变列表：使用完全复制策略"""
+
+    def __init__(self, items: List[Any] = None):
+        self._items = deepcopy(items) if items else []
+
+    def append(self, item: Any) -> 'NaiveImmutableList':
+        """添加元素：完全复制"""
+        new_items = deepcopy(self._items)
+        new_items.append(item)
+        return NaiveImmutableList(new_items)
+
+    def update(self, index: int, item: Any) -> 'NaiveImmutableList':
+        """更新元素：完全复制"""
+        if index < 0 or index >= len(self._items):
+            raise IndexError("Index out of range")
+
+        new_items = deepcopy(self._items)
+        new_items[index] = item
+        return NaiveImmutableList(new_items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __getitem__(self, index):
+        return self._items[index]
+
+    def __str__(self):
+        return f"NaiveImmutableList({self._items})"
+
+# 性能分析
+# 时间复杂度：O(n) - 因为需要完全复制
+# 空间复杂度：O(n) - 因为每个操作都创建新副本
+# 优点：实现简单，理解容易
+# 缺点：性能差，内存使用高
+```
+
+#### 2.2 结构共享策略
+
+```python
+from typing import List, Any, Optional
+from dataclasses import dataclass
+
+@dataclass
+class ImmutableNode:
+    """不可变节点"""
+    value: Any
+    next_node: Optional['ImmutableNode'] = None
+
+class StructurallySharedList:
+    """结构共享的不可变列表"""
+
+    def __init__(self, head: ImmutableNode = None):
+        self.head = head
+        self._length = self._calculate_length()
+
+    def _calculate_length(self) -> int:
+        """计算长度"""
+        count = 0
+        current = self.head
+        while current is not None:
+            count += 1
+            current = current.next_node
+        return count
+
+    def cons(self, item: Any) -> 'StructurallySharedList':
+        """在头部添加元素：O(1)时间复杂度"""
+        new_head = ImmutableNode(item, self.head)
+        return StructurallySharedList(new_head)
+
+    def tail(self) -> 'StructurallySharedList':
+        """获取尾部列表：O(1)时间复杂度"""
+        if self.head is None:
+            return StructurallySharedList()
+        return StructurallySharedList(self.head.next_node)
+
+    def head(self) -> Any:
+        """获取头部元素：O(1)时间复杂度"""
+        if self.head is None:
+            raise IndexError("Empty list")
+        return self.head.value
+
+    def update(self, index: int, item: Any) -> 'StructurallySharedList':
+        """更新元素：O(index)时间复杂度"""
+        if index < 0:
+            raise IndexError("Index out of range")
+
+        def update_helper(node: Optional[ImmutableNode], current_index: int) -> ImmutableNode:
+            if node is None:
+                raise IndexError("Index out of range")
+
+            if current_index == index:
+                return ImmutableNode(item, node.next_node)
+            else:
+                return ImmutableNode(node.value, update_helper(node.next_node, current_index + 1))
+
+        new_head = update_helper(self.head, 0)
+        return StructurallySharedList(new_head)
+
+    def __len__(self):
+        return self._length
+
+    def __str__(self):
+        items = []
+        current = self.head
+        while current is not None:
+            items.append(str(current.value))
+            current = current.next_node
+        return f"StructurallySharedList([{', '.join(items)}])"
+
+# 性能分析
+# cons操作：O(1) - 只需要创建新节点
+# tail操作：O(1) - 只需要返回next_node
+# update操作：O(n) - 需要复制路径上的所有节点
+# 空间效率：通过结构共享，减少内存使用
+```
+
+## 高级函数式数据结构
+
+### 1. 持久化数组（Persistent Array）
+
+#### 1.1 二叉树持久化数组
+
+```python
+from typing import Any, Optional, List
+from math import log2, ceil
+
+class BinaryPersistentArray:
+    """基于二叉树的持久化数组"""
+
+    def __init__(self, size: int, initial_value: Any = None):
+        self.size = size
+        self.height = ceil(log2(max(size, 1)))
+        self.root = self._build_tree(initial_value)
+
+    def _build_tree(self, initial_value: Any) -> Optional[Any]:
+        """构建完全二叉树"""
+        if self.size == 0:
+            return None
+
+        def build_node(level: int, start: int, end: int):
+            if level == 0:
+                # 叶子节点
+                return [initial_value] * min(32, end - start)
+            else:
+                # 内部节点
+                children = []
+                chunk_size = (end - start) // 2
+                for i in range(2):
+                    child_start = start + i * chunk_size
+                    child_end = child_start + chunk_size
+                    children.append(build_node(level - 1, child_start, child_end))
+                return children
+
+        return build_node(self.height, 0, self.size)
+
+    def get(self, index: int) -> Any:
+        """获取元素：O(log n)时间复杂度"""
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+
+        def get_node(node, level: int, pos: int) -> Any:
+            if level == 0:
+                return node[pos % 32]
+            else:
+                child_index = (pos >> (5 * level)) & 0x1f
+                return get_node(node[child_index], level - 1, pos)
+
+        return get_node(self.root, self.height, index)
+
+    def set(self, index: int, value: Any) -> 'BinaryPersistentArray':
+        """设置元素：O(log n)时间复杂度"""
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+
+        def set_node(node, level: int, pos: int) -> Any:
+            if level == 0:
+                # 叶子节点
+                new_node = node.copy()
+                new_node[pos % 32] = value
+                return new_node
+            else:
+                # 内部节点
+                new_node = node.copy()
+                child_index = (pos >> (5 * level)) & 0x1f
+                new_node[child_index] = set_node(new_node[child_index], level - 1, pos)
+                return new_node
+
+        new_root = set_node(self.root, self.height, index)
+        new_array = BinaryPersistentArray(self.size)
+        new_array.root = new_root
+        new_array.height = self.height
+        return new_array
+
+    def __str__(self):
+        items = [self.get(i) for i in range(self.size)]
+        return f"BinaryPersistentArray({items})"
+
+# 性能分析
+# get操作：O(log n) - 需要遍历树的高度
+# set操作：O(log n) - 只需要复制路径上的节点
+# 空间效率：每次修改只复制O(log n)个节点
+```
+
+#### 1.2 位映射持久化数组
+
+```python
+class BitMappedPersistentArray:
+    """位映射持久化数组：更高效的实现"""
+
+    def __init__(self, size: int, initial_value: Any = None):
+        self.size = size
+        self.root = self._create_root(size, initial_value)
+        self.shift = self._calculate_shift(size)
+
+    def _calculate_shift(self, size: int) -> int:
+        """计算位移量"""
+        shift = 5
+        while (1 << shift) < size:
+            shift += 5
+        return shift - 5
+
+    def _create_root(self, size: int, initial_value: Any):
+        """创建根节点"""
+        if size <= 32:
+            return [initial_value] * 32
+        else:
+            children = []
+            chunk_size = 32
+            for i in range(0, size, chunk_size):
+                child_size = min(chunk_size, size - i)
+                children.append(self._create_node(child_size, initial_value, 0))
+            return children
+
+    def _create_node(self, size: int, initial_value: Any, level: int):
+        """创建节点"""
+        if level == 0:
+            return [initial_value] * 32
+        else:
+            children = []
+            chunk_size = 32
+            for i in range(0, size, chunk_size):
+                child_size = min(chunk_size, size - i)
+                children.append(self._create_node(child_size, initial_value, level - 1))
+            return children
+
+    def _get_node(self, node, index: int, level: int) -> Any:
+        """获取节点值"""
+        if level == 0:
+            return node[index & 0x1f]
+        else:
+            child_index = (index >> (5 * level)) & 0x1f
+            return self._get_node(node[child_index], index, level - 1)
+
+    def _set_node(self, node, index: int, value: Any, level: int) -> Any:
+        """设置节点值"""
+        if level == 0:
+            new_node = node.copy()
+            new_node[index & 0x1f] = value
+            return new_node
+        else:
+            new_node = node.copy()
+            child_index = (index >> (5 * level)) & 0x1f
+            new_node[child_index] = self._set_node(new_node[child_index], index, value, level - 1)
+            return new_node
+
+    def get(self, index: int) -> Any:
+        """获取元素"""
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+        return self._get_node(self.root, index, self.shift // 5)
+
+    def set(self, index: int, value: Any) -> 'BitMappedPersistentArray':
+        """设置元素"""
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+
+        new_root = self._set_node(self.root, index, value, self.shift // 5)
+        new_array = BitMappedPersistentArray(self.size)
+        new_array.root = new_root
+        new_array.shift = self.shift
+        return new_array
+
+    def __str__(self):
+        items = [self.get(i) for i in range(min(self.size, 20))]  # 限制显示数量
+        if self.size > 20:
+            items.append("...")
+        return f"BitMappedPersistentArray({items})"
+```
+
+### 2. 函数式平衡树
+
+#### 2.1 AVL树的函数式实现
+
+```python
+from typing import Any, Optional, Callable
+from dataclasses import dataclass
+
+@dataclass
+class AVLNode:
+    """AVL树节点"""
+    value: Any
+    left: Optional['AVLNode'] = None
+    right: Optional['AVLNode'] = None
+    height: int = 1
+
+class FunctionalAVLTree:
+    """函数式AVL树：自动平衡的二叉搜索树"""
+
+    def __init__(self, root: Optional[AVLNode] = None):
+        self.root = root
+
+    def _get_height(self, node: Optional[AVLNode]) -> int:
+        """获取节点高度"""
+        if node is None:
+            return 0
+        return node.height
+
+    def _get_balance(self, node: Optional[AVLNode]) -> int:
+        """获取平衡因子"""
+        if node is None:
+            return 0
+        return self._get_height(node.left) - self._get_height(node.right)
+
+    def _update_height(self, node: AVLNode) -> None:
+        """更新节点高度"""
+        node.height = 1 + max(self._get_height(node.left), self._get_height(node.right))
+
+    def _right_rotate(self, y: AVLNode) -> AVLNode:
+        """右旋转"""
+        x = y.left
+        T2 = x.right
+
+        # 执行旋转
+        x.right = y
+        y.left = T2
+
+        # 更新高度
+        self._update_height(y)
+        self._update_height(x)
+
+        return x
+
+    def _left_rotate(self, x: AVLNode) -> AVLNode:
+        """左旋转"""
+        y = x.right
+        T2 = y.left
+
+        # 执行旋转
+        y.left = x
+        x.right = T2
+
+        # 更新高度
+        self._update_height(x)
+        self._update_height(y)
+
+        return y
+
+    def _insert_node(self, node: Optional[AVLNode], value: Any) -> AVLNode:
+        """插入节点"""
+        # 1. 执行标准BST插入
+        if node is None:
+            return AVLNode(value)
+
+        if value < node.value:
+            node.left = self._insert_node(node.left, value)
+        elif value > node.value:
+            node.right = self._insert_node(node.right, value)
+        else:  # 重复值不允许
+            return node
+
+        # 2. 更新高度
+        self._update_height(node)
+
+        # 3. 获取平衡因子
+        balance = self._get_balance(node)
+
+        # 4. 平衡节点
+
+        # 左左情况
+        if balance > 1 and value < node.left.value:
+            return self._right_rotate(node)
+
+        # 右右情况
+        if balance < -1 and value > node.right.value:
+            return self._left_rotate(node)
+
+        # 左右情况
+        if balance > 1 and value > node.left.value:
+            node.left = self._left_rotate(node.left)
+            return self._right_rotate(node)
+
+        # 右左情况
+        if balance < -1 and value < node.right.value:
+            node.right = self._right_rotate(node.right)
+            return self._left_rotate(node)
+
+        # 返回未改变的节点指针
+        return node
+
+    def insert(self, value: Any) -> 'FunctionalAVLTree':
+        """插入值：返回新树"""
+        new_root = self._insert_node(self.root, value)
+        return FunctionalAVLTree(new_root)
+
+    def _min_value_node(self, node: AVLNode) -> AVLNode:
+        """找到最小值节点"""
+        current = node
+        while current.left is not None:
+            current = current.left
+        return current
+
+    def _delete_node(self, node: Optional[AVLNode], value: Any) -> Optional[AVLNode]:
+        """删除节点"""
+        # 1. 执行标准BST删除
+        if node is None:
+            return node
+
+        if value < node.value:
+            node.left = self._delete_node(node.left, value)
+        elif value > node.value:
+            node.right = self._delete_node(node.right, value)
+        else:
+            # 找到要删除的节点
+
+            # 节点有一个子节点或没有子节点
+            if node.left is None:
+                return node.right
+            elif node.right is None:
+                return node.left
+
+            # 节点有两个子节点：获取中序后继（右子树的最小值）
+            temp = self._min_value_node(node.right)
+            node.value = temp.value
+            node.right = self._delete_node(node.right, temp.value)
+
+        # 如果树只有一个节点，直接返回
+        if node is None:
+            return node
+
+        # 2. 更新高度
+        self._update_height(node)
+
+        # 3. 获取平衡因子
+        balance = self._get_balance(node)
+
+        # 4. 平衡节点
+
+        # 左左情况
+        if balance > 1 and self._get_balance(node.left) >= 0:
+            return self._right_rotate(node)
+
+        # 左右情况
+        if balance > 1 and self._get_balance(node.left) < 0:
+            node.left = self._left_rotate(node.left)
+            return self._right_rotate(node)
+
+        # 右右情况
+        if balance < -1 and self._get_balance(node.right) <= 0:
+            return self._left_rotate(node)
+
+        # 右左情况
+        if balance < -1 and self._get_balance(node.right) > 0:
+            node.right = self._right_rotate(node.right)
+            return self._left_rotate(node)
+
+        return node
+
+    def delete(self, value: Any) -> 'FunctionalAVLTree':
+        """删除值：返回新树"""
+        new_root = self._delete_node(self.root, value)
+        return FunctionalAVLTree(new_root)
+
+    def search(self, value: Any) -> bool:
+        """搜索值"""
+        return self._search_node(self.root, value)
+
+    def _search_node(self, node: Optional[AVLNode], value: Any) -> bool:
+        """搜索节点"""
+        if node is None:
+            return False
+        if value == node.value:
+            return True
+        elif value < node.value:
+            return self._search_node(node.left, value)
+        else:
+            return self._search_node(node.right, value)
+
+    def inorder_traversal(self) -> list:
+        """中序遍历"""
+        result = []
+        self._inorder_helper(self.root, result)
+        return result
+
+    def _inorder_helper(self, node: Optional[AVLNode], result: list) -> None:
+        """中序遍历辅助函数"""
+        if node:
+            self._inorder_helper(node.left, result)
+            result.append(node.value)
+            self._inorder_helper(node.right, result)
+
+    def __str__(self):
+        return f"FunctionalAVLTree({self.inorder_traversal()})"
+
+# 性能分析
+# 插入操作：O(log n) - 需要查找位置并平衡
+# 删除操作：O(log n) - 需要查找节点并平衡
+# 搜索操作：O(log n) - 标准的二叉搜索树搜索
+# 空间复杂度：O(n) - 存储所有节点
+```
+
+#### 2.2 红黑树的函数式实现
+
+```python
+from enum import Enum
+from dataclasses import dataclass
+from typing import Optional, Any
+
+class Color(Enum):
+    """红黑树颜色"""
+    RED = "red"
+    BLACK = "black"
+
+@dataclass
+class RBNode:
+    """红黑树节点"""
+    value: Any
+    color: Color
+    left: Optional['RBNode'] = None
+    right: Optional['RBNode'] = None
+
+class FunctionalRedBlackTree:
+    """函数式红黑树：另一种平衡二叉搜索树"""
+
+    def __init__(self, root: Optional[RBNode] = None):
+        self.root = root
+
+    def _is_red(self, node: Optional[RBNode]) -> bool:
+        """检查节点是否为红色"""
+        return node is not None and node.color == Color.RED
+
+    def _rotate_left(self, node: RBNode) -> RBNode:
+        """左旋转"""
+        new_root = node.right
+        node.right = new_root.left
+        new_root.left = node
+        return new_root
+
+    def _rotate_right(self, node: RBNode) -> RBNode:
+        """右旋转"""
+        new_root = node.left
+        node.left = new_root.right
+        new_root.right = node
+        return new_root
+
+    def _flip_colors(self, node: RBNode) -> RBNode:
+        """翻转颜色"""
+        node.color = Color.RED if node.color == Color.BLACK else Color.BLACK
+        node.left.color = Color.RED if node.left.color == Color.BLACK else Color.BLACK
+        node.right.color = Color.RED if node.right.color == Color.BLACK else Color.BLACK
+        return node
+
+    def _insert_node(self, node: Optional[RBNode], value: Any) -> RBNode:
+        """插入节点"""
+        if node is None:
+            return RBNode(value, Color.RED)
+
+        if value < node.value:
+            node.left = self._insert_node(node.left, value)
+        elif value > node.value:
+            node.right = self._insert_node(node.right, value)
+        else:
+            return node  # 重复值
+
+        # 平衡操作
+        if self._is_red(node.right) and not self._is_red(node.left):
+            node = self._rotate_left(node)
+
+        if self._is_red(node.left) and self._is_red(node.left.left):
+            node = self._rotate_right(node)
+
+        if self._is_red(node.left) and self._is_red(node.right):
+            node = self._flip_colors(node)
+
+        return node
+
+    def insert(self, value: Any) -> 'FunctionalRedBlackTree':
+        """插入值"""
+        new_root = self._insert_node(self.root, value)
+        new_root.color = Color.BLACK  # 根节点始终为黑色
+        return FunctionalRedBlackTree(new_root)
+
+    def search(self, value: Any) -> bool:
+        """搜索值"""
+        return self._search_node(self.root, value)
+
+    def _search_node(self, node: Optional[RBNode], value: Any) -> bool:
+        """搜索节点"""
+        if node is None:
+            return False
+        if value == node.value:
+            return True
+        elif value < node.value:
+            return self._search_node(node.left, value)
+        else:
+            return self._search_node(node.right, value)
+
+    def __str__(self):
+        return f"FunctionalRedBlackTree({self._inorder_traversal()})"
+
+    def _inorder_traversal(self) -> list:
+        """中序遍历"""
+        result = []
+        self._inorder_helper(self.root, result)
+        return result
+
+    def _inorder_helper(self, node: Optional[RBNode], result: list) -> None:
+        """中序遍历辅助函数"""
+        if node:
+            self._inorder_helper(node.left, result)
+            result.append(node.value)
+            self._inorder_helper(node.right, result)
+```
+
+### 3. 函数式哈希表
+
+#### 3.1 基于数组的函数式哈希表
+
+```python
+from typing import Any, List, Optional, Callable, Tuple
+from dataclasses import dataclass
+
+@dataclass
+class HashEntry:
+    """哈希表条目"""
+    key: Any
+    value: Any
+    next_entry: Optional['HashEntry'] = None
+
+class FunctionalHashTable:
+    """函数式哈希表：基于链地址法"""
+
+    def __init__(self, size: int = 16, hash_func: Optional[Callable] = None):
+        self.size = size
+        self.hash_func = hash_func or hash
+        self.buckets: List[Optional[HashEntry]] = [None] * size
+
+    def _get_index(self, key: Any) -> int:
+        """获取哈希索引"""
+        hash_value = self.hash_func(key)
+        return hash_value % self.size
+
+    def _copy_bucket(self, entry: Optional[HashEntry]) -> Optional[HashEntry]:
+        """复制桶链表"""
+        if entry is None:
+            return None
+
+        return HashEntry(
+            entry.key,
+            entry.value,
+            self._copy_bucket(entry.next_entry)
+        )
+
+    def _update_entry(self, entry: Optional[HashEntry], key: Any, value: Any) -> Optional[HashEntry]:
+        """更新条目"""
+        if entry is None:
+            return HashEntry(key, value)
+
+        if entry.key == key:
+            return HashEntry(key, value, entry.next_entry)
+        else:
+            return HashEntry(
+                entry.key,
+                entry.value,
+                self._update_entry(entry.next_entry, key, value)
+            )
+
+    def _remove_entry(self, entry: Optional[HashEntry], key: Any) -> Optional[HashEntry]:
+        """删除条目"""
+        if entry is None:
+            return None
+
+        if entry.key == key:
+            return entry.next_entry
+        else:
+            return HashEntry(
+                entry.key,
+                entry.value,
+                self._remove_entry(entry.next_entry, key)
+            )
+
+    def put(self, key: Any, value: Any) -> 'FunctionalHashTable':
+        """插入键值对"""
+        index = self._get_index(key)
+        new_buckets = self.buckets.copy()
+        new_buckets[index] = self._update_entry(new_buckets[index], key, value)
+
+        new_table = FunctionalHashTable(self.size, self.hash_func)
+        new_table.buckets = new_buckets
+        return new_table
+
+    def get(self, key: Any) -> Optional[Any]:
+        """获取值"""
+        index = self._get_index(key)
+        entry = self.buckets[index]
+
+        while entry is not None:
+            if entry.key == key:
+                return entry.value
+            entry = entry.next_entry
+
+        return None
+
+    def remove(self, key: Any) -> 'FunctionalHashTable':
+        """删除键值对"""
+        index = self._get_index(key)
+        new_buckets = self.buckets.copy()
+        new_buckets[index] = self._remove_entry(new_buckets[index], key)
+
+        new_table = FunctionalHashTable(self.size, self.hash_func)
+        new_table.buckets = new_buckets
+        return new_table
+
+    def contains(self, key: Any) -> bool:
+        """检查是否包含键"""
+        return self.get(key) is not None
+
+    def keys(self) -> List[Any]:
+        """获取所有键"""
+        result = []
+        for bucket in self.buckets:
+            entry = bucket
+            while entry is not None:
+                result.append(entry.key)
+                entry = entry.next_entry
+        return result
+
+    def values(self) -> List[Any]:
+        """获取所有值"""
+        result = []
+        for bucket in self.buckets:
+            entry = bucket
+            while entry is not None:
+                result.append(entry.value)
+                entry = entry.next_entry
+        return result
+
+    def __str__(self):
+        items = []
+        for key in self.keys():
+            items.append(f"{key}: {self.get(key)}")
+        return f"FunctionalHashTable({{{', '.join(items)}}})"
+
+# 性能分析
+# put操作：平均O(1)，最坏O(n)（当所有键哈希到同一桶时）
+# get操作：平均O(1)，最坏O(n)
+# remove操作：平均O(1)，最坏O(n)
+# 空间复杂度：O(n)
+```
+
+#### 3.2 基于树的函数式哈希表
+
+```python
+class TreeBasedHashTable:
+    """基于树的函数式哈希表：更好的性能保证"""
+
+    def __init__(self, size: int = 16, hash_func: Optional[Callable] = None):
+        self.size = size
+        self.hash_func = hash_func or hash
+        self.trees: List[Optional[FunctionalAVLTree]] = [None] * size
+
+    def _get_index(self, key: Any) -> int:
+        """获取哈希索引"""
+        hash_value = self.hash_func(key)
+        return hash_value % self.size
+
+    def put(self, key: Any, value: Any) -> 'TreeBasedHashTable':
+        """插入键值对"""
+        index = self._get_index(key)
+        new_trees = self.trees.copy()
+
+        if new_trees[index] is None:
+            new_trees[index] = FunctionalAVLTree()
+
+        # 这里需要将键值对转换为可比较的形式
+        # 由于AVL树需要可比较的键，我们使用(key, value)对
+        # 但需要修改AVLTree来支持键值对存储
+
+        # 为了简化，我们假设键是可比较的
+        new_trees[index] = new_trees[index].insert((key, value))
+
+        new_table = TreeBasedHashTable(self.size, self.hash_func)
+        new_table.trees = new_trees
+        return new_table
+
+    def get(self, key: Any) -> Optional[Any]:
+        """获取值"""
+        index = self._get_index(key)
+        tree = self.trees[index]
+
+        if tree is None:
+            return None
+
+        # 搜索键值对
+        # 这里需要修改AVLTree的搜索方法
+        # 为了演示，我们简化实现
+        return None  # 实际实现需要更复杂的搜索逻辑
+
+    def __str__(self):
+        items = []
+        for i, tree in enumerate(self.trees):
+            if tree is not None:
+                items.append(f"Bucket {i}: {tree}")
+        return f"TreeBasedHashTable({', '.join(items)})"
+```
+
+## 惰性数据结构
+
+### 1. 惰性列表
+
+```python
+from typing import Callable, Optional, Iterator, Any, Generic, TypeVar
+from dataclasses import dataclass
+from functools import lru_cache
+
+T = TypeVar('T')
+
+@dataclass
+class LazyList(Generic[T]):
+    """惰性列表：按需计算的列表"""
+    head: Optional[T]
+    tail_func: Optional[Callable[[], 'LazyList[T]']]
+    _evaluated: bool = False
+    _tail_value: Optional['LazyList[T]'] = None
+
+    def __post_init__(self):
+        if self.tail_func is not None:
+            object.__setattr__(self, '_evaluated', False)
+            object.__setattr__(self, '_tail_value', None)
+
+    def tail(self) -> 'LazyList[T]':
+        """获取尾部（惰性求值）"""
+        if self.tail_func is None:
+            return LazyList(None, None)
+
+        if not self._evaluated:
+            object.__setattr__(self, '_tail_value', self.tail_func())
+            object.__setattr__(self, '_evaluated', True)
+
+        return self._tail_value
+
+    def take(self, n: int) -> List[T]:
+        """取前n个元素"""
+        result = []
+        current = self
+
+        while n > 0 and current.head is not None:
+            result.append(current.head)
+            current = current.tail()
+            n -= 1
+
+        return result
+
+    def drop(self, n: int) -> 'LazyList[T]':
+        """跳过前n个元素"""
+        current = self
+
+        while n > 0 and current.head is not None:
+            current = current.tail()
+            n -= 1
+
+        return current
+
+    def filter(self, predicate: Callable[[T], bool]) -> 'LazyList[T]':
+        """过滤元素"""
+        def make_filtered():
+            if self.head is None:
+                return LazyList(None, None)
+
+            if predicate(self.head):
+                return LazyList(self.head, lambda: self.tail().filter(predicate))
+            else:
+                return self.tail().filter(predicate)
+
+        return LazyList(None, make_filtered)
+
+    def map(self, func: Callable[[T], Any]) -> 'LazyList[Any]':
+        """映射元素"""
+        def make_mapped():
+            if self.head is None:
+                return LazyList(None, None)
+
+            return LazyList(func(self.head), lambda: self.tail().map(func))
+
+        return LazyList(None, make_mapped)
+
+    def __iter__(self) -> Iterator[T]:
+        """迭代器"""
+        current = self
+
+        while current.head is not None:
+            yield current.head
+            current = current.tail()
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        first_10 = self.take(10)
+        if len(first_10) < 10:
+            return f"LazyList({first_10})"
+        else:
+            return f"LazyList({first_10}...)"
+
+# 惰性列表工厂函数
+def from_iterator(iterator: Iterator[T]) -> LazyList[T]:
+    """从迭代器创建惰性列表"""
+    try:
+        first_item = next(iterator)
+        return LazyList(first_item, lambda: from_iterator(iterator))
+    except StopIteration:
+        return LazyList(None, None)
+
+def from_range(start: int, end: Optional[int] = None, step: int = 1) -> LazyList[int]:
+    """创建数字范围的惰性列表"""
+    if end is None:
+        def infinite_range():
+            return LazyList(start, lambda: from_range(start + step, None, step))
+        return LazyList(start, infinite_range)
+    else:
+        if start >= end:
+            return LazyList(None, None)
+        return LazyList(start, lambda: from_range(start + step, end, step))
+
+def fibonacci() -> LazyList[int]:
+    """斐波那契数列"""
+    def fib_helper(a: int, b: int) -> LazyList[int]:
+        return LazyList(a, lambda: fib_helper(b, a + b))
+
+    return fib_helper(0, 1)
+
+def primes() -> LazyList[int]:
+    """素数序列"""
+    def is_prime(n: int) -> bool:
+        if n < 2:
+            return False
+        if n == 2:
+            return True
+        if n % 2 == 0:
+            return False
+
+        i = 3
+        while i * i <= n:
+            if n % i == 0:
+                return False
+            i += 2
+
+        return True
+
+    def prime_helper(n: int) -> LazyList[int]:
+        if is_prime(n):
+            return LazyList(n, lambda: prime_helper(n + 1))
+        else:
+            return prime_helper(n + 1)
+
+    return prime_helper(2)
+
+# 性能优化：记忆化
+@lru_cache(maxsize=128)
+def memoized_fibonacci(n: int) -> int:
+    """记忆化的斐波那契函数"""
+    if n <= 1:
+        return n
+    return memoized_fibonacci(n - 1) + memoized_fibonacci(n - 2)
+
+def lazy_fibonacci_memoized() -> LazyList[int]:
+    """记忆化的惰性斐波那契"""
+    def fib_memo_helper(n: int) -> LazyList[int]:
+        return LazyList(memoized_fibonacci(n), lambda: fib_memo_helper(n + 1))
+
+    return fib_memo_helper(0)
+```
+
+### 2. 惰性流处理
+
+```python
+from typing import Callable, Any, List, Optional
+import threading
+import queue
+import time
+
+class LazyStream:
+    """惰性流：支持并行处理的惰性数据流"""
+
+    def __init__(self, source: Callable[[], Any]):
+        self.source = source
+        self._cache = []
+        self._cache_lock = threading.Lock()
+        self._evaluated = False
+
+    def _evaluate_source(self) -> List[Any]:
+        """评估源函数"""
+        if not self._evaluated:
+            with self._cache_lock:
+                if not self._evaluated:
+                    result = self.source()
+                    self._cache = [result] if not isinstance(result, list) else result
+                    self._evaluated = True
+        return self._cache
+
+    def map(self, func: Callable[[Any], Any]) -> 'LazyStream':
+        """映射操作"""
+        def mapped_source():
+            data = self._evaluate_source()
+            return [func(item) for item in data]
+
+        return LazyStream(mapped_source)
+
+    def filter(self, predicate: Callable[[Any], bool]) -> 'LazyStream':
+        """过滤操作"""
+        def filtered_source():
+            data = self._evaluate_source()
+            return [item for item in data if predicate(item)]
+
+        return LazyStream(filtered_source)
+
+    def take(self, n: int) -> 'LazyStream':
+        """取前n个元素"""
+        def take_source():
+            data = self._evaluate_source()
+            return data[:n]
+
+        return LazyStream(take_source)
+
+    def drop(self, n: int) -> 'LazyStream':
+        """跳过前n个元素"""
+        def drop_source():
+            data = self._evaluate_source()
+            return data[n:]
+
+        return LazyStream(drop_source)
+
+    def batch(self, size: int) -> 'LazyStream':
+        """分批处理"""
+        def batch_source():
+            data = self._evaluate_source()
+            return [data[i:i + size] for i in range(0, len(data), size)]
+
+        return LazyStream(batch_source)
+
+    def parallel_map(self, func: Callable[[Any], Any], workers: int = 4) -> 'LazyStream':
+        """并行映射"""
+        def parallel_source():
+            data = self._evaluate_source()
+
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                results = list(executor.map(func, data))
+
+            return results
+
+        return LazyStream(parallel_source)
+
+    def collect(self) -> List[Any]:
+        """收集所有数据"""
+        return self._evaluate_source()
+
+    def __str__(self):
+        data = self._evaluate_source()
+        return f"LazyStream({data[:10]}{'...' if len(data) > 10 else ''})"
+```
+
+## 实际应用案例
+
+### 1. 函数式数据结构在算法中的应用
+
+```python
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+import json
+
+class FunctionalDatabase:
+    """函数式数据库：使用不可变数据结构"""
+
+    def __init__(self):
+        self.data = FunctionalHashTable()
+        self.versions = []
+        self.current_version = 0
+
+    def insert(self, key: Any, value: Any) -> 'FunctionalDatabase':
+        """插入数据：返回新版本"""
+        new_data = self.data.put(key, {
+            'value': value,
+            'timestamp': datetime.now().isoformat(),
+            'version': self.current_version + 1
+        })
+
+        new_db = FunctionalDatabase()
+        new_db.data = new_data
+        new_db.versions = self.versions + [self.data]
+        new_db.current_version = self.current_version + 1
+
+        return new_db
+
+    def update(self, key: Any, value: Any) -> 'FunctionalDatabase':
+        """更新数据：返回新版本"""
+        current_value = self.data.get(key)
+        if current_value is None:
+            return self.insert(key, value)
+
+        new_data = self.data.put(key, {
+            'value': value,
+            'timestamp': datetime.now().isoformat(),
+            'version': self.current_version + 1,
+            'previous_version': current_value['version']
+        })
+
+        new_db = FunctionalDatabase()
+        new_db.data = new_data
+        new_db.versions = self.versions + [self.data]
+        new_db.current_version = self.current_version + 1
+
+        return new_db
+
+    def delete(self, key: Any) -> 'FunctionalDatabase':
+        """删除数据：返回新版本"""
+        new_data = self.data.remove(key)
+
+        new_db = FunctionalDatabase()
+        new_db.data = new_data
+        new_db.versions = self.versions + [self.data]
+        new_db.current_version = self.current_version + 1
+
+        return new_db
+
+    def get(self, key: Any) -> Optional[Any]:
+        """获取数据"""
+        entry = self.data.get(key)
+        return entry['value'] if entry else None
+
+    def get_version(self, version: int) -> 'FunctionalDatabase':
+        """获取特定版本"""
+        if version < 0 or version >= len(self.versions):
+            raise ValueError("Invalid version")
+
+        new_db = FunctionalDatabase()
+        new_db.data = self.versions[version]
+        new_db.versions = self.versions[:version + 1]
+        new_db.current_version = version
+
+        return new_db
+
+    def rollback(self, version: int) -> 'FunctionalDatabase':
+        """回滚到特定版本"""
+        return self.get_version(version)
+
+    def diff(self, version1: int, version2: int) -> Dict[str, Any]:
+        """比较两个版本的差异"""
+        db1 = self.get_version(version1)
+        db2 = self.get_version(version2)
+
+        keys1 = set(db1.data.keys())
+        keys2 = set(db2.data.keys())
+
+        added = keys2 - keys1
+        removed = keys1 - keys2
+        modified = []
+
+        for key in keys1 & keys2:
+            val1 = db1.get(key)
+            val2 = db2.get(key)
+            if val1 != val2:
+                modified.append(key)
+
+        return {
+            'added': list(added),
+            'removed': list(removed),
+            'modified': modified
+        }
+
+    def __str__(self):
+        return f"FunctionalDatabase(version={self.current_version}, keys={len(self.data.keys())})"
+```
+
+### 2. 函数式缓存系统
+
+```python
+from typing import Any, Dict, Optional, Callable
+from datetime import datetime, timedelta
+import hashlib
+
+class FunctionalCache:
+    """函数式缓存系统：使用不可变数据结构"""
+
+    def __init__(self, max_size: int = 1000, ttl: int = 3600):
+        self.max_size = max_size
+        self.ttl = ttl  # 生存时间（秒）
+        self.data = FunctionalHashTable()
+        self.access_times = FunctionalHashTable()
+        self.access_count = 0
+
+    def _generate_key(self, key: Any) -> str:
+        """生成缓存键"""
+        if isinstance(key, (str, int, float, bool)):
+            return str(key)
+        else:
+            return hashlib.md5(str(key).encode()).hexdigest()
+
+    def _is_expired(self, key: str) -> bool:
+        """检查是否过期"""
+        access_info = self.access_times.get(key)
+        if access_info is None:
+            return True
+
+        access_time = datetime.fromisoformat(access_info['timestamp'])
+        return datetime.now() - access_time > timedelta(seconds=self.ttl)
+
+    def _evict_if_needed(self) -> 'FunctionalCache':
+        """如果需要，驱逐最少使用的条目"""
+        if self.access_count < self.max_size:
+            return self
+
+        # 简单的LRU策略：删除最旧的条目
+        keys = self.access_times.keys()
+        if keys:
+            oldest_key = min(keys, key=lambda k: self.access_times.get(k)['timestamp'])
+            new_cache = FunctionalCache(self.max_size, self.ttl)
+            new_cache.data = self.data.remove(oldest_key)
+            new_cache.access_times = self.access_times.remove(oldest_key)
+            new_cache.access_count = self.access_count - 1
+            return new_cache
+
+        return self
+
+    def get(self, key: Any) -> Optional[Any]:
+        """获取缓存值"""
+        cache_key = self._generate_key(key)
+
+        if self._is_expired(cache_key):
+            return None
+
+        # 更新访问时间
+        new_cache = self._evict_if_needed()
+        new_cache.access_times = new_cache.access_times.put(cache_key, {
+            'timestamp': datetime.now().isoformat(),
+            'count': new_cache.access_times.get(cache_key, {'count': 0})['count'] + 1
+        })
+
+        return new_cache.data.get(cache_key)
+
+    def put(self, key: Any, value: Any) -> 'FunctionalCache':
+        """设置缓存值"""
+        cache_key = self._generate_key(key)
+
+        new_cache = self._evict_if_needed()
+        new_cache.data = new_cache.data.put(cache_key, value)
+        new_cache.access_times = new_cache.access_times.put(cache_key, {
+            'timestamp': datetime.now().isoformat(),
+            'count': new_cache.access_times.get(cache_key, {'count': 0})['count'] + 1
+        })
+        new_cache.access_count = new_cache.access_count + 1
+
+        return new_cache
+
+    def remove(self, key: Any) -> 'FunctionalCache':
+        """删除缓存值"""
+        cache_key = self._generate_key(key)
+
+        new_cache = FunctionalCache(self.max_size, self.ttl)
+        new_cache.data = self.data.remove(cache_key)
+        new_cache.access_times = self.access_times.remove(cache_key)
+        new_cache.access_count = max(0, self.access_count - 1)
+
+        return new_cache
+
+    def clear(self) -> 'FunctionalCache':
+        """清空缓存"""
+        return FunctionalCache(self.max_size, self.ttl)
+
+    def stats(self) -> Dict[str, Any]:
+        """获取统计信息"""
+        return {
+            'total_keys': self.access_count,
+            'valid_keys': len([k for k in self.access_times.keys() if not self._is_expired(k)]),
+            'expired_keys': len([k for k in self.access_times.keys() if self._is_expired(k)]),
+            'hit_rate': self._calculate_hit_rate()
+        }
+
+    def _calculate_hit_rate(self) -> float:
+        """计算命中率（简化版）"""
+        # 实际实现需要跟踪命中和未命中次数
+        return 0.0
+
+    def __str__(self):
+        stats = self.stats()
+        return f"FunctionalCache(keys={stats['valid_keys']}, hit_rate={stats['hit_rate']:.2f})"
+```
+
+## 总结
+
+本章深入探讨了函数式数据结构的设计原理和实现策略：
+
+### 核心概念：
+
+1. **不可变性**：数据一旦创建就不能修改，保证线程安全和引用透明性
+2. **结构共享**：不同版本的数据结构共享相同的子结构，提高内存效率
+3. **持久化**：所有版本都被保留，支持版本控制和回滚操作
+4. **惰性求值**：按需计算，提高性能和内存效率
+
+### 实现策略：
+
+1. **完全复制**：简单但低效的不可变性实现
+2. **结构共享**：高效的不可变性实现，只复制修改的路径
+3. **平衡树**：AVL树和红黑树的函数式实现
+4. **哈希表**：基于链地址法和树的函数式哈希表
+
+### 性能优化：
+
+1. **位操作优化**：使用位映射提高数组访问效率
+2. **记忆化**：缓存计算结果避免重复计算
+3. **惰性求值**：按需计算减少不必要的计算
+4. **并行处理**：利用多核处理器提高性能
+
+### 实际应用：
+
+1. **版本控制系统**：支持数据的历史版本管理
+2. **缓存系统**：高效的数据缓存和淘汰策略
+3. **函数式数据库**：支持事务和回滚的数据库系统
+4. **流处理系统**：支持并行和惰性的数据处理
+
+通过深入理解这些概念和技术，学员可以设计出高性能、可维护的函数式数据结构，为构建复杂的软件系统提供坚实的基础。这些技术不仅在理论上有重要意义，在实际工程中也有广泛应用。

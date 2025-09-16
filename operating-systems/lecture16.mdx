@@ -1,0 +1,3390 @@
+---
+sidebar_position: 16
+title: 第16讲 - 安全与现代系统
+description: 操作系统安全机制、访问控制、容器技术和AI时代的操作系统挑战
+---
+
+# 第16讲 - 安全与现代系统
+
+## 课程概述
+
+本讲深入探讨现代操作系统的安全机制和前沿技术，包括访问控制、容器技术、虚拟化安全以及AI时代面临的操作系统挑战。通过理解这些现代技术，学习如何构建安全、高效的现代计算系统。
+
+## 学习目标
+
+- 理解操作系统安全的基本原理
+- 掌握访问控制和权限管理机制
+- 学习容器技术和虚拟化安全
+- 了解现代操作系统的架构挑战
+- 认识AI时代对操作系统的新要求
+
+## 主要内容
+
+### 1. 操作系统安全基础
+
+#### 1.1 安全威胁和攻击类型
+
+```c
+#include <linux/security.h>
+#include <linux/cred.h>
+#include <linux/mutex.h>
+
+// 安全威胁类型
+typedef enum {
+    THREAT_UNAUTHORIZED_ACCESS,     // 未授权访问
+    THREAT_PRIVILEGE_ESCALATION,     // 权限提升
+    THREAT_DENIAL_OF_SERVICE,       // 拒绝服务
+    THREAT_DATA_LEAKAGE,            // 数据泄露
+    THREAT_MALWARE,                 // 恶意软件
+    THREAT_ROOTKIT,                 // Rootkit
+    THREAT_SIDE_CHANNEL,            // 侧信道攻击
+    THREAT_BUFFER_OVERFLOW,         // 缓冲区溢出
+    THREAT_RACE_CONDITION,          // 竞态条件
+    THREAT_CRYPTOGRAPHIC_ATTACK     // 加密攻击
+} security_threat_type;
+
+// 攻击向量
+typedef enum {
+    ATTACK_VECTOR_NETWORK,          // 网络攻击
+    ATTACK_VECTOR_LOCAL,            // 本地攻击
+    ATTACK_VECTOR_PHYSICAL,         // 物理攻击
+    ATTACK_VECTOR_SOCIAL_ENGINEERING, // 社会工程
+    ATTACK_VECTOR_SUPPLY_CHAIN      // 供应链攻击
+} attack_vector;
+
+// 安全事件结构
+typedef struct security_event {
+    u64 event_id;                   // 事件ID
+    u64 timestamp;                 // 时间戳
+    security_threat_type threat_type; // 威胁类型
+    attack_vector attack_vector;    // 攻击向量
+    pid_t pid;                      // 进程ID
+    uid_t uid;                      // 用户ID
+    gid_t gid;                      // 组ID
+    char comm[TASK_COMM_LEN];       // 进程名
+    char details[256];             // 详细信息
+    u32 severity;                   // 严重程度
+    u32 status;                     // 处理状态
+    struct list_head list;          // 事件链表
+} security_event;
+
+// 安全上下文
+typedef struct security_context {
+    char label[256];               // 安全标签
+    u32 level;                     // 安全级别
+    u32 category;                  // 安全类别
+    struct cred cred;              // 凭证
+    struct list_head acl;           // 访问控制列表
+    spinlock_t lock;               // 上下文锁
+} security_context;
+
+// 安全监控系统
+typedef struct security_monitor {
+    struct list_head events;        // 安全事件列表
+    struct list_head alerts;        // 安全警报列表
+    spinlock_t event_lock;          // 事件锁
+    spinlock_t alert_lock;          // 警报锁
+    struct mutex config_mutex;      // 配置锁
+    atomic_t event_count;          // 事件计数
+    atomic_t alert_count;          // 警报计数
+    u32 log_level;                 // 日志级别
+    u32 alert_threshold;           // 警报阈值
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list stats_timer;  // 统计定时器
+    struct proc_dir_entry* proc_entry; // /proc条目
+} security_monitor;
+
+// 初始化安全监控
+int security_monitor_init(security_monitor* monitor) {
+    printk(KERN_INFO "初始化安全监控系统\n");
+
+    // 初始化链表
+    INIT_LIST_HEAD(&monitor->events);
+    INIT_LIST_HEAD(&monitor->alerts);
+
+    // 初始化锁和原子变量
+    spin_lock_init(&monitor->event_lock);
+    spin_lock_init(&monitor->alert_lock);
+    mutex_init(&monitor->config_mutex);
+    atomic_set(&monitor->event_count, 0);
+    atomic_set(&monitor->alert_count, 0);
+
+    // 设置默认参数
+    monitor->log_level = 1;
+    monitor->alert_threshold = 10;
+
+    // 创建工作队列
+    monitor->workqueue = alloc_workqueue("security_monitor", WQ_MEM_RECLAIM, 0);
+    if (!monitor->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        return -ENOMEM;
+    }
+
+    // 初始化定时器
+    setup_timer(&monitor->stats_timer, security_stats_timer, (unsigned long)monitor);
+
+    // 创建/proc条目
+    monitor->proc_entry = proc_create("security_monitor", 0444, NULL, &security_monitor_proc_ops);
+    if (!monitor->proc_entry) {
+        destroy_workqueue(monitor->workqueue);
+        return -ENOMEM;
+    }
+
+    // 启动统计定时器
+    mod_timer(&monitor->stats_timer, jiffies + 60 * HZ);
+
+    printk(KERN_INFO "安全监控系统初始化成功\n");
+    return 0;
+}
+
+// 记录安全事件
+void security_event_log(security_monitor* monitor, security_threat_type threat_type,
+                        attack_vector attack_vector, const char* details, u32 severity) {
+    security_event* event;
+    unsigned long flags;
+
+    // 分配事件结构
+    event = kzalloc(sizeof(security_event), GFP_ATOMIC);
+    if (!event) {
+        printk(KERN_ERR "无法分配安全事件\n");
+        return;
+    }
+
+    // 填充事件信息
+    event->event_id = atomic_inc_return(&monitor->event_count);
+    event->timestamp = ktime_get_real_seconds();
+    event->threat_type = threat_type;
+    event->attack_vector = attack_vector;
+    event->pid = current->pid;
+    event->uid = current_uid();
+    event->gid = current_gid();
+    strncpy(event->comm, current->comm, TASK_COMM_LEN);
+    strncpy(event->details, details, sizeof(event->details) - 1);
+    event->severity = severity;
+    event->status = 0; // 待处理
+
+    // 添加到事件列表
+    spin_lock_irqsave(&monitor->event_lock, flags);
+    list_add_tail(&event->list, &monitor->events);
+    spin_unlock_irqrestore(&monitor->event_lock, flags);
+
+    // 检查是否需要生成警报
+    if (severity >= monitor->alert_threshold) {
+        security_alert_generate(monitor, event);
+    }
+
+    // 输出日志
+    if (severity <= monitor->log_level) {
+        printk(KERN_WARNING "安全事件 [ID:%llu PID:%d UID:%d]: %s\n",
+               event->event_id, event->pid, event->uid, event->details);
+    }
+}
+
+// 生成安全警报
+void security_alert_generate(security_monitor* monitor, security_event* event) {
+    security_alert* alert;
+    unsigned long flags;
+
+    // 分配警报结构
+    alert = kzalloc(sizeof(security_alert), GFP_ATOMIC);
+    if (!alert) {
+        printk(KERN_ERR "无法分配安全警报\n");
+        return;
+    }
+
+    // 填充警报信息
+    alert->alert_id = atomic_inc_return(&monitor->alert_count);
+    alert->event_id = event->event_id;
+    alert->timestamp = ktime_get_real_seconds();
+    alert->severity = event->severity;
+    alert->status = 1; // 活跃
+    strncpy(alert->message, event->details, sizeof(alert->message) - 1);
+
+    // 添加到警报列表
+    spin_lock_irqsave(&monitor->alert_lock, flags);
+    list_add_tail(&alert->list, &monitor->alerts);
+    spin_unlock_irqrestore(&monitor->alert_lock, flags);
+
+    // 输出警报
+    printk(KERN_ALERT "安全警报 [ID:%llu]: %s\n", alert->alert_id, alert->message);
+
+    // 启动警报处理工作
+    queue_work(monitor->workqueue, &alert->work);
+}
+
+// 处理安全警报
+void security_alert_handler(struct work_struct* work) {
+    security_alert* alert = container_of(work, security_alert, work);
+
+    printk(KERN_INFO "处理安全警报: %llu\n", alert->alert_id);
+
+    // 实现警报处理逻辑
+    // 1. 隔离受影响的进程
+    // 2. 收集取证信息
+    // 3. 通知安全管理员
+    // 4. 更新安全策略
+
+    // 标记警报为已处理
+    alert->status = 2; // 已处理
+
+    printk(KERN_INFO "安全警报处理完成: %llu\n", alert->alert_id);
+}
+
+// 检测异常行为
+void security_detect_anomalies(security_monitor* monitor) {
+    struct list_head* entry;
+    security_event* event;
+    unsigned long flags;
+
+    // 分析最近的安全事件
+    spin_lock_irqsave(&monitor->event_lock, flags);
+    list_for_each(entry, &monitor->events) {
+        event = list_entry(entry, security_event, list);
+
+        // 检测异常模式
+        if (security_is_anomalous(event)) {
+            // 记录异常事件
+            security_event_log(monitor, THREAT_ANOMALY_BEHAVIOR,
+                              ATTACK_VECTOR_LOCAL, "检测到异常行为", 2);
+        }
+    }
+    spin_unlock_irqrestore(&monitor->event_lock, flags);
+}
+
+// 统计定时器
+void security_stats_timer(unsigned long data) {
+    security_monitor* monitor = (security_monitor*)data;
+
+    // 重新调度定时器
+    mod_timer(&monitor->stats_timer, jiffies + 60 * HZ);
+
+    // 执行统计分析
+    security_generate_statistics(monitor);
+
+    // 检测异常行为
+    security_detect_anomalies(monitor);
+}
+
+// 生成统计信息
+void security_generate_statistics(security_monitor* monitor) {
+    // 实现统计信息生成逻辑
+    // 1. 事件数量统计
+    // 2. 威胁类型分析
+    // 3. 攻击向量分析
+    // 4. 时间趋势分析
+}
+
+// 清理安全监控
+void security_monitor_cleanup(security_monitor* monitor) {
+    printk(KERN_INFO "清理安全监控系统\n");
+
+    // 停止定时器
+    del_timer_sync(&monitor->stats_timer);
+
+    // 清理事件列表
+    security_cleanup_events(monitor);
+
+    // 清理警报列表
+    security_cleanup_alerts(monitor);
+
+    // 销毁工作队列
+    if (monitor->workqueue) {
+        destroy_workqueue(monitor->workqueue);
+    }
+
+    // 删除/proc条目
+    if (monitor->proc_entry) {
+        remove_proc_entry("security_monitor", NULL);
+    }
+
+    printk(KERN_INFO "安全监控系统清理完成\n");
+}
+```
+
+#### 1.2 安全机制和防护
+
+```c
+#include <linux/security.h>
+#include <linux/lsm_hooks.h>
+#include <linux/ima.h>
+#include <linux/evm.h>
+
+// Linux安全模块（LSM）钩子
+static struct security_hook_list security_hooks[] = {
+    LSM_HOOK_INIT(binder_set_context_mgr, security_binder_set_context_mgr),
+    LSM_HOOK_INIT(binder_transaction, security_binder_transaction),
+    LSM_HOOK_INIT(binder_transfer_binder, security_binder_transfer_binder),
+    LSM_HOOK_INIT(ptrace_access_check, security_ptrace_access_check),
+    LSM_HOOK_INIT(ptrace_traceme, security_ptrace_traceme),
+    LSM_HOOK_INIT(capget, security_capget),
+    LSM_HOOK_INIT(capset, security_capset),
+    LSM_HOOK_INIT(capable, security_capable),
+    LSM_HOOK_INIT(quotactl, security_quotactl),
+    LSM_HOOK_INIT(quota_on, security_quota_on),
+    LSM_HOOK_INIT(syslog, security_syslog),
+    LSM_HOOK_INIT(settime, security_settime),
+    LSM_HOOK_INIT(vm_enough_memory, security_vm_enough_memory),
+    LSM_HOOK_INIT(bprm_set_creds, security_bprm_set_creds),
+    LSM_HOOK_INIT(bprm_check_security, security_bprm_check_security),
+    LSM_HOOK_INIT(bprm_secureexec, security_bprm_secureexec),
+    LSM_HOOK_INIT(sb_alloc_security, security_sb_alloc_security),
+    LSM_HOOK_INIT(sb_free_security, security_sb_free_security),
+    LSM_HOOK_INIT(sb_copy_data, security_sb_copy_data),
+    LSM_HOOK_INIT(sb_remount, security_sb_remount),
+    LSM_HOOK_INIT(sb_kern_mount, security_sb_kern_mount),
+    LSM_HOOK_INIT(sb_show_options, security_sb_show_options),
+    LSM_HOOK_INIT(sb_statfs, security_sb_statfs),
+    LSM_HOOK_INIT(sb_mount, security_sb_mount),
+    LSM_HOOK_INIT(sb_umount, security_sb_umount),
+    LSM_HOOK_INIT(sb_pivotroot, security_sb_pivotroot),
+    LSM_HOOK_INIT(sb_set_mnt_opts, security_sb_set_mnt_opts),
+    LSM_HOOK_INIT(sb_clone_mnt_opts, security_sb_clone_mnt_opts),
+    LSM_HOOK_INIT(sb_add_mnt_opt, security_sb_add_mnt_opt),
+    LSM_HOOK_INIT(dentry_init_security, security_dentry_init_security),
+    LSM_HOOK_INIT(dentry_create_files_as, security_dentry_create_files_as),
+    LSM_HOOK_INIT(path_unlink, security_path_unlink),
+    LSM_HOOK_INIT(path_mkdir, security_path_mkdir),
+    LSM_HOOK_INIT(path_rmdir, security_path_rmdir),
+    LSM_HOOK_INIT(path_mknod, security_path_mknod),
+    LSM_HOOK_INIT(path_truncate, security_path_truncate),
+    LSM_HOOK_INIT(path_symlink, security_path_symlink),
+    LSM_HOOK_INIT(path_link, security_path_link),
+    LSM_HOOK_INIT(path_rename, security_path_rename),
+    LSM_HOOK_INIT(path_chmod, security_path_chmod),
+    LSM_HOOK_INIT(path_chown, security_path_chown),
+    LSM_HOOK_INIT(path_chroot, security_path_chroot),
+    LSM_HOOK_INIT(inode_alloc_security, security_inode_alloc_security),
+    LSM_HOOK_INIT(inode_free_security, security_inode_free_security),
+    LSM_HOOK_INIT(inode_init_security, security_inode_init_security),
+    LSM_HOOK_INIT(inode_create, security_inode_create),
+    LSM_HOOK_INIT(inode_link, security_inode_link),
+    LSM_HOOK_INIT(inode_unlink, security_inode_unlink),
+    LSM_HOOK_INIT(inode_symlink, security_inode_symlink),
+    LSM_HOOK_INIT(inode_mkdir, security_inode_mkdir),
+    LSM_HOOK_INIT(inode_rmdir, security_inode_rmdir),
+    LSM_HOOK_INIT(inode_mknod, security_inode_mknod),
+    LSM_HOOK_INIT(inode_rename, security_inode_rename),
+    LSM_HOOK_INIT(inode_readlink, security_inode_readlink),
+    LSM_HOOK_INIT(inode_follow_link, security_inode_follow_link),
+    LSM_HOOK_INIT(inode_permission, security_inode_permission),
+    LSM_HOOK_INIT(inode_setattr, security_inode_setattr),
+    LSM_HOOK_INIT(inode_getattr, security_inode_getattr),
+    LSM_HOOK_INIT(inode_setxattr, security_inode_setxattr),
+    LSM_HOOK_INIT(inode_post_setxattr, security_inode_post_setxattr),
+    LSM_HOOK_INIT(inode_getxattr, security_inode_getxattr),
+    LSM_HOOK_INIT(inode_listxattr, security_inode_listxattr),
+    LSM_HOOK_INIT(inode_removexattr, security_inode_removexattr),
+    LSM_HOOK_INIT(inode_need_killpriv, security_inode_need_killpriv),
+    LSM_HOOK_INIT(inode_killpriv, security_inode_killpriv),
+    LSM_HOOK_INIT(inode_getsecurity, security_inode_getsecurity),
+    LSM_HOOK_INIT(inode_setsecurity, security_inode_setsecurity),
+    LSM_HOOK_INIT(inode_listsecurity, security_inode_listsecurity),
+    LSM_HOOK_INIT(file_permission, security_file_permission),
+    LSM_HOOK_INIT(file_alloc_security, security_file_alloc_security),
+    LSM_HOOK_INIT(file_free_security, security_file_free_security),
+    LSM_HOOK_INIT(file_ioctl, security_file_ioctl),
+    LSM_HOOK_INIT(mmap_file, security_mmap_file),
+    LSM_HOOK_INIT(mmap_addr, security_mmap_addr),
+    LSM_HOOK_INIT(file_mprotect, security_file_mprotect),
+    LSM_HOOK_INIT(file_lock, security_file_lock),
+    LSM_HOOK_INIT(file_fcntl, security_file_fcntl),
+    LSM_HOOK_INIT(file_set_fowner, security_file_set_fowner),
+    LSM_HOOK_INIT(file_send_sigiotask, security_file_send_sigiotask),
+    LSM_HOOK_INIT(file_receive, security_file_receive),
+    LSM_HOOK_INIT(file_open, security_file_open),
+    LSM_HOOK_INIT(task_create, security_task_create),
+    LSM_HOOK_INIT(task_free, security_task_free),
+    LSM_HOOK_INIT(cred_alloc_blank, security_cred_alloc_blank),
+    LSM_HOOK_INIT(cred_free, security_cred_free),
+    LSM_HOOK_INIT(cred_prepare, security_cred_prepare),
+    LSM_HOOK_INIT(cred_transfer, security_cred_transfer),
+    LSM_HOOK_INIT(kernel_act_as, security_kernel_act_as),
+    LSM_HOOK_INIT(kernel_create_files_as, security_kernel_create_files_as),
+    LSM_HOOK_INIT(kernel_module_request, security_kernel_module_request),
+    LSM_HOOK_INIT(kernel_read_file, security_kernel_read_file),
+    LSM_HOOK_INIT(task_fix_setuid, security_task_fix_setuid),
+    LSM_HOOK_INIT(task_fix_setgid, security_task_fix_setgid),
+    LSM_HOOK_INIT(task_setpgid, security_task_setpgid),
+    LSM_HOOK_INIT(task_getpgid, security_task_getpgid),
+    LSM_HOOK_INIT(task_getsid, security_task_getsid),
+    LSM_HOOK_INIT(task_getsecid, security_task_getsecid),
+    LSM_HOOK_INIT(task_setnice, security_task_setnice),
+    LSM_HOOK_INIT(task_setioprio, security_task_setioprio),
+    LSM_HOOK_INIT(task_getioprio, security_task_getioprio),
+    LSM_HOOK_INIT(task_setrlimit, security_task_setrlimit),
+    LSM_HOOK_INIT(task_setscheduler, security_task_setscheduler),
+    LSM_HOOK_INIT(task_getscheduler, security_task_getscheduler),
+    LSM_HOOK_INIT(task_movememory, security_task_movememory),
+    LSM_HOOK_INIT(task_kill, security_task_kill),
+    LSM_HOOK_INIT(task_wait, security_task_wait),
+    LSM_HOOK_INIT(task_prctl, security_task_prctl),
+    LSM_HOOK_INIT(task_to_inode, security_task_to_inode),
+    LSM_HOOK_INIT(ipc_permission, security_ipc_permission),
+    LSM_HOOK_INIT(ipc_getsecid, security_ipc_getsecid),
+    LSM_HOOK_INIT(msg_msg_alloc_security, security_msg_msg_alloc_security),
+    LSM_HOOK_INIT(msg_msg_free_security, security_msg_msg_free_security),
+    LSM_HOOK_INIT(msg_queue_alloc_security, security_msg_queue_alloc_security),
+    LSM_HOOK_INIT(msg_queue_free_security, security_msg_queue_free_security),
+    LSM_HOOK_INIT(msg_queue_associate, security_msg_queue_associate),
+    LSM_HOOK_INIT(msg_queue_msgctl, security_msg_queue_msgctl),
+    LSM_HOOK_INIT(msg_queue_msgsnd, security_msg_queue_msgsnd),
+    LSM_HOOK_INIT(msg_queue_msgrcv, security_msg_queue_msgrcv),
+    LSM_HOOK_INIT(shm_alloc_security, security_shm_alloc_security),
+    LSM_HOOK_INIT(shm_free_security, security_shm_free_security),
+    LSM_HOOK_INIT(shm_associate, security_shm_associate),
+    LSM_HOOK_INIT(shm_shmctl, security_shm_shmctl),
+    LSM_HOOK_INIT(shm_shmat, security_shm_shmat),
+    LSM_HOOK_INIT(sem_alloc_security, security_sem_alloc_security),
+    LSM_HOOK_INIT(sem_free_security, security_sem_free_security),
+    LSM_HOOK_INIT(sem_associate, security_sem_associate),
+    LSM_HOOK_INIT(sem_semctl, security_sem_semctl),
+    LSM_HOOK_INIT(sem_semop, security_sem_semop),
+    LSM_HOOK_INIT(netlink_send, security_netlink_send),
+    LSM_HOOK_INIT(d_instantiate, security_d_instantiate),
+    LSM_HOOK_INIT(getprocattr, security_getprocattr),
+    LSM_HOOK_INIT(setprocattr, security_setprocattr),
+    LSM_HOOK_INIT(ismaclabel, security_ismaclabel),
+    LSM_HOOK_INIT(secid_to_secctx, security_secid_to_secctx),
+    LSM_HOOK_INIT(secctx_to_secid, security_secctx_to_secid),
+    LSM_HOOK_INIT(release_secctx, security_release_secctx),
+    LSM_HOOK_INIT(inode_invalidate_secctx, security_inode_invalidate_secctx),
+    LSM_HOOK_INIT(inode_notifysecctx, security_inode_notifysecctx),
+    LSM_HOOK_INIT(inode_setsecctx, security_inode_setsecctx),
+    LSM_HOOK_INIT(inode_getsecctx, security_inode_getsecctx),
+#ifdef CONFIG_SECURITY_NETWORK
+    LSM_HOOK_INIT(unix_stream_connect, security_unix_stream_connect),
+    LSM_HOOK_INIT(unix_may_send, security_unix_may_send),
+    LSM_HOOK_INIT(socket_create, security_socket_create),
+    LSM_HOOK_INIT(socket_post_create, security_socket_post_create),
+    LSM_HOOK_INIT(socket_bind, security_socket_bind),
+    LSM_HOOK_INIT(socket_connect, security_socket_connect),
+    LSM_HOOK_INIT(socket_listen, security_socket_listen),
+    LSM_HOOK_INIT(socket_accept, security_socket_accept),
+    LSM_HOOK_INIT(socket_sendmsg, security_socket_sendmsg),
+    LSM_HOOK_INIT(socket_recvmsg, security_socket_recvmsg),
+    LSM_HOOK_INIT(socket_getsockname, security_socket_getsockname),
+    LSM_HOOK_INIT(socket_getpeername, security_socket_getpeername),
+    LSM_HOOK_INIT(socket_getsockopt, security_socket_getsockopt),
+    LSM_HOOK_INIT(socket_setsockopt, security_socket_setsockopt),
+    LSM_HOOK_INIT(socket_shutdown, security_socket_shutdown),
+    LSM_HOOK_INIT(sock_graft, security_sock_graft),
+    LSM_HOOK_INIT(sock_release, security_sock_release),
+    LSM_HOOK_INIT(sk_alloc_security, security_sk_alloc_security),
+    LSM_HOOK_INIT(sk_free_security, security_sk_free_security),
+    LSM_HOOK_INIT(sk_clone, security_sk_clone),
+    LSM_HOOK_INIT(sk_getsecid, security_sk_getsecid),
+#endif
+#ifdef CONFIG_SECURITY_NETWORK_XFRM
+    LSM_HOOK_INIT(xfrm_policy_alloc_security, security_xfrm_policy_alloc_security),
+    LSM_HOOK_INIT(xfrm_policy_clone_security, security_xfrm_policy_clone_security),
+    LSM_HOOK_INIT(xfrm_policy_free_security, security_xfrm_policy_free_security),
+    LSM_HOOK_INIT(xfrm_policy_delete_security, security_xfrm_policy_delete_security),
+    LSM_HOOK_INIT(xfrm_state_alloc_security, security_xfrm_state_alloc_security),
+    LSM_HOOK_INIT(xfrm_state_free_security, security_xfrm_state_free_security),
+    LSM_HOOK_INIT(xfrm_state_delete_security, security_xfrm_state_delete_security),
+    LSM_HOOK_INIT(xfrm_policy_lookup, security_xfrm_policy_lookup),
+    LSM_HOOK_INIT(xfrm_state_pol_flow_match, security_xfrm_state_pol_flow_match),
+    LSM_HOOK_INIT(xfrm_decode_session, security_xfrm_decode_session),
+#endif
+#ifdef CONFIG_KEYS
+    LSM_HOOK_INIT(key_alloc, security_key_alloc),
+    LSM_HOOK_INIT(key_free, security_key_free),
+    LSM_HOOK_INIT(key_permission, security_key_permission),
+    LSM_HOOK_INIT(key_getsecurity, security_key_getsecurity),
+#endif
+#ifdef CONFIG_AUDIT
+    LSM_HOOK_INIT(audit_rule_init, security_audit_rule_init),
+    LSM_HOOK_INIT(audit_rule_known, security_audit_rule_known),
+    LSM_HOOK_INIT(audit_rule_match, security_audit_rule_match),
+    LSM_HOOK_INIT(audit_rule_free, security_audit_rule_free),
+#endif
+};
+
+// 文件完整性检查
+typedef struct integrity_checker {
+    struct list_head file_list;      // 文件列表
+    struct list_head hash_list;      // 哈希列表
+    spinlock_t lock;                 // 检查器锁
+    struct mutex scan_mutex;         // 扫描互斥锁
+    atomic_t file_count;             // 文件计数
+    atomic_t violations;             // 违规计数
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list scan_timer;     // 扫描定时器
+    struct notifier_block notifier;  // 通知器
+} integrity_checker;
+
+// 文件完整性记录
+typedef struct integrity_record {
+    char path[PATH_MAX];            // 文件路径
+    char hash[64];                  // 文件哈希
+    u64 size;                       // 文件大小
+    u64 mtime;                      // 修改时间
+    u64 ctime;                      // 创建时间
+    uid_t uid;                      // 用户ID
+    gid_t gid;                      // 组ID
+    mode_t mode;                    // 文件模式
+    u32 flags;                      // 标志
+    struct list_head file_list;      // 文件列表
+    struct list_head hash_list;      // 哈希列表
+    atomic_t ref_count;              // 引用计数
+} integrity_record;
+
+// 初始化完整性检查器
+int integrity_checker_init(integrity_checker* checker) {
+    printk(KERN_INFO "初始化文件完整性检查器\n");
+
+    // 初始化链表
+    INIT_LIST_HEAD(&checker->file_list);
+    INIT_LIST_HEAD(&checker->hash_list);
+
+    // 初始化锁和原子变量
+    spin_lock_init(&checker->lock);
+    mutex_init(&checker->scan_mutex);
+    atomic_set(&checker->file_count, 0);
+    atomic_set(&checker->violations, 0);
+
+    // 创建工作队列
+    checker->workqueue = alloc_workqueue("integrity_checker", WQ_MEM_RECLAIM, 0);
+    if (!checker->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        return -ENOMEM;
+    }
+
+    // 初始化定时器
+    setup_timer(&checker->scan_timer, integrity_scan_timer, (unsigned long)checker);
+
+    // 注册文件系统通知器
+    checker->notifier.notifier_call = integrity_fs_notify;
+    register_filesystem_notifier(&checker->notifier);
+
+    // 启动扫描定时器
+    mod_timer(&checker->scan_timer, jiffies + 3600 * HZ); // 每小时扫描
+
+    printk(KERN_INFO "文件完整性检查器初始化成功\n");
+    return 0;
+}
+
+// 扫描文件完整性
+void integrity_scan_files(integrity_checker* checker) {
+    struct path root_path;
+    struct file* filp;
+    int err;
+
+    printk(KERN_INFO "开始文件完整性扫描\n");
+
+    // 获取根目录
+    err = kern_path("/", LOOKUP_FOLLOW, &root_path);
+    if (err) {
+        printk(KERN_ERR "无法获取根目录\n");
+        return;
+    }
+
+    // 打开根目录
+    filp = dentry_open(&root_path, O_RDONLY, current_cred());
+    if (IS_ERR(filp)) {
+        printk(KERN_ERR "无法打开根目录\n");
+        path_put(&root_path);
+        return;
+    }
+
+    // 递归扫描目录
+    integrity_scan_directory(checker, filp, filp->f_path.dentry);
+
+    // 关闭文件
+    filp_close(filp, NULL);
+
+    printk(KERN_INFO "文件完整性扫描完成\n");
+}
+
+// 扫描目录
+void integrity_scan_directory(integrity_checker* checker, struct file* dir,
+                             struct dentry* dentry) {
+    struct file* filp;
+    struct inode* inode = dentry->d_inode;
+    struct dir_context ctx;
+    int err;
+
+    // 检查目录权限
+    if (!inode || !S_ISDIR(inode->i_mode)) {
+        return;
+    }
+
+    // 打开目录
+    filp = dentry_open(&((struct path){.mnt = dir->f_path.mnt, .dentry = dentry}),
+                      O_RDONLY, current_cred());
+    if (IS_ERR(filp)) {
+        return;
+    }
+
+    // 设置目录上下文
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.pos = 0;
+
+    // 遍历目录
+    while (1) {
+        err = iterate_dir(filp, &ctx);
+        if (err < 0) {
+            break;
+        }
+
+        // 检查文件完整性
+        if (ctx.pos) {
+            struct dentry* child = dentry->d_inode->i_op->lookup(dentry->d_inode, &ctx.dentry, 0);
+            if (child) {
+                if (child->d_inode) {
+                    if (S_ISDIR(child->d_inode->i_mode)) {
+                        // 递归扫描子目录
+                        integrity_scan_directory(checker, filp, child);
+                    } else if (S_ISREG(child->d_inode->i_mode)) {
+                        // 检查文件完整性
+                        integrity_check_file(checker, child);
+                    }
+                }
+                dput(child);
+            }
+        }
+
+        if (err == 0) {
+            break;
+        }
+    }
+
+    // 关闭目录
+    filp_close(filp, NULL);
+}
+
+// 检查文件完整性
+void integrity_check_file(integrity_checker* checker, struct dentry* dentry) {
+    struct file* filp;
+    struct integrity_record* record;
+    char current_hash[64];
+    int err;
+
+    // 打开文件
+    filp = dentry_open(&((struct path){.mnt = current->fs->root.mnt, .dentry = dentry}),
+                      O_RDONLY, current_cred());
+    if (IS_ERR(filp)) {
+        return;
+    }
+
+    // 计算文件哈希
+    err = integrity_calculate_hash(filp, current_hash, sizeof(current_hash));
+    if (err) {
+        filp_close(filp, NULL);
+        return;
+    }
+
+    // 查找现有记录
+    record = integrity_find_record(checker, dentry->d_name.name);
+    if (record) {
+        // 比较哈希值
+        if (strcmp(record->hash, current_hash) != 0) {
+            // 文件被修改
+            printk(KERN_WARNING "文件完整性违规: %s\n", dentry->d_name.name);
+            atomic_inc(&checker->violations);
+
+            // 生成安全事件
+            security_event_log(NULL, THREAT_FILE_TAMPERING,
+                              ATTACK_VECTOR_LOCAL, "文件被非法修改", 3);
+        }
+    } else {
+        // 创建新记录
+        record = integrity_create_record(dentry, current_hash);
+        if (record) {
+            spin_lock(&checker->lock);
+            list_add_tail(&record->file_list, &checker->file_list);
+            list_add_tail(&record->hash_list, &checker->hash_list);
+            atomic_inc(&checker->file_count);
+            spin_unlock(&checker->lock);
+        }
+    }
+
+    // 关闭文件
+    filp_close(filp, NULL);
+}
+
+// 计算文件哈希
+int integrity_calculate_hash(struct file* filp, char* hash, size_t hash_size) {
+    struct crypto_shash* tfm;
+    struct shash_desc* desc;
+    char* buffer;
+    loff_t pos = 0;
+    int err;
+    ssize_t bytes_read;
+
+    // 分配加密算法
+    tfm = crypto_alloc_shash("sha256", 0, 0);
+    if (IS_ERR(tfm)) {
+        return PTR_ERR(tfm);
+    }
+
+    // 分配描述符
+    desc = kmalloc(sizeof(*desc) + crypto_shash_descsize(tfm), GFP_KERNEL);
+    if (!desc) {
+        crypto_free_shash(tfm);
+        return -ENOMEM;
+    }
+
+    // 初始化描述符
+    desc->tfm = tfm;
+
+    // 分配缓冲区
+    buffer = kmalloc(PAGE_SIZE, GFP_KERNEL);
+    if (!buffer) {
+        kfree(desc);
+        crypto_free_shash(tfm);
+        return -ENOMEM;
+    }
+
+    // 初始化哈希
+    err = crypto_shash_init(desc);
+    if (err) {
+        kfree(buffer);
+        kfree(desc);
+        crypto_free_shash(tfm);
+        return err;
+    }
+
+    // 读取文件并更新哈希
+    while (1) {
+        bytes_read = kernel_read(filp, buffer, PAGE_SIZE, &pos);
+        if (bytes_read <= 0) {
+            break;
+        }
+
+        err = crypto_shash_update(desc, buffer, bytes_read);
+        if (err) {
+            break;
+        }
+    }
+
+    // 完成哈希计算
+    if (!err) {
+        err = crypto_shash_final(desc, hash);
+    }
+
+    // 清理资源
+    kfree(buffer);
+    kfree(desc);
+    crypto_free_shash(tfm);
+
+    return err;
+}
+
+// 文件系统通知回调
+int integrity_fs_notify(struct notifier_block* nb, unsigned long action, void* data) {
+    struct fsnotify_event* event = data;
+    integrity_checker* checker = container_of(nb, integrity_checker, notifier);
+
+    // 处理文件系统事件
+    switch (action) {
+        case FS_CREATE:
+            // 文件创建
+            break;
+        case FS_MODIFY:
+            // 文件修改
+            break;
+        case FS_DELETE:
+            // 文件删除
+            break;
+        case FS_MOVE:
+            // 文件移动
+            break;
+    }
+
+    return NOTIFY_OK;
+}
+
+// 扫描定时器
+void integrity_scan_timer(unsigned long data) {
+    integrity_checker* checker = (integrity_checker*)data;
+
+    // 重新调度定时器
+    mod_timer(&checker->scan_timer, jiffies + 3600 * HZ);
+
+    // 执行完整性扫描
+    queue_work(checker->workqueue, &checker->scan_work);
+}
+
+// 清理完整性检查器
+void integrity_checker_cleanup(integrity_checker* checker) {
+    printk(KERN_INFO "清理文件完整性检查器\n");
+
+    // 停止定时器
+    del_timer_sync(&checker->scan_timer);
+
+    // 注销通知器
+    unregister_filesystem_notifier(&checker->notifier);
+
+    // 清理记录列表
+    integrity_cleanup_records(checker);
+
+    // 销毁工作队列
+    if (checker->workqueue) {
+        destroy_workqueue(checker->workqueue);
+    }
+
+    printk(KERN_INFO "文件完整性检查器清理完成\n");
+}
+```
+
+### 2. 访问控制和权限管理
+
+#### 2.1 权限模型和策略
+
+```c
+#include <linux/security.h>
+#include <linux/cred.h>
+#include <linux/rwsem.h>
+
+// 权限类型
+typedef enum {
+    PERM_READ,                      // 读取权限
+    PERM_WRITE,                     // 写入权限
+    PERM_EXECUTE,                   // 执行权限
+    PERM_APPEND,                    // 追加权限
+    PERM_DELETE,                    // 删除权限
+    PERM_SEARCH,                    // 搜索权限
+    PERM_CREATE,                    // 创建权限
+    PERM_MODIFY,                    // 修改权限
+    PERM_ADMIN,                     // 管理权限
+    PERM_ALL                        // 所有权限
+} permission_type;
+
+// 访问控制类型
+typedef enum {
+    ACL_DISCRETIONARY,               // 自主访问控制
+    ACL_MANDATORY,                   // 强制访问控制
+    ACL_ROLE_BASED,                 // 基于角色的访问控制
+    ACL_ATTRIBUTE_BASED,             // 基于属性的访问控制
+    ACL_HISTORY_BASED               // 基于历史的访问控制
+} acl_type;
+
+// 访问控制条目
+typedef struct acl_entry {
+    uid_t uid;                       // 用户ID
+    gid_t gid;                       // 组ID
+    permission_type permissions;     // 权限
+    acl_type type;                  // 控制类型
+    u32 flags;                      // 标志
+    char context[256];              // 安全上下文
+    struct timespec expires;         // 过期时间
+    struct list_head entry_list;     // 条目链表
+} acl_entry;
+
+// 访问控制列表
+typedef struct access_control_list {
+    struct list_head entries;        // 条目列表
+    rwlock_t lock;                  // 读写锁
+    atomic_t entry_count;            // 条目计数
+    u32 default_permissions;         // 默认权限
+    acl_type default_type;           // 默认类型
+    struct acl_stats stats;          // 统计信息
+} access_control_list;
+
+// 角色定义
+typedef struct role {
+    char role_name[64];             // 角色名称
+    u32 role_id;                    // 角色ID
+    permission_type permissions;     // 角色权限
+    struct list_head user_list;      // 用户列表
+    struct list_head resource_list;  // 资源列表
+    struct list_head role_list;      // 角色链表
+    atomic_t ref_count;              // 引用计数
+} role;
+
+// 用户角色关联
+typedef struct user_role {
+    uid_t uid;                       // 用户ID
+    struct role* role;               // 关联角色
+    struct timespec assign_time;     // 分配时间
+    struct timespec expiry_time;     // 过期时间
+    u32 flags;                      // 标志
+    struct list_head user_list;      // 用户链表
+    struct list_head role_list;      // 角色链表
+} user_role;
+
+// 资源属性
+typedef struct resource_attributes {
+    char resource_type[64];          // 资源类型
+    char resource_id[128];           // 资源ID
+    u32 sensitivity;                // 敏感度
+    u32 classification;            // 分类级别
+    u32 integrity_level;           // 完整性级别
+    char owner[64];                 // 所有者
+    char group[64];                 // 所属组
+    struct timespec creation_time;  // 创建时间
+    struct timespec modification_time; // 修改时间
+    u32 access_count;              // 访问计数
+    u32 flags;                     // 标志
+} resource_attributes;
+
+// 访问控制管理器
+typedef struct access_control_manager {
+    access_control_list* global_acl; // 全局ACL
+    struct list_head roles;          // 角色列表
+    struct list_head user_roles;     // 用户角色列表
+    struct list_head resources;      // 资源列表
+    rwlock_t roles_lock;             // 角色锁
+    rwlock_t user_roles_lock;        // 用户角色锁
+    rwlock_t resources_lock;         // 资源锁
+    struct mutex manager_mutex;      // 管理器互斥锁
+    struct workqueue_struct* workqueue; // 工作队列
+    struct proc_dir_entry* proc_entry; // /proc条目
+    atomic_t total_checks;           // 总检查次数
+    atomic_t access_granted;         // 授权次数
+    atomic_t access_denied;          // 拒绝次数
+} access_control_manager;
+
+// 初始化访问控制管理器
+int access_control_manager_init(access_control_manager* manager) {
+    printk(KERN_INFO "初始化访问控制管理器\n");
+
+    // 创建全局ACL
+    manager->global_acl = kmalloc(sizeof(access_control_list), GFP_KERNEL);
+    if (!manager->global_acl) {
+        return -ENOMEM;
+    }
+
+    // 初始化全局ACL
+    INIT_LIST_HEAD(&manager->global_acl->entries);
+    rwlock_init(&manager->global_acl->lock);
+    atomic_set(&manager->global_acl->entry_count, 0);
+    manager->global_acl->default_permissions = PERM_READ;
+    manager->global_acl->default_type = ACL_DISCRETIONARY;
+
+    // 初始化链表
+    INIT_LIST_HEAD(&manager->roles);
+    INIT_LIST_HEAD(&manager->user_roles);
+    INIT_LIST_HEAD(&manager->resources);
+
+    // 初始化锁
+    rwlock_init(&manager->roles_lock);
+    rwlock_init(&manager->user_roles_lock);
+    rwlock_init(&manager->resources_lock);
+    mutex_init(&manager->manager_mutex);
+
+    // 初始化原子变量
+    atomic_set(&manager->total_checks, 0);
+    atomic_set(&manager->access_granted, 0);
+    atomic_set(&manager->access_denied, 0);
+
+    // 创建工作队列
+    manager->workqueue = alloc_workqueue("access_control", WQ_MEM_RECLAIM, 0);
+    if (!manager->workqueue) {
+        kfree(manager->global_acl);
+        return -ENOMEM;
+    }
+
+    // 创建/proc条目
+    manager->proc_entry = proc_create("access_control", 0444, NULL, &access_control_proc_ops);
+    if (!manager->proc_entry) {
+        destroy_workqueue(manager->workqueue);
+        kfree(manager->global_acl);
+        return -ENOMEM;
+    }
+
+    printk(KERN_INFO "访问控制管理器初始化成功\n");
+    return 0;
+}
+
+// 检查访问权限
+int access_control_check(access_control_manager* manager, uid_t uid, gid_t gid,
+                         const char* resource, permission_type requested_perm) {
+    acl_entry* entry;
+    int access_granted = 0;
+    unsigned long flags;
+
+    atomic_inc(&manager->total_checks);
+
+    // 检查全局ACL
+    read_lock_irqsave(&manager->global_acl->lock, flags);
+    list_for_each_entry(entry, &manager->global_acl->entries, entry_list) {
+        if (entry->uid == uid || entry->gid == gid) {
+            if (entry->permissions & requested_perm) {
+                access_granted = 1;
+                break;
+            }
+        }
+    }
+    read_unlock_irqrestore(&manager->global_acl->lock, flags);
+
+    // 检查基于角色的访问控制
+    if (!access_granted) {
+        access_granted = access_control_check_role(manager, uid, resource, requested_perm);
+    }
+
+    // 检查基于属性的访问控制
+    if (!access_granted) {
+        access_granted = access_control_check_attribute(manager, uid, resource, requested_perm);
+    }
+
+    // 更新统计信息
+    if (access_granted) {
+        atomic_inc(&manager->access_granted);
+    } else {
+        atomic_inc(&manager->access_denied);
+
+        // 记录访问拒绝事件
+        printk(KERN_WARNING "访问拒绝: UID=%d, 资源=%s, 权限=%d\n",
+               uid, resource, requested_perm);
+    }
+
+    return access_granted;
+}
+
+// 检查基于角色的访问权限
+int access_control_check_role(access_control_manager* manager, uid_t uid,
+                             const char* resource, permission_type requested_perm) {
+    user_role* user_role_entry;
+    role* role_entry;
+    int access_granted = 0;
+    unsigned long flags;
+
+    read_lock_irqsave(&manager->user_roles_lock, flags);
+    list_for_each_entry(user_role_entry, &manager->user_roles, user_list) {
+        if (user_role_entry->uid == uid) {
+            role_entry = user_role_entry->role;
+            if (role_entry && (role_entry->permissions & requested_perm)) {
+                // 检查角色是否有权访问该资源
+                if (access_control_check_role_resource(role_entry, resource)) {
+                    access_granted = 1;
+                    break;
+                }
+            }
+        }
+    }
+    read_unlock_irqrestore(&manager->user_roles_lock, flags);
+
+    return access_granted;
+}
+
+// 检查角色对资源的访问权限
+int access_control_check_role_resource(role* role, const char* resource) {
+    // 实现角色对资源的访问权限检查
+    // 这里可以检查角色是否有权访问特定的资源
+    return 1; // 简化实现
+}
+
+// 检查基于属性的访问权限
+int access_control_check_attribute(access_control_manager* manager, uid_t uid,
+                                   const char* resource, permission_type requested_perm) {
+    resource_attributes* attr;
+    int access_granted = 0;
+    unsigned long flags;
+
+    // 查找资源属性
+    read_lock_irqsave(&manager->resources_lock, flags);
+    list_for_each_entry(attr, &manager->resources, resource_list) {
+        if (strcmp(attr->resource_id, resource) == 0) {
+            // 实现基于属性的访问控制逻辑
+            // 可以基于用户属性、资源属性和环境条件进行判断
+            access_granted = access_control_attribute_evaluate(uid, attr, requested_perm);
+            break;
+        }
+    }
+    read_unlock_irqrestore(&manager->resources_lock, flags);
+
+    return access_granted;
+}
+
+// 基于属性的访问控制评估
+int access_control_attribute_evaluate(uid_t uid, resource_attributes* attr,
+                                      permission_type requested_perm) {
+    struct cred* cred;
+    int access_granted = 0;
+
+    cred = current_cred();
+
+    // 基于用户ID和资源所有者的比较
+    if (cred->uid.val == uid || strcmp(attr->owner, cred->user->name) == 0) {
+        access_granted = 1;
+    }
+
+    // 基于敏感度和用户权限
+    if (attr->sensitivity > 0 && !capable(CAP_SYS_ADMIN)) {
+        access_granted = 0;
+    }
+
+    // 基于时间访问控制
+    if (attr->flags & RESOURCE_FLAG_TIME_LIMITED) {
+        struct timespec now = current_kernel_time();
+        if (now.tv_sec < attr->creation_time.tv_sec ||
+            now.tv_sec > attr->modification_time.tv_sec) {
+            access_granted = 0;
+        }
+    }
+
+    return access_granted;
+}
+
+// 添加ACL条目
+int access_control_add_entry(access_control_manager* manager, uid_t uid, gid_t gid,
+                           permission_type permissions, acl_type type, const char* context) {
+    acl_entry* entry;
+    unsigned long flags;
+
+    // 分配ACL条目
+    entry = kmalloc(sizeof(acl_entry), GFP_KERNEL);
+    if (!entry) {
+        return -ENOMEM;
+    }
+
+    // 填充条目信息
+    entry->uid = uid;
+    entry->gid = gid;
+    entry->permissions = permissions;
+    entry->type = type;
+    entry->flags = 0;
+    if (context) {
+        strncpy(entry->context, context, sizeof(entry->context) - 1);
+    } else {
+        entry->context[0] = '\0';
+    }
+
+    // 添加到ACL列表
+    write_lock_irqsave(&manager->global_acl->lock, flags);
+    list_add_tail(&entry->entry_list, &manager->global_acl->entries);
+    atomic_inc(&manager->global_acl->entry_count);
+    write_unlock_irqrestore(&manager->global_acl->lock, flags);
+
+    printk(KERN_INFO "添加ACL条目: UID=%d, GID=%d, 权限=%d\n", uid, gid, permissions);
+    return 0;
+}
+
+// 删除ACL条目
+int access_control_remove_entry(access_control_manager* manager, uid_t uid, gid_t gid) {
+    acl_entry* entry, *temp;
+    unsigned long flags;
+    int removed = 0;
+
+    write_lock_irqsave(&manager->global_acl->lock, flags);
+    list_for_each_entry_safe(entry, temp, &manager->global_acl->entries, entry_list) {
+        if (entry->uid == uid && entry->gid == gid) {
+            list_del(&entry->entry_list);
+            atomic_dec(&manager->global_acl->entry_count);
+            kfree(entry);
+            removed = 1;
+            break;
+        }
+    }
+    write_unlock_irqrestore(&manager->global_acl->lock, flags);
+
+    if (removed) {
+        printk(KERN_INFO "删除ACL条目: UID=%d, GID=%d\n", uid, gid);
+    }
+
+    return removed ? 0 : -ENOENT;
+}
+
+// 创建角色
+role* access_control_create_role(access_control_manager* manager, const char* role_name,
+                                 permission_type permissions) {
+    role* new_role;
+    unsigned long flags;
+
+    // 分配角色结构
+    new_role = kmalloc(sizeof(role), GFP_KERNEL);
+    if (!new_role) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    // 填充角色信息
+    strncpy(new_role->role_name, role_name, sizeof(new_role->role_name) - 1);
+    new_role->role_id = atomic_inc_return(&manager->total_checks);
+    new_role->permissions = permissions;
+    INIT_LIST_HEAD(&new_role->user_list);
+    INIT_LIST_HEAD(&new_role->resource_list);
+    atomic_set(&new_role->ref_count, 1);
+
+    // 添加到角色列表
+    write_lock_irqsave(&manager->roles_lock, flags);
+    list_add_tail(&new_role->role_list, &manager->roles);
+    write_unlock_irqrestore(&manager->roles_lock, flags);
+
+    printk(KERN_INFO "创建角色: %s (ID=%u)\n", role_name, new_role->role_id);
+    return new_role;
+}
+
+// 分配用户角色
+int access_control_assign_role(access_control_manager* manager, uid_t uid,
+                                struct role* role, u32 expiry_seconds) {
+    user_role* user_role_entry;
+    unsigned long flags;
+
+    // 分配用户角色结构
+    user_role_entry = kmalloc(sizeof(user_role), GFP_KERNEL);
+    if (!user_role_entry) {
+        return -ENOMEM;
+    }
+
+    // 填充用户角色信息
+    user_role_entry->uid = uid;
+    user_role_entry->role = role;
+    user_role_entry->assign_time = current_kernel_time();
+    user_role_entry->expiry_time.tv_sec = user_role_entry->assign_time.tv_sec + expiry_seconds;
+    user_role_entry->expiry_time.tv_nsec = 0;
+    user_role_entry->flags = 0;
+
+    // 添加到用户角色列表
+    write_lock_irqsave(&manager->user_roles_lock, flags);
+    list_add_tail(&user_role_entry->user_list, &manager->user_roles);
+    list_add_tail(&user_role_entry->role_list, &role->user_list);
+    atomic_inc(&role->ref_count);
+    write_unlock_irqrestore(&manager->user_roles_lock, flags);
+
+    printk(KERN_INFO "分配角色: UID=%d, 角色=%s\n", uid, role->role_name);
+    return 0;
+}
+
+// 获取访问控制统计信息
+void access_control_get_stats(access_control_manager* manager, struct access_control_stats* stats) {
+    stats->total_checks = atomic_read(&manager->total_checks);
+    stats->access_granted = atomic_read(&manager->access_granted);
+    stats->access_denied = atomic_read(&manager->access_denied);
+    stats->grant_rate = stats->total_checks > 0 ?
+                        (float)stats->access_granted / stats->total_checks : 0.0f;
+}
+
+// 清理访问控制管理器
+void access_control_manager_cleanup(access_control_manager* manager) {
+    printk(KERN_INFO "清理访问控制管理器\n");
+
+    // 清理ACL条目
+    access_control_cleanup_acl(manager->global_acl);
+
+    // 清理角色和用户角色
+    access_control_cleanup_roles(manager);
+
+    // 清理资源列表
+    access_control_cleanup_resources(manager);
+
+    // 销毁工作队列
+    if (manager->workqueue) {
+        destroy_workqueue(manager->workqueue);
+    }
+
+    // 删除/proc条目
+    if (manager->proc_entry) {
+        remove_proc_entry("access_control", NULL);
+    }
+
+    // 释放全局ACL
+    kfree(manager->global_acl);
+
+    printk(KERN_INFO "访问控制管理器清理完成\n");
+}
+```
+
+### 3. 容器技术和虚拟化安全
+
+#### 3.1 容器安全机制
+
+```c
+#include <linux/nsproxy.h>
+#include <linux/pid_namespace.h>
+#include <linux/user_namespace.h>
+#include <linux/utsname.h>
+#include <linux/ipc_namespace.h>
+#include <linux/mnt_namespace.h>
+#include <linux/net_namespace.h>
+#include <linux/cgroup.h>
+#include <linux/security.h>
+
+// 容器安全配置
+typedef struct container_security_config {
+    char container_id[64];           // 容器ID
+    char container_name[128];        // 容器名称
+    uid_t host_uid;                 // 主机用户ID
+    gid_t host_gid;                 // 主机组ID
+    uid_t container_uid;            // 容器用户ID
+    gid_t container_gid;            // 容器组ID
+    u32 capabilities;              // 能力集
+    u32 secure_bits;               // 安全位
+    char resource_limits[256];      // 资源限制
+    char seccomp_profile[256];      // Seccomp配置文件
+    char apparmor_profile[256];     // AppArmor配置文件
+    u32 network_policy;             // 网络策略
+    u32 storage_policy;             // 存储策略
+    u32 flags;                      // 标志
+    struct timespec creation_time;  // 创建时间
+    struct timespec expiry_time;     // 过期时间
+} container_security_config;
+
+// 容器安全状态
+typedef struct container_security_state {
+    int running;                    // 运行状态
+    int sandboxed;                  // 沙箱状态
+    int privileged;                 // 特权状态
+    int isolated_network;          // 网络隔离状态
+    int isolated_storage;          // 存储隔离状态
+    int seccomp_enabled;           // Seccomp启用状态
+    int apparmor_enabled;          // AppArmor启用状态
+    u32 violations;                 // 安全违规计数
+    u32 alerts;                     // 警报计数
+    struct list_head namespace_list; // 命名空间列表
+    struct list_head cgroup_list;    // Cgroup列表
+} container_security_state;
+
+// 容器安全监控器
+typedef struct container_security_monitor {
+    struct list_head containers;      // 容器列表
+    struct list_head alerts;          // 警报列表
+    spinlock_t container_lock;       // 容器锁
+    spinlock_t alert_lock;           // 警报锁
+    struct mutex monitor_mutex;       // 监控器互斥锁
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list scan_timer;     // 扫描定时器
+    atomic_t container_count;         // 容器计数
+    atomic_t alert_count;             // 警报计数
+    u32 scan_interval;               // 扫描间隔
+    struct proc_dir_entry* proc_entry; // /proc条目
+} container_security_monitor;
+
+// 容器安全警报
+typedef struct container_security_alert {
+    u64 alert_id;                   // 警报ID
+    char container_id[64];           // 容器ID
+    u32 alert_type;                 // 警报类型
+    u32 severity;                   // 严重程度
+    char message[256];              // 警报消息
+    struct timespec timestamp;      // 时间戳
+    u32 status;                     // 状态
+    struct list_head alert_list;     // 警报链表
+} container_security_alert;
+
+// 初始化容器安全监控器
+int container_security_monitor_init(container_security_monitor* monitor, u32 scan_interval) {
+    printk(KERN_INFO "初始化容器安全监控器\n");
+
+    // 初始化链表
+    INIT_LIST_HEAD(&monitor->containers);
+    INIT_LIST_HEAD(&monitor->alerts);
+
+    // 初始化锁和原子变量
+    spin_lock_init(&monitor->container_lock);
+    spin_lock_init(&monitor->alert_lock);
+    mutex_init(&monitor->monitor_mutex);
+    atomic_set(&monitor->container_count, 0);
+    atomic_set(&monitor->alert_count, 0);
+
+    // 设置扫描间隔
+    monitor->scan_interval = scan_interval;
+
+    // 创建工作队列
+    monitor->workqueue = alloc_workqueue("container_security", WQ_MEM_RECLAIM, 0);
+    if (!monitor->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        return -ENOMEM;
+    }
+
+    // 初始化定时器
+    setup_timer(&monitor->scan_timer, container_security_scan_timer, (unsigned long)monitor);
+
+    // 创建/proc条目
+    monitor->proc_entry = proc_create("container_security", 0444, NULL, &container_security_proc_ops);
+    if (!monitor->proc_entry) {
+        destroy_workqueue(monitor->workqueue);
+        return -ENOMEM;
+    }
+
+    // 启动扫描定时器
+    mod_timer(&monitor->scan_timer, jiffies + monitor->scan_interval * HZ);
+
+    printk(KERN_INFO "容器安全监控器初始化成功\n");
+    return 0;
+}
+
+// 创建安全容器
+int container_security_create(container_security_monitor* monitor,
+                              const container_security_config* config) {
+    container_security_state* state;
+    int err;
+
+    printk(KERN_INFO "创建安全容器: %s\n", config->container_name);
+
+    // 分配容器安全状态
+    state = kzalloc(sizeof(container_security_state), GFP_KERNEL);
+    if (!state) {
+        return -ENOMEM;
+    }
+
+    // 创建用户命名空间
+    err = container_create_user_namespace(config);
+    if (err) {
+        kfree(state);
+        return err;
+    }
+
+    // 创建PID命名空间
+    err = container_create_pid_namespace(config);
+    if (err) {
+        container_cleanup_user_namespace(config);
+        kfree(state);
+        return err;
+    }
+
+    // 创建网络命名空间
+    err = container_create_network_namespace(config);
+    if (err) {
+        container_cleanup_pid_namespace(config);
+        container_cleanup_user_namespace(config);
+        kfree(state);
+        return err;
+    }
+
+    // 创建挂载命名空间
+    err = container_create_mount_namespace(config);
+    if (err) {
+        container_cleanup_network_namespace(config);
+        container_cleanup_pid_namespace(config);
+        container_cleanup_user_namespace(config);
+        kfree(state);
+        return err;
+    }
+
+    // 设置Cgroup限制
+    err = container_setup_cgroups(config);
+    if (err) {
+        container_cleanup_mount_namespace(config);
+        container_cleanup_network_namespace(config);
+        container_cleanup_pid_namespace(config);
+        container_cleanup_user_namespace(config);
+        kfree(state);
+        return err;
+    }
+
+    // 配置Seccomp
+    if (strlen(config->seccomp_profile) > 0) {
+        err = container_setup_seccomp(config);
+        if (err) {
+            printk(KERN_WARNING "Seccomp配置失败: %d\n", err);
+        } else {
+            state->seccomp_enabled = 1;
+        }
+    }
+
+    // 配置AppArmor
+    if (strlen(config->apparmor_profile) > 0) {
+        err = container_setup_apparmor(config);
+        if (err) {
+            printk(KERN_WARNING "AppArmor配置失败: %d\n", err);
+        } else {
+            state->apparmor_enabled = 1;
+        }
+    }
+
+    // 设置安全状态
+    state->running = 1;
+    state->sandboxed = !config->privileged;
+    state->privileged = config->privileged;
+    state->isolated_network = (config->network_policy & NETWORK_ISOLATED);
+    state->isolated_storage = (config->storage_policy & STORAGE_ISOLATED);
+    state->violations = 0;
+    state->alerts = 0;
+
+    // 添加到监控列表
+    spin_lock(&monitor->container_lock);
+    list_add_tail(&state->namespace_list, &monitor->containers);
+    atomic_inc(&monitor->container_count);
+    spin_unlock(&monitor->container_lock);
+
+    printk(KERN_INFO "安全容器创建成功: %s\n", config->container_name);
+    return 0;
+}
+
+// 创建用户命名空间
+int container_create_user_namespace(const container_security_config* config) {
+    struct user_namespace* user_ns;
+    struct cred* cred;
+    int err;
+
+    printk(KERN_INFO "创建用户命名空间\n");
+
+    // 创建用户命名空间
+    user_ns = create_user_ns(current_user_ns());
+    if (IS_ERR(user_ns)) {
+        return PTR_ERR(user_ns);
+    }
+
+    // 创建新的凭证
+    cred = prepare_creds();
+    if (!cred) {
+        put_user_ns(user_ns);
+        return -ENOMEM;
+    }
+
+    // 设置用户命名空间
+    cred->user_ns = user_ns;
+
+    // 设置UID/GID映射
+    err = container_setup_uid_gid_map(cred, config);
+    if (err) {
+        abort_creds(cred);
+        put_user_ns(user_ns);
+        return err;
+    }
+
+    // 应用新的凭证
+    commit_creds(cred);
+
+    printk(KERN_INFO "用户命名空间创建成功\n");
+    return 0;
+}
+
+// 创建PID命名空间
+int container_create_pid_namespace(const container_security_config* config) {
+    struct pid_namespace* pid_ns;
+    int err;
+
+    printk(KERN_INFO "创建PID命名空间\n");
+
+    // 创建PID命名空间
+    pid_ns = create_pid_namespace(current_user_ns());
+    if (IS_ERR(pid_ns)) {
+        return PTR_ERR(pid_ns);
+    }
+
+    // 设置PID命名空间
+    err = container_setup_pid_namespace(pid_ns);
+    if (err) {
+        put_pid_ns(pid_ns);
+        return err;
+    }
+
+    printk(KERN_INFO "PID命名空间创建成功\n");
+    return 0;
+}
+
+// 创建网络命名空间
+int container_create_network_namespace(const container_security_config* config) {
+    struct net* net;
+    int err;
+
+    printk(KERN_INFO "创建网络命名空间\n");
+
+    // 创建网络命名空间
+    net = copy_net_ns(CLONE_NEWNET, current->nsproxy->net_ns);
+    if (IS_ERR(net)) {
+        return PTR_ERR(net);
+    }
+
+    // 配置网络命名空间
+    err = container_setup_network_namespace(net, config);
+    if (err) {
+        put_net(net);
+        return err;
+    }
+
+    printk(KERN_INFO "网络命名空间创建成功\n");
+    return 0;
+}
+
+// 创建挂载命名空间
+int container_create_mount_namespace(const container_security_config* config) {
+    struct mnt_namespace* mnt_ns;
+    int err;
+
+    printk(KERN_INFO "创建挂载命名空间\n");
+
+    // 创建挂载命名空间
+    mnt_ns = copy_mnt_ns(CLONE_NEWNS, current->nsproxy->mnt_ns, 0);
+    if (IS_ERR(mnt_ns)) {
+        return PTR_ERR(mnt_ns);
+    }
+
+    // 配置挂载命名空间
+    err = container_setup_mount_namespace(mnt_ns, config);
+    if (err) {
+        put_mnt_ns(mnt_ns);
+        return err;
+    }
+
+    printk(KERN_INFO "挂载命名空间创建成功\n");
+    return 0;
+}
+
+// 设置Cgroup
+int container_setup_cgroups(const container_security_config* config) {
+    struct cgroup_subsys_state* css;
+    struct cgroup* cgroup;
+    int err;
+
+    printk(KERN_INFO "设置Cgroup限制\n");
+
+    // 创建Cgroup
+    cgroup = cgroup_create_v1(config->container_name);
+    if (IS_ERR(cgroup)) {
+        return PTR_ERR(cgroup);
+    }
+
+    // 设置CPU限制
+    if (strstr(config->resource_limits, "cpu") != NULL) {
+        css = cgroup_get_e_css(cgroup, cpu_cgrp_id);
+        err = container_set_cpu_limit(css, config);
+        if (err) {
+            printk(KERN_WARNING "CPU限制设置失败: %d\n", err);
+        }
+    }
+
+    // 设置内存限制
+    if (strstr(config->resource_limits, "memory") != NULL) {
+        css = cgroup_get_e_css(cgroup, memory_cgrp_id);
+        err = container_set_memory_limit(css, config);
+        if (err) {
+            printk(KERN_WARNING "内存限制设置失败: %d\n", err);
+        }
+    }
+
+    // 设置I/O限制
+    if (strstr(config->resource_limits, "io") != NULL) {
+        css = cgroup_get_e_css(cgroup, io_cgrp_id);
+        err = container_set_io_limit(css, config);
+        if (err) {
+            printk(KERN_WARNING "I/O限制设置失败: %d\n", err);
+        }
+    }
+
+    // 设置网络限制
+    if (strstr(config->resource_limits, "network") != NULL) {
+        css = cgroup_get_e_css(cgroup, net_cls_cgrp_id);
+        err = container_set_network_limit(css, config);
+        if (err) {
+            printk(KERN_WARNING "网络限制设置失败: %d\n", err);
+        }
+    }
+
+    // 将当前进程加入Cgroup
+    err = cgroup_attach_task_all(cgroup, current);
+    if (err) {
+        printk(KERN_WARNING "进程加入Cgroup失败: %d\n", err);
+    }
+
+    printk(KERN_INFO "Cgroup限制设置成功\n");
+    return 0;
+}
+
+// 配置Seccomp
+int container_setup_seccomp(const container_security_config* config) {
+    struct sock_fprog* fprog;
+    int err;
+
+    printk(KERN_INFO "配置Seccomp\n");
+
+    // 加载Seccomp配置文件
+    fprog = container_load_seccomp_profile(config->seccomp_profile);
+    if (IS_ERR(fprog)) {
+        return PTR_ERR(fprog);
+    }
+
+    // 应用Seccomp过滤器
+    err = prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, fprog);
+    if (err) {
+        kfree(fprog);
+        return err;
+    }
+
+    kfree(fprog);
+    printk(KERN_INFO "Seccomp配置成功\n");
+    return 0;
+}
+
+// 配置AppArmor
+int container_setup_apparmor(const container_security_config* config) {
+    int err;
+
+    printk(KERN_INFO "配置AppArmor\n");
+
+    // 加载AppArmor配置文件
+    err = aa_change_profile(config->apparmor_profile);
+    if (err) {
+        printk(KERN_WARNING "AppArmor配置失败: %d\n", err);
+        return err;
+    }
+
+    printk(KERN_INFO "AppArmor配置成功\n");
+    return 0;
+}
+
+// 监控容器安全
+void container_security_monitor_scan(container_security_monitor* monitor) {
+    container_security_state* state;
+    unsigned long flags;
+
+    // 重新调度定时器
+    mod_timer(&monitor->scan_timer, jiffies + monitor->scan_interval * HZ);
+
+    // 扫描所有容器
+    spin_lock_irqsave(&monitor->container_lock, flags);
+    list_for_each_entry(state, &monitor->containers, namespace_list) {
+        container_security_check_state(monitor, state);
+    }
+    spin_unlock_irqrestore(&monitor->container_lock, flags);
+}
+
+// 检查容器安全状态
+void container_security_check_state(container_security_monitor* monitor,
+                                     container_security_state* state) {
+    // 检查命名空间隔离
+    container_check_namespace_isolation(state);
+
+    // 检查Cgroup限制
+    container_check_cgroup_limits(state);
+
+    // 检查进程异常
+    container_check_process_anomalies(state);
+
+    // 检查网络活动
+    container_check_network_activity(state);
+
+    // 检查文件系统访问
+    container_check_filesystem_access(state);
+
+    // 检查系统调用
+    container_check_syscall_usage(state);
+}
+
+// 检查命名空间隔离
+void container_check_namespace_isolation(container_security_state* state) {
+    struct nsproxy* nsproxy = current->nsproxy;
+
+    // 检查PID命名空间隔离
+    if (nsproxy->pid_ns_for_children != task_active_pid_ns(current)) {
+        container_security_alert_generate(monitor, state,
+                                         ALERT_NAMESPACE_BREACH,
+                                         "PID命名空间隔离被破坏",
+                                         SEVERITY_HIGH);
+    }
+
+    // 检查网络命名空间隔离
+    if (nsproxy->net_ns != &init_net) {
+        container_security_alert_generate(monitor, state,
+                                         ALERT_NAMESPACE_BREACH,
+                                         "网络命名空间隔离被破坏",
+                                         SEVERITY_HIGH);
+    }
+
+    // 检查挂载命名空间隔离
+    if (nsproxy->mnt_ns != init_mnt_ns) {
+        container_security_alert_generate(monitor, state,
+                                         ALERT_NAMESPACE_BREACH,
+                                         "挂载命名空间隔离被破坏",
+                                         SEVERITY_HIGH);
+    }
+}
+
+// 生成容器安全警报
+void container_security_alert_generate(container_security_monitor* monitor,
+                                       container_security_state* state,
+                                       u32 alert_type, const char* message,
+                                       u32 severity) {
+    container_security_alert* alert;
+    unsigned long flags;
+
+    // 分配警报结构
+    alert = kzalloc(sizeof(container_security_alert), GFP_ATOMIC);
+    if (!alert) {
+        return;
+    }
+
+    // 填充警报信息
+    alert->alert_id = atomic_inc_return(&monitor->alert_count);
+    strncpy(alert->container_id, "container_id_placeholder", sizeof(alert->container_id) - 1);
+    alert->alert_type = alert_type;
+    alert->severity = severity;
+    strncpy(alert->message, message, sizeof(alert->message) - 1);
+    alert->timestamp = current_kernel_time();
+    alert->status = ALERT_STATUS_ACTIVE;
+
+    // 添加到警报列表
+    spin_lock_irqsave(&monitor->alert_lock, flags);
+    list_add_tail(&alert->alert_list, &monitor->alerts);
+    spin_unlock_irqrestore(&monitor->alert_lock, flags);
+
+    // 更新状态
+    state->alerts++;
+    if (severity >= SEVERITY_HIGH) {
+        state->violations++;
+    }
+
+    // 输出警报
+    printk(KERN_ALERT "容器安全警报: %s\n", message);
+
+    // 启动警报处理工作
+    queue_work(monitor->workqueue, &alert->work);
+}
+
+// 容器安全扫描定时器
+void container_security_scan_timer(unsigned long data) {
+    container_security_monitor* monitor = (container_security_monitor*)data;
+
+    // 执行安全扫描
+    container_security_monitor_scan(monitor);
+}
+
+// 清理容器安全监控器
+void container_security_monitor_cleanup(container_security_monitor* monitor) {
+    container_security_state* state, *temp_state;
+    container_security_alert* alert, *temp_alert;
+    unsigned long flags;
+
+    printk(KERN_INFO "清理容器安全监控器\n");
+
+    // 停止定时器
+    del_timer_sync(&monitor->scan_timer);
+
+    // 清理容器列表
+    spin_lock_irqsave(&monitor->container_lock, flags);
+    list_for_each_entry_safe(state, temp_state, &monitor->containers, namespace_list) {
+        list_del(&state->namespace_list);
+        kfree(state);
+    }
+    spin_unlock_irqrestore(&monitor->container_lock, flags);
+
+    // 清理警报列表
+    spin_lock_irqsave(&monitor->alert_lock, flags);
+    list_for_each_entry_safe(alert, temp_alert, &monitor->alerts, alert_list) {
+        list_del(&alert->alert_list);
+        kfree(alert);
+    }
+    spin_unlock_irqrestore(&monitor->alert_lock, flags);
+
+    // 销毁工作队列
+    if (monitor->workqueue) {
+        destroy_workqueue(monitor->workqueue);
+    }
+
+    // 删除/proc条目
+    if (monitor->proc_entry) {
+        remove_proc_entry("container_security", NULL);
+    }
+
+    printk(KERN_INFO "容器安全监控器清理完成\n");
+}
+```
+
+### 4. AI时代的操作系统挑战
+
+#### 4.1 AI工作负载管理
+
+```c
+#include <linux/sched.h>
+#include <linux/cgroup.h>
+#include <linux/mm.h>
+#include <linux/gpu.h>
+
+// AI工作负载类型
+typedef enum {
+    AI_WORKLOAD_TRAINING,          // 训练工作负载
+    AI_WORKLOAD_INFERENCE,         // 推理工作负载
+    AI_WORKLOAD_PREPROCESSING,     // 预处理工作负载
+    AI_WORKLOAD_POSTPROCESSING,    // 后处理工作负载
+    AI_WORKLOAD_DATA_AUGMENTATION,  // 数据增强工作负载
+    AI_WORKLOAD_MODEL_OPTIMIZATION // 模型优化工作负载
+} ai_workload_type;
+
+// AI资源需求
+typedef struct ai_resource_requirements {
+    u64 memory_size;                // 内存需求
+    u64 gpu_memory_size;            // GPU内存需求
+    u32 gpu_count;                  // GPU数量
+    u32 cpu_cores;                  // CPU核心数
+    u32 bandwidth;                  // 带宽需求
+    u32 latency_tolerance;          // 延迟容忍度
+    u32 priority;                   // 优先级
+    u32 flags;                      // 标志
+} ai_resource_requirements;
+
+// AI工作负载描述
+typedef struct ai_workload {
+    char workload_id[64];           // 工作负载ID
+    char workload_name[128];        // 工作负载名称
+    ai_workload_type type;          // 工作负载类型
+    ai_resource_requirements requirements; // 资源需求
+    struct timespec start_time;     // 开始时间
+    struct timespec end_time;       // 结束时间
+    pid_t pid;                       // 进程ID
+    u32 status;                     // 状态
+    u32 progress;                   // 进度
+    u64 memory_usage;               // 内存使用量
+    u64 gpu_memory_usage;           // GPU内存使用量
+    float cpu_utilization;          // CPU利用率
+    float gpu_utilization;          // GPU利用率
+    struct list_head workload_list;  // 工作负载链表
+    atomic_t ref_count;              // 引用计数
+} ai_workload;
+
+// AI资源调度器
+typedef struct ai_resource_scheduler {
+    struct list_head workloads;      // 工作负载列表
+    struct list_head available_gpus; // 可用GPU列表
+    struct list_head allocated_gpus; // 已分配GPU列表
+    spinlock_t workload_lock;       // 工作负载锁
+    spinlock_t gpu_lock;            // GPU锁
+    struct mutex scheduler_mutex;    // 调度器互斥锁
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list schedule_timer; // 调度定时器
+    atomic_t total_workloads;        // 总工作负载数
+    atomic_t active_workloads;       // 活跃工作负载数
+    atomic_t total_gpus;             // 总GPU数
+    atomic_t available_gpu_memory;   // 可用GPU内存
+    u32 schedule_interval;           // 调度间隔
+    struct proc_dir_entry* proc_entry; // /proc条目
+} ai_resource_scheduler;
+
+// GPU设备信息
+typedef struct ai_gpu_device {
+    u32 gpu_id;                     // GPU ID
+    char gpu_name[64];              // GPU名称
+    u64 total_memory;               // 总内存
+    u64 available_memory;           // 可用内存
+    u32 compute_capability;          // 计算能力
+    u32 max_threads_per_block;      // 每块最大线程数
+    u32 max_blocks_per_grid;        // 每网格最大块数
+    u32 clock_frequency;            // 时钟频率
+    u32 power_limit;                // 功率限制
+    u32 temperature;                // 温度
+    u32 utilization;                // 利用率
+    int available;                  // 可用状态
+    struct list_head gpu_list;       // GPU链表
+    atomic_t ref_count;              // 引用计数
+} ai_gpu_device;
+
+// 初始化AI资源调度器
+int ai_resource_scheduler_init(ai_resource_scheduler* scheduler, u32 schedule_interval) {
+    printk(KERN_INFO "初始化AI资源调度器\n");
+
+    // 初始化链表
+    INIT_LIST_HEAD(&scheduler->workloads);
+    INIT_LIST_HEAD(&scheduler->available_gpus);
+    INIT_LIST_HEAD(&scheduler->allocated_gpus);
+
+    // 初始化锁和原子变量
+    spin_lock_init(&scheduler->workload_lock);
+    spin_lock_init(&scheduler->gpu_lock);
+    mutex_init(&scheduler->scheduler_mutex);
+    atomic_set(&scheduler->total_workloads, 0);
+    atomic_set(&scheduler->active_workloads, 0);
+    atomic_set(&scheduler->total_gpus, 0);
+    atomic_set(&scheduler->available_gpu_memory, 0);
+
+    // 设置调度间隔
+    scheduler->schedule_interval = schedule_interval;
+
+    // 创建工作队列
+    scheduler->workqueue = alloc_workqueue("ai_scheduler", WQ_MEM_RECLAIM, 0);
+    if (!scheduler->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        return -ENOMEM;
+    }
+
+    // 初始化定时器
+    setup_timer(&scheduler->schedule_timer, ai_schedule_timer, (unsigned long)scheduler);
+
+    // 发现GPU设备
+    ai_discover_gpus(scheduler);
+
+    // 创建/proc条目
+    scheduler->proc_entry = proc_create("ai_scheduler", 0444, NULL, &ai_scheduler_proc_ops);
+    if (!scheduler->proc_entry) {
+        destroy_workqueue(scheduler->workqueue);
+        return -ENOMEM;
+    }
+
+    // 启动调度定时器
+    mod_timer(&scheduler->schedule_timer, jiffies + scheduler->schedule_interval * HZ);
+
+    printk(KERN_INFO "AI资源调度器初始化成功\n");
+    return 0;
+}
+
+// 发现GPU设备
+void ai_discover_gpus(ai_resource_scheduler* scheduler) {
+    ai_gpu_device* gpu;
+    int gpu_count = 0;
+    int i;
+
+    printk(KERN_INFO "发现GPU设备\n");
+
+    // 模拟GPU发现过程
+    for (i = 0; i < 4; i++) {
+        gpu = kzalloc(sizeof(ai_gpu_device), GFP_KERNEL);
+        if (!gpu) {
+            continue;
+        }
+
+        // 设置GPU信息
+        gpu->gpu_id = i;
+        snprintf(gpu->gpu_name, sizeof(gpu->gpu_name), "GPU-%d", i);
+        gpu->total_memory = 16ULL * 1024 * 1024 * 1024; // 16GB
+        gpu->available_memory = gpu->total_memory;
+        gpu->compute_capability = 75;
+        gpu->max_threads_per_block = 1024;
+        gpu->max_blocks_per_grid = 2147483647;
+        gpu->clock_frequency = 1410; // MHz
+        gpu->power_limit = 250; // W
+        gpu->temperature = 30; // C
+        gpu->utilization = 0;
+        gpu->available = 1;
+        atomic_set(&gpu->ref_count, 1);
+
+        // 添加到可用GPU列表
+        spin_lock(&scheduler->gpu_lock);
+        list_add_tail(&gpu->gpu_list, &scheduler->available_gpus);
+        atomic_inc(&scheduler->total_gpus);
+        atomic_add(gpu->available_memory, &scheduler->available_gpu_memory);
+        spin_unlock(&scheduler->gpu_lock);
+
+        gpu_count++;
+    }
+
+    printk(KERN_INFO "发现 %d 个GPU设备\n", gpu_count);
+}
+
+// 提交AI工作负载
+ai_workload* ai_submit_workload(ai_resource_scheduler* scheduler,
+                               const char* name, ai_workload_type type,
+                               const ai_resource_requirements* requirements) {
+    ai_workload* workload;
+    int err;
+
+    printk(KERN_INFO "提交AI工作负载: %s\n", name);
+
+    // 分配工作负载结构
+    workload = kzalloc(sizeof(ai_workload), GFP_KERNEL);
+    if (!workload) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    // 填充工作负载信息
+    snprintf(workload->workload_id, sizeof(workload->workload_id), "wl-%llu",
+             ktime_get_real_ns());
+    strncpy(workload->workload_name, name, sizeof(workload->workload_name) - 1);
+    workload->type = type;
+    memcpy(&workload->requirements, requirements, sizeof(ai_resource_requirements));
+    workload->start_time = current_kernel_time();
+    workload->pid = current->pid;
+    workload->status = WORKLOAD_STATUS_PENDING;
+    workload->progress = 0;
+    workload->memory_usage = 0;
+    workload->gpu_memory_usage = 0;
+    workload->cpu_utilization = 0.0f;
+    workload->gpu_utilization = 0.0f;
+    atomic_set(&workload->ref_count, 1);
+
+    // 检查资源可用性
+    err = ai_check_resource_availability(scheduler, requirements);
+    if (err) {
+        printk(KERN_WARNING "资源不足，无法调度工作负载: %s\n", name);
+        kfree(workload);
+        return ERR_PTR(err);
+    }
+
+    // 分配资源
+    err = ai_allocate_resources(scheduler, workload);
+    if (err) {
+        printk(KERN_WARNING "资源分配失败: %d\n", err);
+        kfree(workload);
+        return ERR_PTR(err);
+    }
+
+    // 添加到工作负载列表
+    spin_lock(&scheduler->workload_lock);
+    list_add_tail(&workload->workload_list, &scheduler->workloads);
+    atomic_inc(&scheduler->total_workloads);
+    atomic_inc(&scheduler->active_workloads);
+    spin_unlock(&scheduler->workload_lock);
+
+    // 设置工作负载状态为运行中
+    workload->status = WORKLOAD_STATUS_RUNNING;
+
+    printk(KERN_INFO "AI工作负载提交成功: %s\n", name);
+    return workload;
+}
+
+// 检查资源可用性
+int ai_check_resource_availability(ai_resource_scheduler* scheduler,
+                                  const ai_resource_requirements* requirements) {
+    unsigned long flags;
+    int available = 1;
+
+    spin_lock_irqsave(&scheduler->gpu_lock, flags);
+
+    // 检查GPU内存
+    if (requirements->gpu_memory_size > atomic_read(&scheduler->available_gpu_memory)) {
+        available = 0;
+        goto check_done;
+    }
+
+    // 检查GPU数量
+    if (requirements->gpu_count > atomic_read(&scheduler->total_gpus)) {
+        available = 0;
+        goto check_done;
+    }
+
+    // 检查CPU核心数
+    if (requirements->cpu_cores > num_online_cpus()) {
+        available = 0;
+        goto check_done;
+    }
+
+    // 检查内存
+    if (requirements->memory_size > (totalram_pages * PAGE_SIZE)) {
+        available = 0;
+        goto check_done;
+    }
+
+check_done:
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+
+    if (!available) {
+        printk(KERN_INFO "资源不足: 需要 GPU内存=%llu, GPU数量=%u, CPU核心=%u, 内存=%llu\n",
+               requirements->gpu_memory_size, requirements->gpu_count,
+               requirements->cpu_cores, requirements->memory_size);
+    }
+
+    return available ? 0 : -ENOSPC;
+}
+
+// 分配资源
+int ai_allocate_resources(ai_resource_scheduler* scheduler, ai_workload* workload) {
+    ai_gpu_device* gpu, *temp_gpu;
+    unsigned long flags;
+    int allocated_gpus = 0;
+    u64 allocated_memory = 0;
+    int err;
+
+    spin_lock_irqsave(&scheduler->gpu_lock, flags);
+
+    // 分配GPU
+    list_for_each_entry_safe(gpu, temp_gpu, &scheduler->available_gpus, gpu_list) {
+        if (allocated_gpus >= workload->requirements.gpu_count) {
+            break;
+        }
+
+        if (gpu->available_memory >= workload->requirements.gpu_memory_size / workload->requirements.gpu_count) {
+            // 分配GPU
+            list_del(&gpu->gpu_list);
+            list_add_tail(&gpu->gpu_list, &scheduler->allocated_gpus);
+            gpu->available = 0;
+            allocated_gpus++;
+            allocated_memory += gpu->available_memory;
+            atomic_sub(gpu->available_memory, &scheduler->available_gpu_memory);
+        }
+    }
+
+    // 检查是否分配了足够的GPU
+    if (allocated_gpus < workload->requirements.gpu_count) {
+        // 回滚分配
+        ai_rollback_gpu_allocation(scheduler, allocated_gpus);
+        err = -ENOSPC;
+        goto allocation_failed;
+    }
+
+    // 设置Cgroup限制
+    err = ai_setup_cgroup_limits(workload);
+    if (err) {
+        ai_rollback_gpu_allocation(scheduler, allocated_gpus);
+        goto allocation_failed;
+    }
+
+    // 设置内存限制
+    err = ai_setup_memory_limits(workload);
+    if (err) {
+        ai_rollback_gpu_allocation(scheduler, allocated_gpus);
+        goto allocation_failed;
+    }
+
+    // 更新工作负载资源使用
+    workload->gpu_memory_usage = allocated_memory;
+    workload->memory_usage = workload->requirements.memory_size;
+
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+
+    printk(KERN_INFO "资源分配成功: GPU数量=%d, GPU内存=%llu\n",
+           allocated_gpus, allocated_memory);
+    return 0;
+
+allocation_failed:
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+    return err;
+}
+
+// 回滚GPU分配
+void ai_rollback_gpu_allocation(ai_resource_scheduler* scheduler, int count) {
+    ai_gpu_device* gpu, *temp_gpu;
+    int rolled_back = 0;
+
+    list_for_each_entry_safe(gpu, temp_gpu, &scheduler->allocated_gpus, gpu_list) {
+        if (rolled_back >= count) {
+            break;
+        }
+
+        // 释放GPU
+        list_del(&gpu->gpu_list);
+        list_add_tail(&gpu->gpu_list, &scheduler->available_gpus);
+        gpu->available = 1;
+        atomic_add(gpu->available_memory, &scheduler->available_gpu_memory);
+        rolled_back++;
+    }
+}
+
+// 设置Cgroup限制
+int ai_setup_cgroup_limits(ai_workload* workload) {
+    struct cgroup_subsys_state* css;
+    struct cgroup* cgroup;
+    char cgroup_name[64];
+    int err;
+
+    // 创建Cgroup
+    snprintf(cgroup_name, sizeof(cgroup_name), "ai_%s", workload->workload_id);
+    cgroup = cgroup_create_v1(cgroup_name);
+    if (IS_ERR(cgroup)) {
+        return PTR_ERR(cgroup);
+    }
+
+    // 设置CPU限制
+    css = cgroup_get_e_css(cgroup, cpu_cgrp_id);
+    err = ai_set_cpu_limit(css, workload);
+    if (err) {
+        printk(KERN_WARNING "CPU限制设置失败: %d\n", err);
+    }
+
+    // 设置内存限制
+    css = cgroup_get_e_css(cgroup, memory_cgrp_id);
+    err = ai_set_memory_limit(css, workload);
+    if (err) {
+        printk(KERN_WARNING "内存限制设置失败: %d\n", err);
+    }
+
+    // 设置I/O限制
+    css = cgroup_get_e_css(cgroup, io_cgrp_id);
+    err = ai_set_io_limit(css, workload);
+    if (err) {
+        printk(KERN_WARNING "I/O限制设置失败: %d\n", err);
+    }
+
+    // 将当前进程加入Cgroup
+    err = cgroup_attach_task_all(cgroup, current);
+    if (err) {
+        printk(KERN_WARNING "进程加入Cgroup失败: %d\n", err);
+    }
+
+    return 0;
+}
+
+// 设置内存限制
+int ai_setup_memory_limits(ai_workload* workload) {
+    struct mm_struct* mm = current->mm;
+    unsigned long flags;
+    int err;
+
+    // 设置内存限制
+    if (mm) {
+        down_write(&mm->mmap_sem);
+        // 这里应该设置内存限制
+        up_write(&mm->mmap_sem);
+    }
+
+    // 设置GPU内存限制
+    err = ai_set_gpu_memory_limits(workload);
+    if (err) {
+        return err;
+    }
+
+    return 0;
+}
+
+// 设置GPU内存限制
+int ai_set_gpu_memory_limits(ai_workload* workload) {
+    // 实现GPU内存限制设置
+    // 这需要GPU驱动的支持
+    return 0;
+}
+
+// AI调度定时器
+void ai_schedule_timer(unsigned long data) {
+    ai_resource_scheduler* scheduler = (ai_resource_scheduler*)data;
+
+    // 重新调度定时器
+    mod_timer(&scheduler->schedule_timer, jiffies + scheduler->schedule_interval * HZ);
+
+    // 执行资源调度
+    queue_work(scheduler->workqueue, &scheduler->schedule_work);
+}
+
+// AI资源调度
+void ai_resource_scheduler_schedule(ai_resource_scheduler* scheduler) {
+    ai_workload* workload;
+    unsigned long flags;
+
+    // 调度工作负载
+    spin_lock_irqsave(&scheduler->workload_lock, flags);
+    list_for_each_entry(workload, &scheduler->workloads, workload_list) {
+        if (workload->status == WORKLOAD_STATUS_RUNNING) {
+            // 更新工作负载状态
+            ai_update_workload_status(workload);
+
+            // 检查工作负载是否完成
+            if (workload->progress >= 100) {
+                workload->status = WORKLOAD_STATUS_COMPLETED;
+                workload->end_time = current_kernel_time();
+                atomic_dec(&scheduler->active_workloads);
+
+                // 释放资源
+                ai_release_resources(scheduler, workload);
+            }
+        }
+    }
+    spin_unlock_irqrestore(&scheduler->workload_lock, flags);
+
+    // 优化资源分配
+    ai_optimize_resource_allocation(scheduler);
+}
+
+// 更新工作负载状态
+void ai_update_workload_status(ai_workload* workload) {
+    struct task_struct* task;
+    unsigned long flags;
+
+    // 查找工作负载对应的进程
+    rcu_read_lock();
+    task = find_task_by_vpid(workload->pid);
+    if (task) {
+        // 更新CPU利用率
+        workload->cpu_utilization = ai_get_cpu_utilization(task);
+
+        // 更新GPU利用率
+        workload->gpu_utilization = ai_get_gpu_utilization(workload);
+
+        // 更新内存使用
+        workload->memory_usage = ai_get_memory_usage(task);
+
+        // 更新GPU内存使用
+        workload->gpu_memory_usage = ai_get_gpu_memory_usage(workload);
+
+        // 更新进度
+        workload->progress = ai_calculate_progress(workload);
+    }
+    rcu_read_unlock();
+}
+
+// 获取CPU利用率
+float ai_get_cpu_utilization(struct task_struct* task) {
+    // 实现CPU利用率计算
+    return 0.0f; // 简化实现
+}
+
+// 获取GPU利用率
+float ai_get_gpu_utilization(ai_workload* workload) {
+    // 实现GPU利用率计算
+    return 0.0f; // 简化实现
+}
+
+// 获取内存使用
+u64 ai_get_memory_usage(struct task_struct* task) {
+    struct mm_struct* mm = task->mm;
+    u64 usage = 0;
+
+    if (mm) {
+        // 计算内存使用量
+        // 这里应该实现实际的内存使用计算
+        usage = 0;
+    }
+
+    return usage;
+}
+
+// 获取GPU内存使用
+u64 ai_get_gpu_memory_usage(ai_workload* workload) {
+    // 实现GPU内存使用计算
+    return 0; // 简化实现
+}
+
+// 计算工作负载进度
+u32 ai_calculate_progress(ai_workload* workload) {
+    // 实现进度计算
+    // 根据工作负载类型计算不同的进度
+    switch (workload->type) {
+        case AI_WORKLOAD_TRAINING:
+            return ai_calculate_training_progress(workload);
+        case AI_WORKLOAD_INFERENCE:
+            return ai_calculate_inference_progress(workload);
+        default:
+            return 0;
+    }
+}
+
+// 计算训练进度
+u32 ai_calculate_training_progress(ai_workload* workload) {
+    // 实现训练进度计算
+    return 0; // 简化实现
+}
+
+// 计算推理进度
+u32 ai_calculate_inference_progress(ai_workload* workload) {
+    // 实现推理进度计算
+    return 0; // 简化实现
+}
+
+// 释放资源
+void ai_release_resources(ai_resource_scheduler* scheduler, ai_workload* workload) {
+    ai_gpu_device* gpu, *temp_gpu;
+    unsigned long flags;
+
+    spin_lock_irqsave(&scheduler->gpu_lock, flags);
+
+    // 释放GPU
+    list_for_each_entry_safe(gpu, temp_gpu, &scheduler->allocated_gpus, gpu_list) {
+        // 检查GPU是否属于该工作负载
+        if (ai_gpu_belongs_to_workload(gpu, workload)) {
+            // 释放GPU
+            list_del(&gpu->gpu_list);
+            list_add_tail(&gpu->gpu_list, &scheduler->available_gpus);
+            gpu->available = 1;
+            atomic_add(gpu->available_memory, &scheduler->available_gpu_memory);
+        }
+    }
+
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+
+    // 清理Cgroup
+    ai_cleanup_cgroup(workload);
+
+    printk(KERN_INFO "资源释放完成: 工作负载=%s\n", workload->workload_name);
+}
+
+// 检查GPU是否属于工作负载
+int ai_gpu_belongs_to_workload(ai_gpu_device* gpu, ai_workload* workload) {
+    // 实现GPU归属检查
+    return 1; // 简化实现
+}
+
+// 清理Cgroup
+void ai_cleanup_cgroup(ai_workload* workload) {
+    char cgroup_name[64];
+
+    snprintf(cgroup_name, sizeof(cgroup_name), "ai_%s", workload->workload_id);
+    cgroup_destroy_v1(cgroup_name);
+}
+
+// 优化资源分配
+void ai_optimize_resource_allocation(ai_resource_scheduler* scheduler) {
+    // 实现资源分配优化
+    // 可以基于工作负载优先级、资源利用率等因素进行优化
+}
+
+// 获取AI调度器统计信息
+void ai_get_scheduler_stats(ai_resource_scheduler* scheduler, struct ai_scheduler_stats* stats) {
+    unsigned long flags;
+
+    stats->total_workloads = atomic_read(&scheduler->total_workloads);
+    stats->active_workloads = atomic_read(&scheduler->active_workloads);
+    stats->total_gpus = atomic_read(&scheduler->total_gpus);
+    stats->available_gpu_memory = atomic_read(&scheduler->available_gpu_memory);
+
+    // 计算利用率
+    spin_lock_irqsave(&scheduler->gpu_lock, flags);
+    stats->gpu_utilization = ai_calculate_average_gpu_utilization(scheduler);
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+}
+
+// 计算平均GPU利用率
+float ai_calculate_average_gpu_utilization(ai_resource_scheduler* scheduler) {
+    ai_gpu_device* gpu;
+    float total_utilization = 0.0f;
+    int gpu_count = 0;
+
+    list_for_each_entry(gpu, &scheduler->allocated_gpus, gpu_list) {
+        total_utilization += gpu->utilization;
+        gpu_count++;
+    }
+
+    return gpu_count > 0 ? total_utilization / gpu_count : 0.0f;
+}
+
+// 清理AI资源调度器
+void ai_resource_scheduler_cleanup(ai_resource_scheduler* scheduler) {
+    ai_workload* workload, *temp_workload;
+    ai_gpu_device* gpu, *temp_gpu;
+    unsigned long flags;
+
+    printk(KERN_INFO "清理AI资源调度器\n");
+
+    // 停止定时器
+    del_timer_sync(&scheduler->schedule_timer);
+
+    // 清理工作负载列表
+    spin_lock_irqsave(&scheduler->workload_lock, flags);
+    list_for_each_entry_safe(workload, temp_workload, &scheduler->workloads, workload_list) {
+        list_del(&workload->workload_list);
+        kfree(workload);
+    }
+    spin_unlock_irqrestore(&scheduler->workload_lock, flags);
+
+    // 清理GPU列表
+    spin_lock_irqsave(&scheduler->gpu_lock, flags);
+    list_for_each_entry_safe(gpu, temp_gpu, &scheduler->available_gpus, gpu_list) {
+        list_del(&gpu->gpu_list);
+        kfree(gpu);
+    }
+    list_for_each_entry_safe(gpu, temp_gpu, &scheduler->allocated_gpus, gpu_list) {
+        list_del(&gpu->gpu_list);
+        kfree(gpu);
+    }
+    spin_unlock_irqrestore(&scheduler->gpu_lock, flags);
+
+    // 销毁工作队列
+    if (scheduler->workqueue) {
+        destroy_workqueue(scheduler->workqueue);
+    }
+
+    // 删除/proc条目
+    if (scheduler->proc_entry) {
+        remove_proc_entry("ai_scheduler", NULL);
+    }
+
+    printk(KERN_INFO "AI资源调度器清理完成\n");
+}
+```
+
+### 5. 实验项目：安全容器实现 (M7)
+
+#### 5.1 实验目标
+
+- 实现一个基本的安全容器
+- 配置命名空间隔离
+- 实现资源限制和安全策略
+- 测试容器安全性
+
+#### 5.2 实验代码
+
+```c
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/uaccess.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/mutex.h>
+#include <linux/workqueue.h>
+#include <linux/timer.h>
+#include <linux/cred.h>
+#include <linux/namespace.h>
+#include <linux/pid_namespace.h>
+#include <linux/user_namespace.h>
+#include <linux/utsname.h>
+#include <linux/ipc_namespace.h>
+#include <linux/mnt_namespace.h>
+#include <linux/net_namespace.h>
+#include <linux/cgroup.h>
+#include <linux/security.h>
+#include <linux/seccomp.h>
+#include <linux/filter.h>
+
+#define MODULE_NAME "secure_container"
+#define MAX_CONTAINERS 64
+#define MAX_CONTAINER_NAME 64
+#define MAX_PATH_LENGTH 256
+
+// 容器状态
+typedef enum {
+    CONTAINER_CREATED,
+    CONTAINER_RUNNING,
+    CONTAINER_STOPPED,
+    CONTAINER_ERROR
+} container_state;
+
+// 容器配置
+typedef struct container_config {
+    char name[MAX_CONTAINER_NAME];    // 容器名称
+    char rootfs[MAX_PATH_LENGTH];    // 根文件系统路径
+    char hostname[64];              // 主机名
+    uid_t uid;                      // 用户ID
+    gid_t gid;                      // 组ID
+    u32 memory_limit;              // 内存限制(MB)
+    u32 cpu_shares;                // CPU份额
+    int network_isolated;           // 网络隔离
+    int privileged;                 // 特权模式
+    char seccomp_profile[MAX_PATH_LENGTH]; // Seccomp配置文件
+} container_config;
+
+// 容器结构
+typedef struct secure_container {
+    char container_id[64];          // 容器ID
+    container_config config;         // 配置
+    container_state state;          // 状态
+    pid_t init_pid;                 // 初始进程ID
+    struct user_namespace* user_ns;  // 用户命名空间
+    struct pid_namespace* pid_ns;    // PID命名空间
+    struct uts_namespace* uts_ns;   // UTS命名空间
+    struct ipc_namespace* ipc_ns;    // IPC命名空间
+    struct mnt_namespace* mnt_ns;    // 挂载命名空间
+    struct net* net_ns;             // 网络命名空间
+    struct cgroup* cgroup;           // Cgroup
+    struct list_head container_list; // 容器链表
+    struct timespec start_time;     // 启动时间
+    struct timespec stop_time;       // 停止时间
+    atomic_t ref_count;             // 引用计数
+} secure_container;
+
+// 容器管理器
+typedef struct container_manager {
+    struct list_head containers;      // 容器列表
+    struct mutex manager_lock;       // 管理器锁
+    struct workqueue_struct* workqueue; // 工作队列
+    struct timer_list monitor_timer; // 监控定时器
+    atomic_t container_count;        // 容器计数
+    struct proc_dir_entry* proc_entry; // /proc条目
+} container_manager;
+
+// 全局变量
+static container_manager* g_container_manager = NULL;
+
+// 模块参数
+static int max_containers = MAX_CONTAINERS;
+static int default_memory_limit = 512; // MB
+static int default_cpu_shares = 1024;
+static int monitor_interval = 5; // seconds
+
+// 函数声明
+static int container_create_namespaces(secure_container* container);
+static int container_setup_cgroup(secure_container* container);
+static int container_setup_seccomp(secure_container* container);
+static int container_setup_rootfs(secure_container* container);
+static void container_cleanup_namespaces(secure_container* container);
+static void container_monitor_timer(unsigned long data);
+
+// 初始化容器管理器
+static int __init container_manager_init(void) {
+    printk(KERN_INFO "初始化安全容器管理器\n");
+
+    // 分配容器管理器
+    g_container_manager = kzalloc(sizeof(container_manager), GFP_KERNEL);
+    if (!g_container_manager) {
+        printk(KERN_ERR "无法分配容器管理器\n");
+        return -ENOMEM;
+    }
+
+    // 初始化链表和锁
+    INIT_LIST_HEAD(&g_container_manager->containers);
+    mutex_init(&g_container_manager->manager_lock);
+    atomic_set(&g_container_manager->container_count, 0);
+
+    // 创建工作队列
+    g_container_manager->workqueue = alloc_workqueue("container_manager", WQ_MEM_RECLAIM, 0);
+    if (!g_container_manager->workqueue) {
+        printk(KERN_ERR "无法创建工作队列\n");
+        kfree(g_container_manager);
+        return -ENOMEM;
+    }
+
+    // 初始化监控定时器
+    setup_timer(&g_container_manager->monitor_timer, container_monitor_timer, (unsigned long)g_container_manager);
+
+    // 创建/proc条目
+    g_container_manager->proc_entry = proc_create("secure_containers", 0444, NULL, &container_proc_ops);
+    if (!g_container_manager->proc_entry) {
+        printk(KERN_ERR "无法创建/proc条目\n");
+        destroy_workqueue(g_container_manager->workqueue);
+        kfree(g_container_manager);
+        return -ENOMEM;
+    }
+
+    // 启动监控定时器
+    mod_timer(&g_container_manager->monitor_timer, jiffies + monitor_interval * HZ);
+
+    printk(KERN_INFO "安全容器管理器初始化成功\n");
+    return 0;
+}
+
+// 创建容器
+static int container_create(const container_config* config, secure_container** result) {
+    secure_container* container;
+    int err;
+
+    printk(KERN_INFO "创建容器: %s\n", config->name);
+
+    // 检查容器数量限制
+    if (atomic_read(&g_container_manager->container_count) >= max_containers) {
+        printk(KERN_ERR "容器数量达到上限\n");
+        return -ENOSPC;
+    }
+
+    // 分配容器结构
+    container = kzalloc(sizeof(secure_container), GFP_KERNEL);
+    if (!container) {
+        return -ENOMEM;
+    }
+
+    // 生成容器ID
+    snprintf(container->container_id, sizeof(container->container_id), "container_%llu", ktime_get_real_ns());
+
+    // 复制配置
+    memcpy(&container->config, config, sizeof(container_config));
+    container->state = CONTAINER_CREATED;
+    container->init_pid = -1;
+    atomic_set(&container->ref_count, 1);
+
+    // 创建命名空间
+    err = container_create_namespaces(container);
+    if (err) {
+        printk(KERN_ERR "创建命名空间失败: %d\n", err);
+        goto cleanup;
+    }
+
+    // 设置Cgroup
+    err = container_setup_cgroup(container);
+    if (err) {
+        printk(KERN_ERR "设置Cgroup失败: %d\n", err);
+        goto cleanup_namespaces;
+    }
+
+    // 设置Seccomp
+    if (strlen(config->seccomp_profile) > 0) {
+        err = container_setup_seccomp(container);
+        if (err) {
+            printk(KERN_WARNING "Seccomp设置失败: %d\n", err);
+        }
+    }
+
+    // 设置根文件系统
+    err = container_setup_rootfs(container);
+    if (err) {
+        printk(KERN_ERR "设置根文件系统失败: %d\n", err);
+        goto cleanup_cgroup;
+    }
+
+    // 添加到容器列表
+    mutex_lock(&g_container_manager->manager_lock);
+    list_add_tail(&container->container_list, &g_container_manager->containers);
+    atomic_inc(&g_container_manager->container_count);
+    mutex_unlock(&g_container_manager->manager_lock);
+
+    // 设置启动时间
+    container->start_time = current_kernel_time();
+    container->state = CONTAINER_RUNNING;
+
+    printk(KERN_INFO "容器创建成功: %s\n", config->name);
+    *result = container;
+    return 0;
+
+cleanup_cgroup:
+    if (container->cgroup) {
+        cgroup_destroy_v1(container->cgroup->name);
+    }
+cleanup_namespaces:
+    container_cleanup_namespaces(container);
+cleanup:
+    kfree(container);
+    return err;
+}
+
+// 创建命名空间
+static int container_create_namespaces(secure_container* container) {
+    int err;
+
+    printk(KERN_INFO "创建容器命名空间\n");
+
+    // 创建用户命名空间
+    container->user_ns = create_user_ns(current_user_ns());
+    if (IS_ERR(container->user_ns)) {
+        return PTR_ERR(container->user_ns);
+    }
+
+    // 创建PID命名空间
+    container->pid_ns = create_pid_namespace(container->user_ns);
+    if (IS_ERR(container->pid_ns)) {
+        err = PTR_ERR(container->pid_ns);
+        goto cleanup_user_ns;
+    }
+
+    // 创建UTS命名空间
+    container->uts_ns = copy_utsname(CLONE_NEWUTS, current->nsproxy->uts_ns);
+    if (IS_ERR(container->uts_ns)) {
+        err = PTR_ERR(container->uts_ns);
+        goto cleanup_pid_ns;
+    }
+
+    // 创建IPC命名空间
+    container->ipc_ns = copy_ipc(CLONE_NEWIPC, current->nsproxy->ipc_ns);
+    if (IS_ERR(container->ipc_ns)) {
+        err = PTR_ERR(container->ipc_ns);
+        goto cleanup_uts_ns;
+    }
+
+    // 创建挂载命名空间
+    container->mnt_ns = copy_mnt_ns(CLONE_NEWNS, current->nsproxy->mnt_ns, 0);
+    if (IS_ERR(container->mnt_ns)) {
+        err = PTR_ERR(container->mnt_ns);
+        goto cleanup_ipc_ns;
+    }
+
+    // 创建网络命名空间
+    if (container->config.network_isolated) {
+        container->net_ns = copy_net_ns(CLONE_NEWNET, current->nsproxy->net_ns);
+        if (IS_ERR(container->net_ns)) {
+            err = PTR_ERR(container->net_ns);
+            goto cleanup_mnt_ns;
+        }
+    }
+
+    // 设置主机名
+    if (strlen(container->config.hostname) > 0) {
+        strncpy(container->uts_ns->name.nodename, container->config.hostname,
+                sizeof(container->uts_ns->name.nodename) - 1);
+    }
+
+    printk(KERN_INFO "容器命名空间创建成功\n");
+    return 0;
+
+cleanup_mnt_ns:
+    put_mnt_ns(container->mnt_ns);
+cleanup_ipc_ns:
+    put_ipc_ns(container->ipc_ns);
+cleanup_uts_ns:
+    put_uts_ns(container->uts_ns);
+cleanup_pid_ns:
+    put_pid_ns(container->pid_ns);
+cleanup_user_ns:
+    put_user_ns(container->user_ns);
+    return err;
+}
+
+// 设置Cgroup
+static int container_setup_cgroup(secure_container* container) {
+    char cgroup_name[64];
+    int err;
+
+    printk(KERN_INFO "设置容器Cgroup\n");
+
+    // 创建Cgroup名称
+    snprintf(cgroup_name, sizeof(cgroup_name), "container_%s", container->container_id);
+
+    // 创建Cgroup
+    container->cgroup = cgroup_create_v1(cgroup_name);
+    if (IS_ERR(container->cgroup)) {
+        return PTR_ERR(container->cgroup);
+    }
+
+    // 设置内存限制
+    if (container->config.memory_limit > 0) {
+        struct cgroup_subsys_state* css = cgroup_get_e_css(container->cgroup, memory_cgrp_id);
+        char mem_limit_str[32];
+        snprintf(mem_limit_str, sizeof(mem_limit_str), "%dM", container->config.memory_limit);
+        err = cgroup_write_string(css, "memory.limit_in_bytes", mem_limit_str);
+        if (err) {
+            printk(KERN_WARNING "设置内存限制失败: %d\n", err);
+        }
+    }
+
+    // 设置CPU份额
+    if (container->config.cpu_shares > 0) {
+        struct cgroup_subsys_state* css = cgroup_get_e_css(container->cgroup, cpu_cgrp_id);
+        char cpu_shares_str[32];
+        snprintf(cpu_shares_str, sizeof(cpu_shares_str), "%d", container->config.cpu_shares);
+        err = cgroup_write_string(css, "cpu.shares", cpu_shares_str);
+        if (err) {
+            printk(KERN_WARNING "设置CPU份额失败: %d\n", err);
+        }
+    }
+
+    // 将当前进程加入Cgroup
+    err = cgroup_attach_task_all(container->cgroup, current);
+    if (err) {
+        printk(KERN_WARNING "进程加入Cgroup失败: %d\n", err);
+    }
+
+    printk(KERN_INFO "容器Cgroup设置成功\n");
+    return 0;
+}
+
+// 设置Seccomp
+static int container_setup_seccomp(secure_container* container) {
+    struct sock_fprog* fprog;
+    int err;
+
+    printk(KERN_INFO "设置容器Seccomp\n");
+
+    // 加载Seccomp配置文件
+    fprog = container_load_seccomp_profile(container->config.seccomp_profile);
+    if (IS_ERR(fprog)) {
+        return PTR_ERR(fprog);
+    }
+
+    // 应用Seccomp过滤器
+    err = prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, fprog);
+    if (err) {
+        kfree(fprog);
+        return err;
+    }
+
+    kfree(fprog);
+    printk(KERN_INFO "容器Seccomp设置成功\n");
+    return 0;
+}
+
+// 设置根文件系统
+static int container_setup_rootfs(secure_container* container) {
+    struct path root_path;
+    int err;
+
+    printk(KERN_INFO "设置容器根文件系统\n");
+
+    // 解析根文件系统路径
+    err = kern_path(container->config.rootfs, LOOKUP_FOLLOW, &root_path);
+    if (err) {
+        printk(KERN_ERR "无法解析根文件系统路径: %s\n", container->config.rootfs);
+        return err;
+    }
+
+    // 检查路径是否为目录
+    if (!S_ISDIR(root_path.dentry->d_inode->i_mode)) {
+        path_put(&root_path);
+        printk(KERN_ERR "根文件系统路径不是目录: %s\n", container->config.rootfs);
+        return -ENOTDIR;
+    }
+
+    // 执行挂载操作
+    err = container_mount_filesystems(container, &root_path);
+    if (err) {
+        path_put(&root_path);
+        printk(KERN_ERR "挂载文件系统失败: %d\n", err);
+        return err;
+    }
+
+    path_put(&root_path);
+    printk(KERN_INFO "容器根文件系统设置成功\n");
+    return 0;
+}
+
+// 挂载文件系统
+static int container_mount_filesystems(secure_container* container, struct path* root_path) {
+    int err;
+
+    // 挂载proc文件系统
+    err = container_mount_proc(container, root_path);
+    if (err) {
+        return err;
+    }
+
+    // 挂载sysfs文件系统
+    err = container_mount_sysfs(container, root_path);
+    if (err) {
+        return err;
+    }
+
+    // 挂载tmpfs文件系统
+    err = container_mount_tmpfs(container, root_path);
+    if (err) {
+        return err;
+    }
+
+    // 挂载devpts文件系统
+    err = container_mount_devpts(container, root_path);
+    if (err) {
+        return err;
+    }
+
+    return 0;
+}
+
+// 挂载proc文件系统
+static int container_mount_proc(secure_container* container, struct path* root_path) {
+    struct path proc_path;
+    int err;
+
+    // 创建proc目录
+    err = container_create_directory(root_path, "proc");
+    if (err) {
+        return err;
+    }
+
+    // 挂载proc文件系统
+    err = kern_path("/proc", LOOKUP_FOLLOW, &proc_path);
+    if (err) {
+        return err;
+    }
+
+    err = container_do_mount(container, &proc_path, root_path, "proc");
+    path_put(&proc_path);
+
+    return err;
+}
+
+// 挂载sysfs文件系统
+static int container_mount_sysfs(secure_container* container, struct path* root_path) {
+    struct path sys_path;
+    int err;
+
+    // 创建sys目录
+    err = container_create_directory(root_path, "sys");
+    if (err) {
+        return err;
+    }
+
+    // 挂载sysfs文件系统
+    err = kern_path("/sys", LOOKUP_FOLLOW, &sys_path);
+    if (err) {
+        return err;
+    }
+
+    err = container_do_mount(container, &sys_path, root_path, "sysfs");
+    path_put(&sys_path);
+
+    return err;
+}
+
+// 挂载tmpfs文件系统
+static int container_mount_tmpfs(secure_container* container, struct path* root_path) {
+    struct path tmp_path;
+    int err;
+
+    // 创建tmp目录
+    err = container_create_directory(root_path, "tmp");
+    if (err) {
+        return err;
+    }
+
+    // 挂载tmpfs文件系统
+    err = kern_path("/tmp", LOOKUP_FOLLOW, &tmp_path);
+    if (err) {
+        return err;
+    }
+
+    err = container_do_mount(container, &tmp_path, root_path, "tmpfs");
+    path_put(&tmp_path);
+
+    return err;
+}
+
+// 挂载devpts文件系统
+static int container_mount_devpts(secure_container* container, struct path* root_path) {
+    struct path dev_path;
+    int err;
+
+    // 创建dev目录
+    err = container_create_directory(root_path, "dev");
+    if (err) {
+        return err;
+    }
+
+    // 挂载devpts文件系统
+    err = kern_path("/dev", LOOKUP_FOLLOW, &dev_path);
+    if (err) {
+        return err;
+    }
+
+    err = container_do_mount(container, &dev_path, root_path, "devpts");
+    path_put(&dev_path);
+
+    return err;
+}
+
+// 创建目录
+static int container_create_directory(struct path* parent, const char* name) {
+    struct dentry* dentry;
+    struct inode* inode;
+    int err;
+
+    // 创建目录项
+    dentry = lookup_one_len(name, parent->dentry, strlen(name));
+    if (IS_ERR(dentry)) {
+        return PTR_ERR(dentry);
+    }
+
+    // 检查目录是否已存在
+    if (dentry->d_inode) {
+        dput(dentry);
+        return 0;
+    }
+
+    // 创建目录
+    inode = parent->dentry->d_inode;
+    err = inode->i_op->mkdir(inode, dentry, 0755);
+    dput(dentry);
+
+    return err;
+}
+
+// 执行挂载
+static int container_do_mount(secure_container* container, struct path* source,
+                            struct path* target, const char* fstype) {
+    char target_path[MAX_PATH_LENGTH];
+    int err;
+
+    // 构建目标路径
+    snprintf(target_path, sizeof(target_path), "%s/%s",
+             container->config.rootfs, target->dentry->d_name.name);
+
+    // 执行挂载
+    err = do_mount(source->dentry->d_name.name, target_path, fstype,
+                  MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL);
+    if (err) {
+        printk(KERN_ERR "挂载 %s 到 %s 失败: %d\n", fstype, target_path, err);
+    }
+
+    return err;
+}
+
+// 清理命名空间
+static void container_cleanup_namespaces(secure_container* container) {
+    if (container->net_ns) {
+        put_net(container->net_ns);
+    }
+    if (container->mnt_ns) {
+        put_mnt_ns(container->mnt_ns);
+    }
+    if (container->ipc_ns) {
+        put_ipc_ns(container->ipc_ns);
+    }
+    if (container->uts_ns) {
+        put_uts_ns(container->uts_ns);
+    }
+    if (container->pid_ns) {
+        put_pid_ns(container->pid_ns);
+    }
+    if (container->user_ns) {
+        put_user_ns(container->user_ns);
+    }
+}
+
+// 停止容器
+static int container_stop(secure_container* container) {
+    printk(KERN_INFO "停止容器: %s\n", container->config.name);
+
+    // 设置停止状态
+    container->state = CONTAINER_STOPPED;
+    container->stop_time = current_kernel_time();
+
+    // 终止容器进程
+    if (container->init_pid > 0) {
+        struct pid* pid = find_get_pid(container->init_pid);
+        if (pid) {
+            kill_pid(pid, SIGTERM, 1);
+            put_pid(pid);
+        }
+    }
+
+    // 清理资源
+    if (container->cgroup) {
+        cgroup_destroy_v1(container->cgroup->name);
+    }
+
+    container_cleanup_namespaces(container);
+
+    printk(KERN_INFO "容器停止成功: %s\n", container->config.name);
+    return 0;
+}
+
+// 容器监控定时器
+static void container_monitor_timer(unsigned long data) {
+    container_manager* manager = (container_manager*)data;
+
+    // 重新调度定时器
+    mod_timer(&manager->monitor_timer, jiffies + monitor_interval * HZ);
+
+    // 执行容器监控
+    container_monitor_containers(manager);
+}
+
+// 监控容器
+static void container_monitor_containers(container_manager* manager) {
+    secure_container* container;
+    unsigned long flags;
+
+    mutex_lock(&manager->manager_lock);
+    list_for_each_entry(container, &manager->containers, container_list) {
+        if (container->state == CONTAINER_RUNNING) {
+            container_monitor_single(container);
+        }
+    }
+    mutex_unlock(&manager->manager_lock);
+}
+
+// 监控单个容器
+static void container_monitor_single(secure_container* container) {
+    struct pid* pid;
+    int running;
+
+    // 检查容器进程是否仍在运行
+    pid = find_get_pid(container->init_pid);
+    if (pid) {
+        running = pid_task(pid, PIDTYPE_PID) != NULL;
+        put_pid(pid);
+    } else {
+        running = 0;
+    }
+
+    // 如果进程已停止，更新容器状态
+    if (!running && container->state == CONTAINER_RUNNING) {
+        container->state = CONTAINER_STOPPED;
+        container->stop_time = current_kernel_time();
+        printk(KERN_INFO "容器进程已停止: %s\n", container->config.name);
+    }
+
+    // 检查资源使用情况
+    container_check_resource_usage(container);
+}
+
+// 检查资源使用情况
+static void container_check_resource_usage(secure_container* container) {
+    // 实现资源使用检查
+    // 可以检查内存使用、CPU使用、网络流量等
+}
+
+// /proc文件操作
+static int container_proc_show(struct seq_file* m, void* v) {
+    secure_container* container;
+    unsigned long flags;
+
+    seq_printf(m, "安全容器状态:\n");
+    seq_printf(m, "总容器数: %d\n", atomic_read(&g_container_manager->container_count));
+
+    mutex_lock(&g_container_manager->manager_lock);
+    list_for_each_entry(container, &g_container_manager->containers, container_list) {
+        seq_printf(m, "\n容器: %s\n", container->config.name);
+        seq_printf(m, "  ID: %s\n", container->container_id);
+        seq_printf(m, "  状态: %d\n", container->state);
+        seq_printf(m, "  PID: %d\n", container->init_pid);
+        seq_printf(m, "  根文件系统: %s\n", container->config.rootfs);
+        seq_printf(m, "  内存限制: %d MB\n", container->config.memory_limit);
+        seq_printf(m, "  CPU份额: %d\n", container->config.cpu_shares);
+        seq_printf(m, "  网络隔离: %s\n", container->config.network_isolated ? "是" : "否");
+        seq_printf(m, "  特权模式: %s\n", container->config.privileged ? "是" : "否");
+    }
+    mutex_unlock(&g_container_manager->manager_lock);
+
+    return 0;
+}
+
+// 模块初始化
+static int __init secure_container_init(void) {
+    printk(KERN_INFO "初始化安全容器模块\n");
+
+    // 初始化容器管理器
+    if (container_manager_init() != 0) {
+        printk(KERN_ERR "容器管理器初始化失败\n");
+        return -1;
+    }
+
+    // 注册设备文件
+    if (register_device() != 0) {
+        printk(KERN_ERR "设备注册失败\n");
+        return -1;
+    }
+
+    printk(KERN_INFO "安全容器模块初始化成功\n");
+    return 0;
+}
+
+// 模块退出
+static void __exit secure_container_exit(void) {
+    secure_container* container, *temp;
+    unsigned long flags;
+
+    printk(KERN_INFO "退出安全容器模块\n");
+
+    // 停止所有容器
+    mutex_lock(&g_container_manager->manager_lock);
+    list_for_each_entry_safe(container, temp, &g_container_manager->containers, container_list) {
+        list_del(&container->container_list);
+        container_stop(container);
+        kfree(container);
+    }
+    mutex_unlock(&g_container_manager->manager_lock);
+
+    // 停止监控定时器
+    del_timer_sync(&g_container_manager->monitor_timer);
+
+    // 销毁工作队列
+    if (g_container_manager->workqueue) {
+        destroy_workqueue(g_container_manager->workqueue);
+    }
+
+    // 删除/proc条目
+    if (g_container_manager->proc_entry) {
+        remove_proc_entry("secure_containers", NULL);
+    }
+
+    // 释放容器管理器
+    kfree(g_container_manager);
+
+    // 注销设备文件
+    unregister_device();
+
+    printk(KERN_INFO "安全容器模块退出成功\n");
+}
+
+module_init(secure_container_init);
+module_exit(secure_container_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Your Name");
+MODULE_DESCRIPTION("Secure Container Implementation");
+MODULE_VERSION("1.0");
+```
+
+## 实验任务
+
+### 基础任务
+
+1. **实现安全监控**：创建一个基本的安全监控系统
+2. **访问控制实现**：实现基于角色的访问控制
+3. **容器安全配置**：配置安全的容器环境
+
+### 进阶任务
+
+1. **容器安全加固**：实现容器安全加固措施
+2. **AI工作负载管理**：实现AI工作负载的资源调度
+3. **完整性检查**：实现文件完整性检查系统
+
+### 挑战任务
+
+1. **零信任架构**：实现零信任安全架构
+2. **联邦学习安全**：实现联邦学习环境的安全机制
+3. **量子安全**：探索量子计算对操作系统安全的影响
+
+## 扩展阅读
+
+### 推荐书籍
+
+1. 《Security in Computing》- Charles P. Pfleeger
+2. 《Applied Cryptography》- Bruce Schneier
+3. 《Computer Security: Principles and Practice》- William Stallings
+
+### 在线资源
+
+1. [Linux Kernel Security Documentation](https://www.kernel.org/doc/html/latest/security/)
+2. [Container Security Guide](https://github.com/sse-secure-systems/container-security-guide)
+3. [AI Security Literature](https://arxiv.org/list/cs.CR/recent)
+
+## 课后习题
+
+1. **概念题**：解释操作系统安全的基本原则
+2. **分析题**：分析容器技术的安全挑战
+3. **设计题**：设计一个安全的AI工作负载调度系统
+4. **实现题**：实现一个基于机器学习的异常检测系统
+5. **优化题**：优化容器安全机制的性能
+
+## 课程总结
+
+本课程全面介绍了现代操作系统的核心概念和技术，包括：
+
+- **基础架构**：操作系统架构、进程管理、内存管理
+- **虚拟化技术**：系统调用、Shell、可执行文件、链接加载
+- **并发控制**：多核编程、同步机制、性能优化
+- **持久化存储**：设备驱动、文件系统、I/O系统
+- **安全与现代系统**：安全机制、容器技术、AI工作负载管理
+
+通过这16讲的学习，您应该能够理解操作系统的核心原理，掌握现代系统设计的关键技术，并为未来的研究和实践打下坚实基础。
+
+## 参考资料
+
+- 南京大学操作系统课程讲义: https://jyywiki.cn/OS/2025/
+- B站视频资源: [南京大学操作系统课程](https://www.bilibili.com/video/BV1GX4y1K7Kj/)
+- 《操作系统概念》- Abraham Silberschatz
+- 《深入理解Linux内核》- Daniel P. Bovet

@@ -1,0 +1,2039 @@
+---
+title: "安全设计与最佳实践"
+description: "深入理解系统安全架构、认证授权机制、数据加密和安全防护策略"
+---
+
+# 第8周：安全设计与最佳实践
+
+## 本周学习目标
+
+- 理解安全设计的基本原则和重要性
+- 掌握认证与授权机制的设计
+- 学习数据加密和安全存储
+- 了解常见安全漏洞及防护措施
+- 掌握安全最佳实践和合规要求
+
+## 安全设计基础
+
+### 安全设计原则
+
+```python
+# 安全设计原则枚举
+from enum import Enum
+from typing import Dict, List, Optional, Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import hashlib
+import hmac
+import secrets
+import json
+import time
+from functools import wraps
+
+class SecurityPrinciple(Enum):
+    """安全设计原则"""
+    LEAST_PRIVILEGE = "least_privilege"        # 最小权限原则
+    DEFENSE_IN_DEPTH = "defense_in_depth"       # 纵深防御原则
+    FAIL_SECURE = "fail_secure"                # 安全失败原则
+    ECONOMY_OF_MECHANISM = "economy"           # 简洁性原则
+    COMPLETE_MEDIATION = "complete_mediation"  # 完全仲裁原则
+    OPEN_DESIGN = "open_design"                 # 开放设计原则
+    SEPARATION_OF_DUTY = "separation"          # 职责分离原则
+    LEAST_COMMON_MECHANISM = "least_common"    # 最小公共机制原则
+
+@dataclass
+class SecurityPolicy:
+    """安全策略"""
+    name: str
+    principle: SecurityPrinciple
+    description: str
+    implementation: str
+    priority: int = 1
+
+class SecurityFramework:
+    """安全框架"""
+
+    def __init__(self):
+        self.policies: List[SecurityPolicy] = []
+        self.security_controls = {}
+        self.threat_model = ThreatModel()
+
+    def add_policy(self, policy: SecurityPolicy):
+        """添加安全策略"""
+        self.policies.append(policy)
+
+    def implement_security(self, system_components: Dict):
+        """实施安全措施"""
+        security_plan = {}
+
+        for component_name, component in system_components.items():
+            security_plan[component_name] = self._assess_component_security(component)
+
+        return security_plan
+
+    def _assess_component_security(self, component: Dict) -> Dict:
+        """评估组件安全性"""
+        security_measures = []
+
+        for policy in self.policies:
+            if policy.principle == SecurityPrinciple.LEAST_PRIVILEGE:
+                measures = self._implement_least_privilege(component)
+            elif policy.principle == SecurityPrinciple.DEFENSE_IN_DEPTH:
+                measures = self._implement_defense_in_depth(component)
+            elif policy.principle == SecurityPrinciple.FAIL_SECURE:
+                measures = self._implement_fail_secure(component)
+            else:
+                measures = []
+
+            security_measures.extend(measures)
+
+        return {
+            "security_measures": security_measures,
+            "risk_level": self._calculate_risk_level(component, security_measures),
+            "recommendations": self._generate_recommendations(component, security_measures)
+        }
+
+    def _implement_least_privilege(self, component: Dict) -> List[str]:
+        """实现最小权限原则"""
+        measures = []
+        component_type = component.get('type', 'unknown')
+
+        if component_type == 'database':
+            measures.extend([
+                "限制数据库用户权限",
+                "实施行级安全控制",
+                "启用数据库审计"
+            ])
+        elif component_type == 'api':
+            measures.extend([
+                "实施API访问控制",
+                "限制API调用频率",
+                "实施请求参数验证"
+            ])
+        elif component_type == 'web':
+            measures.extend([
+                "实施文件权限控制",
+                "限制网络访问",
+                "启用安全日志"
+            ])
+
+        return measures
+
+    def _implement_defense_in_depth(self, component: Dict) -> List[str]:
+        """实现纵深防御原则"""
+        return [
+            "网络层防护",
+            "应用层防护",
+            "数据层防护",
+            "监控和告警"
+        ]
+
+    def _implement_fail_secure(self, component: Dict) -> List[str]:
+        """实现安全失败原则"""
+        return [
+            "默认拒绝访问",
+            "错误信息不泄露敏感数据",
+            "故障时保持安全状态"
+        ]
+
+    def _calculate_risk_level(self, component: Dict, measures: List[str]) -> str:
+        """计算风险等级"""
+        base_risk = component.get('risk_score', 5)
+        protection_score = len(measures) * 0.5
+
+        adjusted_risk = base_risk - protection_score
+
+        if adjusted_risk <= 2:
+            return "LOW"
+        elif adjusted_risk <= 4:
+            return "MEDIUM"
+        elif adjusted_risk <= 7:
+            return "HIGH"
+        else:
+            return "CRITICAL"
+
+    def _generate_recommendations(self, component: Dict, measures: List[str]) -> List[str]:
+        """生成安全建议"""
+        recommendations = []
+
+        component_type = component.get('type', 'unknown')
+        if component_type == 'api' and 'authentication' not in [m.lower() for m in measures]:
+            recommendations.append("实施强身份认证机制")
+
+        if component_type == 'database' and 'encryption' not in [m.lower() for m in measures]:
+            recommendations.append("实施数据加密")
+
+        if len(measures) < 3:
+            recommendations.append("增加安全控制措施")
+
+        return recommendations
+
+class ThreatModel:
+    """威胁模型"""
+
+    def __init__(self):
+        self.threats = []
+        self.vulnerabilities = []
+        self.attack_vectors = []
+
+    def identify_threats(self, system_components: Dict):
+        """识别威胁"""
+        threats = []
+
+        for component_name, component in system_components.items():
+            component_threats = self._analyze_component_threats(component)
+            threats.extend(component_threats)
+
+        self.threats = threats
+        return threats
+
+    def _analyze_component_threats(self, component: Dict) -> List[Dict]:
+        """分析组件威胁"""
+        component_type = component.get('type', 'unknown')
+        threats = []
+
+        if component_type == 'web':
+            threats.extend([
+                {"type": "SQL注入", "severity": "HIGH", "likelihood": "MEDIUM"},
+                {"type": "XSS攻击", "severity": "MEDIUM", "likelihood": "HIGH"},
+                {"type": "CSRF攻击", "severity": "MEDIUM", "likelihood": "MEDIUM"}
+            ])
+        elif component_type == 'api':
+            threats.extend([
+                {"type": "API滥用", "severity": "MEDIUM", "likelihood": "HIGH"},
+                {"type": "认证绕过", "severity": "HIGH", "likelihood": "LOW"},
+                {"type": "数据泄露", "severity": "HIGH", "likelihood": "MEDIUM"}
+            ])
+        elif component_type == 'database':
+            threats.extend([
+                {"type": "未授权访问", "severity": "HIGH", "likelihood": "LOW"},
+                {"type": "数据泄露", "severity": "HIGH", "likelihood": "MEDIUM"},
+                {"type": "数据篡改", "severity": "HIGH", "likelihood": "LOW"}
+            ])
+
+        return threats
+```
+
+## 认证与授权机制
+
+### 认证机制设计
+
+```python
+# 认证机制实现
+from abc import ABC, abstractmethod
+from typing import Optional, Dict, Any
+import jwt
+import bcrypt
+from datetime import datetime, timedelta
+
+class AuthenticationProvider(ABC):
+    """认证提供者抽象类"""
+
+    @abstractmethod
+    def authenticate(self, credentials: Dict) -> Optional[str]:
+        """认证用户"""
+        pass
+
+    @abstractmethod
+    def verify_token(self, token: str) -> Optional[Dict]:
+        """验证令牌"""
+        pass
+
+    @abstractmethod
+    def refresh_token(self, token: str) -> Optional[str]:
+        """刷新令牌"""
+        pass
+
+class JWTAuthenticationProvider(AuthenticationProvider):
+    """JWT认证提供者"""
+
+    def __init__(self, secret_key: str, algorithm: str = "HS256", token_expiry: int = 3600):
+        self.secret_key = secret_key
+        self.algorithm = algorithm
+        self.token_expiry = token_expiry
+        self.refresh_token_expiry = token_expiry * 24  # 刷新令牌24小时有效
+
+    def authenticate(self, credentials: Dict) -> Optional[str]:
+        """认证用户并生成JWT令牌"""
+        username = credentials.get('username')
+        password = credentials.get('password')
+
+        # 这里应该验证用户凭据，简化实现
+        if self._validate_credentials(username, password):
+            return self._generate_token(username)
+        return None
+
+    def verify_token(self, token: str) -> Optional[Dict]:
+        """验证JWT令牌"""
+        try:
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm]
+            )
+            return payload
+        except jwt.ExpiredSignatureError:
+            return None
+        except jwt.InvalidTokenError:
+            return None
+
+    def refresh_token(self, token: str) -> Optional[str]:
+        """刷新令牌"""
+        payload = self.verify_token(token)
+        if payload:
+            return self._generate_token(payload['sub'])
+        return None
+
+    def _validate_credentials(self, username: str, password: str) -> bool:
+        """验证用户凭据"""
+        # 简化实现，实际应该查询数据库验证
+        return username == "admin" and password == "password"
+
+    def _generate_token(self, username: str) -> str:
+        """生成JWT令牌"""
+        payload = {
+            'sub': username,
+            'iat': datetime.utcnow(),
+            'exp': datetime.utcnow() + timedelta(seconds=self.token_expiry)
+        }
+        return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+
+class OAuth2Provider(AuthenticationProvider):
+    """OAuth2认证提供者"""
+
+    def __init__(self, client_id: str, client_secret: str, redirect_uri: str):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        self.authorization_endpoint = "https://auth.example.com/oauth/authorize"
+        self.token_endpoint = "https://auth.example.com/oauth/token"
+
+    def authenticate(self, credentials: Dict) -> Optional[str]:
+        """OAuth2认证"""
+        auth_code = credentials.get('authorization_code')
+        if auth_code:
+            return self._exchange_code_for_token(auth_code)
+        return None
+
+    def verify_token(self, token: str) -> Optional[Dict]:
+        """验证OAuth2令牌"""
+        # 简化实现，实际应该调用OAuth2提供者验证
+        try:
+            payload = jwt.decode(token, self.client_secret, algorithms=["HS256"])
+            return payload
+        except jwt.InvalidTokenError:
+            return None
+
+    def refresh_token(self, token: str) -> Optional[str]:
+        """刷新OAuth2令牌"""
+        # 简化实现
+        return self.verify_token(token)
+
+    def _exchange_code_for_token(self, auth_code: str) -> Optional[str]:
+        """用授权码换取令牌"""
+        # 简化实现，实际应该调用OAuth2提供者
+        return "oauth2_token_" + auth_code
+
+class MultiFactorAuthentication:
+    """多因素认证"""
+
+    def __init__(self, primary_auth: AuthenticationProvider):
+        self.primary_auth = primary_auth
+        self.secondary_methods = {}
+
+    def add_secondary_method(self, name: str, method: Callable):
+        """添加二级认证方法"""
+        self.secondary_methods[name] = method
+
+    def authenticate(self, credentials: Dict, secondary_credentials: Dict = None) -> Optional[str]:
+        """多因素认证"""
+        # 主要认证
+        primary_token = self.primary_auth.authenticate(credentials)
+        if not primary_token:
+            return None
+
+        # 二级认证
+        if secondary_credentials:
+            for method_name, method_func in self.secondary_methods.items():
+                if method_name in secondary_credentials:
+                    if not method_func(secondary_credentials[method_name]):
+                        return None
+
+        return primary_token
+
+class OTPAuthenticator:
+    """一次性密码认证器"""
+
+    def __init__(self, secret: str):
+        self.secret = secret
+
+    def generate_otp(self, length: int = 6) -> str:
+        """生成一次性密码"""
+        # 简化实现，实际应该使用TOTP或HOTP算法
+        otp = str(secrets.randbelow(10**length)).zfill(length)
+        return otp
+
+    def verify_otp(self, otp: str, expected_otp: str) -> bool:
+        """验证一次性密码"""
+        return otp == expected_otp and len(otp) == 6
+
+class BiometricAuthenticator:
+    """生物特征认证器"""
+
+    def __init__(self):
+        self.enrolled_templates = {}
+
+    def enroll_biometric(self, user_id: str, biometric_data: str):
+        """注册生物特征"""
+        # 简化实现，实际应该使用生物特征算法
+        template = self._extract_template(biometric_data)
+        self.enrolled_templates[user_id] = template
+
+    def verify_biometric(self, user_id: str, biometric_data: str) -> bool:
+        """验证生物特征"""
+        if user_id not in self.enrolled_templates:
+            return False
+
+        enrolled_template = self.enrolled_templates[user_id]
+        current_template = self._extract_template(biometric_data)
+
+        return self._compare_templates(enrolled_template, current_template)
+
+    def _extract_template(self, biometric_data: str) -> str:
+        """提取生物特征模板"""
+        # 简化实现
+        return hashlib.sha256(biometric_data.encode()).hexdigest()
+
+    def _compare_templates(self, template1: str, template2: str) -> bool:
+        """比较生物特征模板"""
+        return template1 == template2
+```
+
+### 授权机制设计
+
+```python
+# 授权机制实现
+from enum import Enum
+from typing import List, Set, Dict, Optional
+
+class Permission(Enum):
+    """权限枚举"""
+    READ = "read"
+    WRITE = "write"
+    DELETE = "delete"
+    ADMIN = "admin"
+    EXECUTE = "execute"
+
+class Role:
+    """角色"""
+
+    def __init__(self, name: str, permissions: Set[Permission]):
+        self.name = name
+        self.permissions = permissions
+
+    def has_permission(self, permission: Permission) -> bool:
+        """检查角色是否有权限"""
+        return permission in self.permissions
+
+class RBACAuthorization:
+    """基于角色的访问控制"""
+
+    def __init__(self):
+        self.roles: Dict[str, Role] = {}
+        self.user_roles: Dict[str, Set[str]] = {}
+        self.resource_permissions: Dict[str, Set[Permission]] = {}
+
+    def create_role(self, role_name: str, permissions: Set[Permission]):
+        """创建角色"""
+        self.roles[role_name] = Role(role_name, permissions)
+
+    def assign_role_to_user(self, user_id: str, role_name: str):
+        """为用户分配角色"""
+        if role_name not in self.roles:
+            raise ValueError(f"Role {role_name} does not exist")
+
+        if user_id not in self.user_roles:
+            self.user_roles[user_id] = set()
+
+        self.user_roles[user_id].add(role_name)
+
+    def check_permission(self, user_id: str, permission: Permission, resource: str = None) -> bool:
+        """检查用户权限"""
+        if user_id not in self.user_roles:
+            return False
+
+        user_role_names = self.user_roles[user_id]
+        user_permissions = set()
+
+        for role_name in user_role_names:
+            if role_name in self.roles:
+                user_permissions.update(self.roles[role_name].permissions)
+
+        # 资源级权限检查
+        if resource:
+            resource_perms = self.resource_permissions.get(resource, set())
+            user_permissions = user_permissions.intersection(resource_perms)
+
+        return permission in user_permissions
+
+    def set_resource_permissions(self, resource: str, permissions: Set[Permission]):
+        """设置资源权限"""
+        self.resource_permissions[resource] = permissions
+
+class ABACAuthorization:
+    """基于属性的访问控制"""
+
+    def __init__(self):
+        self.policies = []
+        self.user_attributes = {}
+        self.resource_attributes = {}
+        self.environment_attributes = {}
+
+    def add_policy(self, policy: Dict):
+        """添加策略"""
+        self.policies.append(policy)
+
+    def set_user_attributes(self, user_id: str, attributes: Dict):
+        """设置用户属性"""
+        self.user_attributes[user_id] = attributes
+
+    def set_resource_attributes(self, resource: str, attributes: Dict):
+        """设置资源属性"""
+        self.resource_attributes[resource] = attributes
+
+    def set_environment_attributes(self, attributes: Dict):
+        """设置环境属性"""
+        self.environment_attributes = attributes
+
+    def check_access(self, user_id: str, resource: str, action: str) -> bool:
+        """检查访问权限"""
+        user_attrs = self.user_attributes.get(user_id, {})
+        resource_attrs = self.resource_attributes.get(resource, {})
+        env_attrs = self.environment_attributes
+
+        for policy in self.policies:
+            if self._evaluate_policy(policy, user_attrs, resource_attrs, env_attrs, action):
+                return True
+
+        return False
+
+    def _evaluate_policy(self, policy: Dict, user_attrs: Dict, resource_attrs: Dict,
+                        env_attrs: Dict, action: str) -> bool:
+        """评估策略"""
+        # 检查目标匹配
+        if 'target' in policy:
+            target = policy['target']
+            if not self._match_target(target, user_attrs, resource_attrs, env_attrs):
+                return False
+
+        # 检查条件
+        if 'condition' in policy:
+            condition = policy['condition']
+            if not self._evaluate_condition(condition, user_attrs, resource_attrs, env_attrs):
+                return False
+
+        # 检查动作
+        if 'action' in policy:
+            allowed_actions = policy['action']
+            if isinstance(allowed_actions, list):
+                if action not in allowed_actions:
+                    return False
+            else:
+                if action != allowed_actions:
+                    return False
+
+        return True
+
+    def _match_target(self, target: Dict, user_attrs: Dict, resource_attrs: Dict, env_attrs: Dict) -> bool:
+        """匹配目标"""
+        # 简化实现
+        return True
+
+    def _evaluate_condition(self, condition: Dict, user_attrs: Dict, resource_attrs: Dict, env_attrs: Dict) -> bool:
+        """评估条件"""
+        # 简化实现
+        return True
+
+class AuthorizationMiddleware:
+    """授权中间件"""
+
+    def __init__(self, auth_provider: AuthenticationProvider, authorization_system):
+        self.auth_provider = auth_provider
+        self.authorization_system = authorization_system
+
+    def __call__(self, func):
+        """装饰器方式使用"""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 从请求中获取认证信息
+            auth_header = kwargs.get('auth_header', '')
+            token = self._extract_token(auth_header)
+
+            if not token:
+                raise AuthenticationError("Missing authentication token")
+
+            # 验证令牌
+            user_info = self.auth_provider.verify_token(token)
+            if not user_info:
+                raise AuthenticationError("Invalid authentication token")
+
+            # 检查权限
+            user_id = user_info.get('sub')
+            action = kwargs.get('action', 'read')
+            resource = kwargs.get('resource', 'default')
+
+            if not self.authorization_system.check_permission(user_id, action, resource):
+                raise AuthorizationError("Insufficient permissions")
+
+            # 添加用户信息到上下文
+            kwargs['user_context'] = user_info
+
+            return func(*args, **kwargs)
+        return wrapper
+
+    def _extract_token(self, auth_header: str) -> Optional[str]:
+        """提取令牌"""
+        if auth_header.startswith('Bearer '):
+            return auth_header[7:]
+        return None
+
+class AuthenticationError(Exception):
+    """认证错误"""
+    pass
+
+class AuthorizationError(Exception):
+    """授权错误"""
+    pass
+```
+
+## 数据加密与安全存储
+
+### 加密算法实现
+
+```python
+# 加密算法实现
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import os
+import base64
+
+class EncryptionManager:
+    """加密管理器"""
+
+    def __init__(self):
+        self.symmetric_key = None
+        self.private_key = None
+        self.public_key = None
+
+    def generate_symmetric_key(self) -> bytes:
+        """生成对称密钥"""
+        key = Fernet.generate_key()
+        self.symmetric_key = key
+        return key
+
+    def generate_asymmetric_key_pair(self):
+        """生成非对称密钥对"""
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        public_key = private_key.public_key()
+
+        self.private_key = private_key
+        self.public_key = public_key
+
+        return private_key, public_key
+
+    def encrypt_symmetric(self, data: str) -> bytes:
+        """对称加密"""
+        if not self.symmetric_key:
+            raise ValueError("Symmetric key not generated")
+
+        fernet = Fernet(self.symmetric_key)
+        encrypted_data = fernet.encrypt(data.encode())
+        return encrypted_data
+
+    def decrypt_symmetric(self, encrypted_data: bytes) -> str:
+        """对称解密"""
+        if not self.symmetric_key:
+            raise ValueError("Symmetric key not generated")
+
+        fernet = Fernet(self.symmetric_key)
+        decrypted_data = fernet.decrypt(encrypted_data)
+        return decrypted_data.decode()
+
+    def encrypt_asymmetric(self, data: str) -> bytes:
+        """非对称加密"""
+        if not self.public_key:
+            raise ValueError("Public key not generated")
+
+        encrypted_data = self.public_key.encrypt(
+            data.encode(),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return encrypted_data
+
+    def decrypt_asymmetric(self, encrypted_data: bytes) -> str:
+        """非对称解密"""
+        if not self.private_key:
+            raise ValueError("Private key not generated")
+
+        decrypted_data = self.private_key.decrypt(
+            encrypted_data,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        return decrypted_data.decode()
+
+class PasswordManager:
+    """密码管理器"""
+
+    def __init__(self):
+        self.pepper = os.urandom(32)  # 全局加密盐
+
+    def hash_password(self, password: str, salt: bytes = None) -> tuple:
+        """哈希密码"""
+        if salt is None:
+            salt = os.urandom(32)
+
+        # 使用PBKDF2进行密码哈希
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt + self.pepper,
+            iterations=100000,
+        )
+        hashed_password = kdf.derive(password.encode())
+
+        return hashed_password, salt
+
+    def verify_password(self, password: str, hashed_password: bytes, salt: bytes) -> bool:
+        """验证密码"""
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt + self.pepper,
+            iterations=100000,
+        )
+        try:
+            kdf.verify(password.encode(), hashed_password)
+            return True
+        except Exception:
+            return False
+
+    def generate_secure_password(self, length: int = 16) -> str:
+        """生成安全密码"""
+        # 生成包含大小写字母、数字和特殊字符的密码
+        lowercase = 'abcdefghijklmnopqrstuvwxyz'
+        uppercase = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        digits = '0123456789'
+        special = '!@#$%^&*()_+-=[]{}|;:,.<>?'
+
+        all_chars = lowercase + uppercase + digits + special
+        password = ''.join(secrets.choice(all_chars) for _ in range(length))
+        return password
+
+class DataMasking:
+    """数据脱敏"""
+
+    def __init__(self):
+        self.masking_patterns = {
+            'email': self._mask_email,
+            'phone': self._mask_phone,
+            'credit_card': self._mask_credit_card,
+            'id_number': self._mask_id_number
+        }
+
+    def mask_data(self, data: str, data_type: str) -> str:
+        """脱敏数据"""
+        mask_function = self.masking_patterns.get(data_type)
+        if mask_function:
+            return mask_function(data)
+        return data
+
+    def _mask_email(self, email: str) -> str:
+        """脱敏邮箱"""
+        if '@' not in email:
+            return email
+
+        username, domain = email.split('@', 1)
+        if len(username) <= 2:
+            masked_username = username[0] + '*' * (len(username) - 1)
+        else:
+            masked_username = username[:2] + '*' * (len(username) - 2)
+
+        return f"{masked_username}@{domain}"
+
+    def _mask_phone(self, phone: str) -> str:
+        """脱敏手机号"""
+        # 移除非数字字符
+        digits = ''.join(filter(str.isdigit, phone))
+        if len(digits) != 11:
+            return phone
+
+        return f"{digits[:3]}****{digits[-4:]}"
+
+    def _mask_credit_card(self, card_number: str) -> str:
+        """脱敏信用卡号"""
+        # 移除非数字字符
+        digits = ''.join(filter(str.isdigit, card_number))
+        if len(digits) != 16:
+            return card_number
+
+        return f"{digits[:4]}************{digits[-4:]}"
+
+    def _mask_id_number(self, id_number: str) -> str:
+        """脱敏身份证号"""
+        # 移除非数字字符
+        digits = ''.join(filter(str.isdigit, id_number))
+        if len(digits) != 18:
+            return id_number
+
+        return f"{digits[:6]}********{digits[-4:]}"
+```
+
+### 安全存储机制
+
+```python
+# 安全存储机制
+import sqlite3
+from typing import Optional, Dict, Any
+
+class SecureDatabase:
+    """安全数据库"""
+
+    def __init__(self, db_path: str, encryption_key: bytes):
+        self.db_path = db_path
+        self.encryption_key = encryption_key
+        self.encryption_manager = EncryptionManager()
+        self.encryption_manager.symmetric_key = encryption_key
+        self._initialize_database()
+
+    def _initialize_database(self):
+        """初始化数据库"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # 创建用户表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT NOT NULL,
+                password_hash BLOB NOT NULL,
+                salt BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        ''')
+
+        # 创建敏感数据表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sensitive_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                data_type TEXT NOT NULL,
+                encrypted_data BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+
+        # 创建审计日志表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT NOT NULL,
+                resource TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ip_address TEXT,
+                user_agent TEXT,
+                status TEXT NOT NULL,
+                details TEXT
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+
+    def create_user(self, username: str, email: str, password: str) -> int:
+        """创建用户"""
+        password_manager = PasswordManager()
+        password_hash, salt = password_manager.hash_password(password)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, salt)
+                VALUES (?, ?, ?, ?)
+            ''', (username, email, password_hash, salt))
+
+            user_id = cursor.lastrowid
+            conn.commit()
+
+            # 记录审计日志
+            self._log_audit(user_id, "CREATE_USER", "users", "SUCCESS")
+
+            return user_id
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            raise ValueError("Username already exists")
+        finally:
+            conn.close()
+
+    def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
+        """认证用户"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, username, email, password_hash, salt FROM users
+            WHERE username = ?
+        ''', (username,))
+
+        user_data = cursor.fetchone()
+        conn.close()
+
+        if not user_data:
+            self._log_audit(None, "AUTHENTICATE_USER", "users", "FAILED", details=f"User {username} not found")
+            return None
+
+        user_id, username, email, password_hash, salt = user_data
+
+        password_manager = PasswordManager()
+        if password_manager.verify_password(password, password_hash, salt):
+            # 更新最后登录时间
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
+            ''', (user_id,))
+            conn.commit()
+            conn.close()
+
+            self._log_audit(user_id, "AUTHENTICATE_USER", "users", "SUCCESS")
+
+            return {
+                "id": user_id,
+                "username": username,
+                "email": email
+            }
+        else:
+            self._log_audit(user_id, "AUTHENTICATE_USER", "users", "FAILED", details="Invalid password")
+            return None
+
+    def store_sensitive_data(self, user_id: int, data_type: str, data: str):
+        """存储敏感数据"""
+        encrypted_data = self.encryption_manager.encrypt_symmetric(data)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO sensitive_data (user_id, data_type, encrypted_data)
+            VALUES (?, ?, ?)
+        ''', (user_id, data_type, encrypted_data))
+
+        conn.commit()
+        conn.close()
+
+        self._log_audit(user_id, "STORE_SENSITIVE_DATA", data_type, "SUCCESS")
+
+    def retrieve_sensitive_data(self, user_id: int, data_type: str) -> Optional[str]:
+        """检索敏感数据"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT encrypted_data FROM sensitive_data
+            WHERE user_id = ? AND data_type = ?
+            ORDER BY created_at DESC LIMIT 1
+        ''', (user_id, data_type))
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            encrypted_data = result[0]
+            decrypted_data = self.encryption_manager.decrypt_symmetric(encrypted_data)
+
+            self._log_audit(user_id, "RETRIEVE_SENSITIVE_DATA", data_type, "SUCCESS")
+
+            return decrypted_data
+        else:
+            self._log_audit(user_id, "RETRIEVE_SENSITIVE_DATA", data_type, "FAILED", details="Data not found")
+            return None
+
+    def _log_audit(self, user_id: Optional[int], action: str, resource: str, status: str, details: str = None):
+        """记录审计日志"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            INSERT INTO audit_log (user_id, action, resource, status, details)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (user_id, action, resource, status, details))
+
+        conn.commit()
+        conn.close()
+```
+
+## 安全漏洞防护
+
+### 常见安全漏洞防护
+
+```python
+# 安全漏洞防护
+import re
+from typing import List, Dict, Optional
+from html import escape
+import urllib.parse
+
+class SecurityValidator:
+    """安全验证器"""
+
+    def __init__(self):
+        self.sql_injection_patterns = [
+            r'(?:or|and)\s+\d+\s*=\s*\d+',
+            r'(?:or|and)\s+\'[^\']*\'\s*=\s*\'[^\']*\'',
+            r'(?:drop|delete|update|insert|create|alter)\s+.*',
+            r'(?:union\s+select|select\s+.*from)',
+            r'(?:exec|execute)\s*\(.*\)',
+            r'(?:waitfor\s+delay|pg_sleep)\s*\(.*\)'
+        ]
+
+        self.xss_patterns = [
+            r'<script[^>]*>.*?</script>',
+            r'javascript:[^;]*;',
+            r'on\w+\s*=\s*["\'][^"\']*["\']',
+            r'<iframe[^>]*>.*?</iframe>',
+            r'<object[^>]*>.*?</object>',
+            r'<embed[^>]*>.*?</embed>'
+        ]
+
+    def validate_input(self, input_data: str, input_type: str = "text") -> bool:
+        """验证输入数据"""
+        if not input_data:
+            return True
+
+        if input_type == "text":
+            return self._validate_text(input_data)
+        elif input_type == "email":
+            return self._validate_email(input_data)
+        elif input_type == "phone":
+            return self._validate_phone(input_data)
+        elif input_type == "number":
+            return self._validate_number(input_data)
+        elif input_type == "url":
+            return self._validate_url(input_data)
+        else:
+            return False
+
+    def _validate_text(self, text: str) -> bool:
+        """验证文本"""
+        # 检查SQL注入
+        for pattern in self.sql_injection_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return False
+
+        # 检查XSS
+        for pattern in self.xss_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return False
+
+        # 检查长度
+        if len(text) > 1000:  # 最大长度限制
+            return False
+
+        return True
+
+    def _validate_email(self, email: str) -> bool:
+        """验证邮箱"""
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(email_pattern, email))
+
+    def _validate_phone(self, phone: str) -> bool:
+        """验证手机号"""
+        phone_pattern = r'^1[3-9]\d{9}$'
+        return bool(re.match(phone_pattern, phone))
+
+    def _validate_number(self, number: str) -> bool:
+        """验证数字"""
+        return number.isdigit()
+
+    def _validate_url(self, url: str) -> bool:
+        """验证URL"""
+        url_pattern = r'^https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&\/=]*)$'
+        return bool(re.match(url_pattern, url))
+
+    def sanitize_input(self, input_data: str) -> str:
+        """净化输入数据"""
+        # HTML转义
+        sanitized = escape(input_data)
+
+        # 移除危险字符
+        sanitized = re.sub(r'[<>"\'()]', '', sanitized)
+
+        # 限制长度
+        if len(sanitized) > 1000:
+            sanitized = sanitized[:1000]
+
+        return sanitized
+
+class CSRFProtection:
+    """CSRF防护"""
+
+    def __init__(self, secret_key: str):
+        self.secret_key = secret_key
+        self.token_length = 32
+
+    def generate_token(self, user_id: str) -> str:
+        """生成CSRF令牌"""
+        timestamp = str(int(time.time()))
+        random_data = secrets.token_hex(self.token_length)
+
+        # 创建令牌
+        token_data = f"{user_id}:{timestamp}:{random_data}"
+        signature = hmac.new(
+            self.secret_key.encode(),
+            token_data.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
+        return f"{token_data}:{signature}"
+
+    def validate_token(self, token: str, user_id: str) -> bool:
+        """验证CSRF令牌"""
+        try:
+            parts = token.split(':')
+            if len(parts) != 4:
+                return False
+
+            token_user_id, timestamp, random_data, signature = parts
+
+            # 验证用户ID
+            if token_user_id != user_id:
+                return False
+
+            # 验证时间戳（24小时有效）
+            token_time = int(timestamp)
+            current_time = int(time.time())
+            if current_time - token_time > 86400:
+                return False
+
+            # 验证签名
+            token_data = f"{token_user_id}:{timestamp}:{random_data}"
+            expected_signature = hmac.new(
+                self.secret_key.encode(),
+                token_data.encode(),
+                hashlib.sha256
+            ).hexdigest()
+
+            return signature == expected_signature
+
+        except Exception:
+            return False
+
+class RateLimiter:
+    """速率限制器"""
+
+    def __init__(self, max_requests: int, time_window: int):
+        self.max_requests = max_requests
+        self.time_window = time_window
+        self.requests = {}
+
+    def is_allowed(self, key: str) -> bool:
+        """检查是否允许请求"""
+        current_time = time.time()
+
+        if key not in self.requests:
+            self.requests[key] = []
+
+        # 清理过期请求
+        self.requests[key] = [
+            req_time for req_time in self.requests[key]
+            if current_time - req_time < self.time_window
+        ]
+
+        # 检查是否超过限制
+        if len(self.requests[key]) >= self.max_requests:
+            return False
+
+        # 记录请求
+        self.requests[key].append(current_time)
+        return True
+
+class SecurityHeaders:
+    """安全头"""
+
+    def __init__(self):
+        self.headers = {
+            'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+            'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'X-XSS-Protection': '1; mode=block',
+            'Referrer-Policy': 'strict-origin-when-cross-origin',
+            'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+        }
+
+    def get_headers(self) -> Dict[str, str]:
+        """获取安全头"""
+        return self.headers
+
+    def add_header(self, name: str, value: str):
+        """添加安全头"""
+        self.headers[name] = value
+
+    def remove_header(self, name: str):
+        """移除安全头"""
+        if name in self.headers:
+            del self.headers[name]
+```
+
+### 安全监控与审计
+
+```python
+# 安全监控与审计
+import logging
+from typing import List, Dict, Optional
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class SecurityEvent:
+    """安全事件"""
+    id: str
+    timestamp: datetime
+    event_type: str
+    severity: str
+    user_id: Optional[str]
+    ip_address: str
+    user_agent: str
+    resource: str
+    action: str
+    status: str
+    details: str
+
+class SecurityMonitor:
+    """安全监控器"""
+
+    def __init__(self):
+        self.events = []
+        self.alerts = []
+        self.thresholds = {
+            'failed_login_attempts': 5,
+            'suspicious_requests': 10,
+            'sql_injection_attempts': 1
+        }
+
+    def log_event(self, event: SecurityEvent):
+        """记录安全事件"""
+        self.events.append(event)
+
+        # 检查是否需要触发警报
+        self._check_alert_conditions(event)
+
+        # 记录到日志
+        logging.info(f"Security Event: {event.event_type} - {event.user_id} - {event.ip_address}")
+
+    def _check_alert_conditions(self, event: SecurityEvent):
+        """检查警报条件"""
+        if event.event_type == 'failed_login':
+            self._check_failed_login_attempts(event)
+        elif event.event_type == 'sql_injection_attempt':
+            self._check_sql_injection_attempts(event)
+        elif event.event_type == 'suspicious_request':
+            self._check_suspicious_requests(event)
+
+    def _check_failed_login_attempts(self, event: SecurityEvent):
+        """检查失败登录尝试"""
+        recent_failures = [
+            e for e in self.events
+            if (e.event_type == 'failed_login' and
+                e.user_id == event.user_id and
+                (event.timestamp - e.timestamp).total_seconds() < 300)
+        ]
+
+        if len(recent_failures) >= self.thresholds['failed_login_attempts']:
+            alert = SecurityAlert(
+                id=f"alert_{int(time.time())}",
+                timestamp=datetime.now(),
+                alert_type="brute_force_attack",
+                severity="HIGH",
+                message=f"Potential brute force attack on user {event.user_id}",
+                details=f"{len(recent_failures)} failed login attempts in 5 minutes"
+            )
+            self.alerts.append(alert)
+            logging.warning(f"Security Alert: {alert.message}")
+
+    def _check_sql_injection_attempts(self, event: SecurityEvent):
+        """检查SQL注入尝试"""
+        alert = SecurityAlert(
+            id=f"alert_{int(time.time())}",
+            timestamp=datetime.now(),
+            alert_type="sql_injection",
+            severity="CRITICAL",
+            message=f"SQL injection attempt detected from {event.ip_address}",
+            details=f"Target: {event.resource}, User: {event.user_id}"
+        )
+        self.alerts.append(alert)
+        logging.critical(f"Security Alert: {alert.message}")
+
+    def _check_suspicious_requests(self, event: SecurityEvent):
+        """检查可疑请求"""
+        recent_suspicious = [
+            e for e in self.events
+            if (e.event_type == 'suspicious_request' and
+                e.ip_address == event.ip_address and
+                (event.timestamp - e.timestamp).total_seconds() < 60)
+        ]
+
+        if len(recent_suspicious) >= self.thresholds['suspicious_requests']:
+            alert = SecurityAlert(
+                id=f"alert_{int(time.time())}",
+                timestamp=datetime.now(),
+                alert_type="suspicious_activity",
+                severity="MEDIUM",
+                message=f"Suspicious activity detected from {event.ip_address}",
+                details=f"{len(recent_suspicious)} suspicious requests in 1 minute"
+            )
+            self.alerts.append(alert)
+            logging.warning(f"Security Alert: {alert.message}")
+
+@dataclass
+class SecurityAlert:
+    """安全警报"""
+    id: str
+    timestamp: datetime
+    alert_type: str
+    severity: str
+    message: str
+    details: str
+
+class SecurityAnalyzer:
+    """安全分析器"""
+
+    def __init__(self):
+        self.monitor = SecurityMonitor()
+        self.patterns = {
+            'brute_force': self._detect_brute_force,
+            'sql_injection': self._detect_sql_injection,
+            'xss_attack': self._detect_xss_attack,
+            'unusual_access': self._detect_unusual_access
+        }
+
+    def analyze_events(self, events: List[SecurityEvent]) -> List[SecurityAlert]:
+        """分析安全事件"""
+        alerts = []
+
+        for event in events:
+            self.monitor.log_event(event)
+
+        return self.monitor.alerts
+
+    def _detect_brute_force(self, events: List[SecurityEvent]) -> List[SecurityAlert]:
+        """检测暴力破解"""
+        user_failures = {}
+        alerts = []
+
+        for event in events:
+            if event.event_type == 'failed_login':
+                user_id = event.user_id
+                if user_id not in user_failures:
+                    user_failures[user_id] = []
+                user_failures[user_id].append(event)
+
+        for user_id, failures in user_failures.items():
+            if len(failures) >= 5:
+                # 检查是否在短时间内
+                time_span = (failures[-1].timestamp - failures[0].timestamp).total_seconds()
+                if time_span <= 300:  # 5分钟内
+                    alert = SecurityAlert(
+                        id=f"brute_force_{user_id}",
+                        timestamp=datetime.now(),
+                        alert_type="brute_force",
+                        severity="HIGH",
+                        message=f"Brute force attack detected on user {user_id}",
+                        details=f"{len(failures)} failed attempts in {time_span:.1f} seconds"
+                    )
+                    alerts.append(alert)
+
+        return alerts
+
+    def _detect_sql_injection(self, events: List[SecurityEvent]) -> List[SecurityAlert]:
+        """检测SQL注入"""
+        sql_events = [e for e in events if e.event_type == 'sql_injection_attempt']
+        alerts = []
+
+        for event in sql_events:
+            alert = SecurityAlert(
+                id=f"sql_injection_{event.id}",
+                timestamp=datetime.now(),
+                alert_type="sql_injection",
+                severity="CRITICAL",
+                message=f"SQL injection attempt detected",
+                details=f"IP: {event.ip_address}, User: {event.user_id}"
+            )
+            alerts.append(alert)
+
+        return alerts
+
+    def _detect_xss_attack(self, events: List[SecurityEvent]) -> List[SecurityAlert]:
+        """检测XSS攻击"""
+        xss_events = [e for e in events if e.event_type == 'xss_attempt']
+        alerts = []
+
+        for event in xss_events:
+            alert = SecurityAlert(
+                id=f"xss_attack_{event.id}",
+                timestamp=datetime.now(),
+                alert_type="xss_attack",
+                severity="HIGH",
+                message=f"XSS attack attempt detected",
+                details=f"IP: {event.ip_address}, User: {event.user_id}"
+            )
+            alerts.append(alert)
+
+        return alerts
+
+    def _detect_unusual_access(self, events: List[SecurityEvent]) -> List[SecurityAlert]:
+        """检测异常访问"""
+        # 简化实现
+        return []
+```
+
+## 实战项目：安全电商平台
+
+### 系统架构设计
+
+```python
+# 安全电商平台
+class SecureECommercePlatform:
+    """安全电商平台"""
+
+    def __init__(self):
+        self.auth_provider = JWTAuthenticationProvider("secret_key_123")
+        self.authorization = RBACAuthorization()
+        self.encryption_manager = EncryptionManager()
+        self.security_validator = SecurityValidator()
+        self.csrf_protection = CSRFProtection("csrf_secret_key")
+        self.rate_limiter = RateLimiter(100, 60)
+        self.security_monitor = SecurityMonitor()
+        self.database = SecureDatabase("ecommerce.db", self.encryption_manager.generate_symmetric_key())
+
+        # 初始化角色和权限
+        self._initialize_roles()
+
+    def _initialize_roles(self):
+        """初始化角色和权限"""
+        # 创建角色
+        self.authorization.create_role("customer", {Permission.READ, Permission.WRITE})
+        self.authorization.create_role("seller", {Permission.READ, Permission.WRITE, Permission.EXECUTE})
+        self.authorization.create_role("admin", {Permission.READ, Permission.WRITE, Permission.DELETE, Permission.ADMIN})
+
+        # 设置资源权限
+        self.authorization.set_resource_permissions("products", {Permission.READ})
+        self.authorization.set_resource_permissions("orders", {Permission.READ, Permission.WRITE})
+        self.authorization.set_resource_permissions("users", {Permission.READ, Permission.WRITE, Permission.DELETE})
+
+    def register_user(self, username: str, email: str, password: str, role: str = "customer") -> Dict:
+        """注册用户"""
+        # 输入验证
+        if not self.security_validator.validate_input(username, "text"):
+            raise ValueError("Invalid username")
+
+        if not self.security_validator.validate_input(email, "email"):
+            raise ValueError("Invalid email")
+
+        if not self.security_validator.validate_input(password, "text"):
+            raise ValueError("Invalid password")
+
+        # 创建用户
+        user_id = self.database.create_user(username, email, password)
+
+        # 分配角色
+        self.authorization.assign_role_to_user(str(user_id), role)
+
+        # 记录安全事件
+        event = SecurityEvent(
+            id=f"event_{int(time.time())}",
+            timestamp=datetime.now(),
+            event_type="user_registration",
+            severity="INFO",
+            user_id=str(user_id),
+            ip_address="unknown",
+            user_agent="unknown",
+            resource="users",
+            action="create",
+            status="success",
+            details=f"User {username} registered with role {role}"
+        )
+        self.security_monitor.log_event(event)
+
+        return {"user_id": user_id, "username": username, "role": role}
+
+    def login(self, username: str, password: str) -> Dict:
+        """用户登录"""
+        # 速率限制检查
+        if not self.rate_limiter.is_allowed(f"login_{username}"):
+            raise Exception("Too many login attempts")
+
+        # 认证用户
+        user = self.database.authenticate_user(username, password)
+        if not user:
+            # 记录失败登录
+            event = SecurityEvent(
+                id=f"event_{int(time.time())}",
+                timestamp=datetime.now(),
+                event_type="failed_login",
+                severity="WARNING",
+                user_id=username,
+                ip_address="unknown",
+                user_agent="unknown",
+                resource="users",
+                action="login",
+                status="failed",
+                details="Invalid credentials"
+            )
+            self.security_monitor.log_event(event)
+            raise Exception("Invalid credentials")
+
+        # 生成JWT令牌
+        token = self.auth_provider.authenticate({"username": username, "password": password})
+
+        # 记录成功登录
+        event = SecurityEvent(
+            id=f"event_{int(time.time())}",
+            timestamp=datetime.now(),
+            event_type="successful_login",
+            severity="INFO",
+            user_id=str(user['id']),
+            ip_address="unknown",
+            user_agent="unknown",
+            resource="users",
+            action="login",
+            status="success",
+            details=f"User {username} logged in successfully"
+        )
+        self.security_monitor.log_event(event)
+
+        return {"token": token, "user": user}
+
+    def create_order(self, user_id: str, order_data: Dict, auth_token: str) -> Dict:
+        """创建订单"""
+        # 验证令牌
+        user_info = self.auth_provider.verify_token(auth_token)
+        if not user_info:
+            raise Exception("Invalid authentication token")
+
+        # 检查权限
+        if not self.authorization.check_permission(user_id, Permission.WRITE, "orders"):
+            raise Exception("Insufficient permissions")
+
+        # CSRF保护
+        csrf_token = order_data.get('csrf_token')
+        if not self.csrf_protection.validate_token(csrf_token, user_id):
+            raise Exception("Invalid CSRF token")
+
+        # 输入验证
+        product_id = order_data.get('product_id')
+        quantity = order_data.get('quantity')
+
+        if not self.security_validator.validate_input(str(product_id), "number"):
+            raise ValueError("Invalid product ID")
+
+        if not self.security_validator.validate_input(str(quantity), "number"):
+            raise ValueError("Invalid quantity")
+
+        # 创建订单（简化实现）
+        order_id = f"order_{int(time.time())}"
+
+        # 存储敏感数据（如信用卡信息）
+        if 'payment_info' in order_data:
+            encrypted_payment = self.encryption_manager.encrypt_symmetric(
+                json.dumps(order_data['payment_info'])
+            )
+            self.database.store_sensitive_data(user_id, "payment_info", encrypted_payment.decode())
+
+        # 记录安全事件
+        event = SecurityEvent(
+            id=f"event_{int(time.time())}",
+            timestamp=datetime.now(),
+            event_type="order_creation",
+            severity="INFO",
+            user_id=user_id,
+            ip_address="unknown",
+            user_agent="unknown",
+            resource="orders",
+            action="create",
+            status="success",
+            details=f"Order {order_id} created"
+        )
+        self.security_monitor.log_event(event)
+
+        return {"order_id": order_id, "status": "created"}
+
+    def get_security_report(self) -> Dict:
+        """获取安全报告"""
+        total_events = len(self.security_monitor.events)
+        total_alerts = len(self.security_monitor.alerts)
+
+        # 按类型统计事件
+        event_types = {}
+        for event in self.security_monitor.events:
+            event_type = event.event_type
+            if event_type not in event_types:
+                event_types[event_type] = 0
+            event_types[event_type] += 1
+
+        # 按严重程度统计警报
+        alert_severities = {}
+        for alert in self.security_monitor.alerts:
+            severity = alert.severity
+            if severity not in alert_severities:
+                alert_severities[severity] = 0
+            alert_severities[severity] += 1
+
+        return {
+            "total_events": total_events,
+            "total_alerts": total_alerts,
+            "event_types": event_types,
+            "alert_severities": alert_severities,
+            "recent_alerts": [
+                {
+                    "type": alert.alert_type,
+                    "severity": alert.severity,
+                    "message": alert.message,
+                    "timestamp": alert.timestamp.isoformat()
+                }
+                for alert in self.security_monitor.alerts[-5:]
+            ]
+        }
+
+# 系统部署示例
+def deploy_secure_ecommerce():
+    """部署安全电商平台"""
+    platform = SecureECommercePlatform()
+
+    # 注册管理员
+    admin_user = platform.register_user("admin", "admin@example.com", "secure_password_123", "admin")
+
+    # 注册客户
+    customer_user = platform.register_user("customer1", "customer@example.com", "customer_password", "customer")
+
+    # 客户登录
+    try:
+        login_result = platform.login("customer1", "customer_password")
+        token = login_result["token"]
+        user_id = str(customer_user["user_id"])
+
+        # 创建订单
+        order_data = {
+            "product_id": "123",
+            "quantity": "1",
+            "csrf_token": platform.csrf_protection.generate_token(user_id),
+            "payment_info": {
+                "card_number": "4111111111111111",
+                "expiry": "12/25",
+                "cvv": "123"
+            }
+        }
+
+        order_result = platform.create_order(user_id, order_data, token)
+        print(f"Order created: {order_result}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+    # 生成安全报告
+    security_report = platform.get_security_report()
+    print(f"Security Report: {security_report}")
+
+    return platform
+```
+
+## 本周作业
+
+### 作业1：实现自定义安全策略
+
+```python
+# 自定义安全策略
+class CustomSecurityPolicy:
+    """自定义安全策略"""
+
+    def __init__(self):
+        self.policies = {}
+        self.enforcement_actions = {}
+
+    def add_policy(self, name: str, policy_func: Callable):
+        """添加安全策略"""
+        self.policies[name] = policy_func
+
+    def add_enforcement_action(self, policy_name: str, action_func: Callable):
+        """添加强制执行动作"""
+        self.enforcement_actions[policy_name] = action_func
+
+    def evaluate_policies(self, context: Dict) -> List[Dict]:
+        """评估所有策略"""
+        results = []
+
+        for policy_name, policy_func in self.policies.items():
+            try:
+                policy_result = policy_func(context)
+                results.append({
+                    "policy": policy_name,
+                    "result": policy_result,
+                    "timestamp": datetime.now()
+                })
+
+                # 如果策略失败，执行强制动作
+                if not policy_result["passed"]:
+                    if policy_name in self.enforcement_actions:
+                        self.enforcement_actions[policy_name](context, policy_result)
+
+            except Exception as e:
+                results.append({
+                    "policy": policy_name,
+                    "result": {"passed": False, "error": str(e)},
+                    "timestamp": datetime.now()
+                })
+
+        return results
+
+# 示例策略函数
+def password_strength_policy(context: Dict) -> Dict:
+    """密码强度策略"""
+    password = context.get("password", "")
+
+    if len(password) < 8:
+        return {"passed": False, "reason": "Password too short"}
+
+    if not any(c.isupper() for c in password):
+        return {"passed": False, "reason": "Password missing uppercase letter"}
+
+    if not any(c.islower() for c in password):
+        return {"passed": False, "reason": "Password missing lowercase letter"}
+
+    if not any(c.isdigit() for c in password):
+        return {"passed": False, "reason": "Password missing digit"}
+
+    return {"passed": True}
+
+def suspicious_login_policy(context: Dict) -> Dict:
+    """可疑登录策略"""
+    ip_address = context.get("ip_address", "")
+    user_agent = context.get("user_agent", "")
+    login_count = context.get("login_count", 0)
+
+    # 检查异常IP
+    if ip_address.startswith("192.168."):
+        return {"passed": False, "reason": "Suspicious IP address"}
+
+    # 检查频繁登录
+    if login_count > 10:
+        return {"passed": False, "reason": "Too many login attempts"}
+
+    return {"passed": True}
+
+# 使用示例
+def test_custom_security_policy():
+    """测试自定义安全策略"""
+    policy_engine = CustomSecurityPolicy()
+
+    # 添加策略
+    policy_engine.add_policy("password_strength", password_strength_policy)
+    policy_engine.add_policy("suspicious_login", suspicious_login_policy)
+
+    # 添加强制执行动作
+    def lock_account(context, result):
+        print(f"Account locked due to: {result['reason']}")
+
+    policy_engine.add_enforcement_action("suspicious_login", lock_account)
+
+    # 测试策略
+    test_context = {
+        "password": "weak",
+        "ip_address": "192.168.1.100",
+        "user_agent": "Mozilla/5.0",
+        "login_count": 15
+    }
+
+    results = policy_engine.evaluate_policies(test_context)
+    for result in results:
+        print(f"Policy {result['policy']}: {'PASSED' if result['result']['passed'] else 'FAILED'}")
+        if not result['result']['passed']:
+            print(f"  Reason: {result['result'].get('reason', 'Unknown')}")
+```
+
+### 作业2：构建安全API网关
+
+```python
+# 安全API网关
+class SecurityAPIGateway:
+    """安全API网关"""
+
+    def __init__(self):
+        self.auth_providers = {}
+        self.rate_limiters = {}
+        self.security_validators = {}
+        self.audit_logger = AuditLogger()
+
+    def register_auth_provider(self, name: str, provider: AuthenticationProvider):
+        """注册认证提供者"""
+        self.auth_providers[name] = provider
+
+    def register_rate_limiter(self, endpoint: str, limiter: RateLimiter):
+        """注册速率限制器"""
+        self.rate_limiters[endpoint] = limiter
+
+    def register_security_validator(self, endpoint: str, validator: SecurityValidator):
+        """注册安全验证器"""
+        self.security_validators[endpoint] = validator
+
+    def handle_request(self, request: Dict) -> Dict:
+        """处理API请求"""
+        endpoint = request.get("endpoint", "")
+        method = request.get("method", "GET")
+        headers = request.get("headers", {})
+        data = request.get("data", {})
+
+        # 记录请求开始
+        request_id = f"req_{int(time.time())}"
+        self.audit_logger.log_request(request_id, request)
+
+        try:
+            # 速率限制检查
+            if endpoint in self.rate_limiters:
+                client_ip = headers.get("X-Forwarded-For", "unknown")
+                if not self.rate_limiters[endpoint].is_allowed(client_ip):
+                    raise Exception("Rate limit exceeded")
+
+            # 认证检查
+            auth_header = headers.get("Authorization", "")
+            user_info = self._authenticate_request(auth_header, endpoint)
+            if not user_info:
+                raise Exception("Authentication failed")
+
+            # 输入验证
+            if endpoint in self.security_validators:
+                validator = self.security_validators[endpoint]
+                for key, value in data.items():
+                    if not validator.validate_input(str(value), "text"):
+                        raise Exception(f"Invalid input for {key}")
+
+            # 处理请求
+            response = self._process_request(endpoint, method, data, user_info)
+
+            # 记录成功响应
+            self.audit_logger.log_response(request_id, response, "success")
+
+            return response
+
+        except Exception as e:
+            # 记录失败响应
+            self.audit_logger.log_response(request_id, {"error": str(e)}, "failed")
+            raise e
+
+    def _authenticate_request(self, auth_header: str, endpoint: str) -> Optional[Dict]:
+        """认证请求"""
+        if not auth_header:
+            return None
+
+        # 尝试不同的认证提供者
+        for provider_name, provider in self.auth_providers.items():
+            try:
+                if auth_header.startswith('Bearer '):
+                    token = auth_header[7:]
+                    user_info = provider.verify_token(token)
+                    if user_info:
+                        return user_info
+            except Exception:
+                continue
+
+        return None
+
+    def _process_request(self, endpoint: str, method: str, data: Dict, user_info: Dict) -> Dict:
+        """处理请求"""
+        # 简化实现，实际应该路由到相应的服务
+        return {
+            "status": "success",
+            "data": f"Processed {method} request to {endpoint}",
+            "user": user_info.get("sub", "unknown")
+        }
+
+class AuditLogger:
+    """审计日志记录器"""
+
+    def __init__(self):
+        self.logs = []
+
+    def log_request(self, request_id: str, request: Dict):
+        """记录请求"""
+        log_entry = {
+            "request_id": request_id,
+            "timestamp": datetime.now(),
+            "type": "request",
+            "endpoint": request.get("endpoint", ""),
+            "method": request.get("method", ""),
+            "client_ip": request.get("headers", {}).get("X-Forwarded-For", ""),
+            "user_agent": request.get("headers", {}).get("User-Agent", ""),
+            "data": request.get("data", {})
+        }
+        self.logs.append(log_entry)
+
+    def log_response(self, request_id: str, response: Dict, status: str):
+        """记录响应"""
+        log_entry = {
+            "request_id": request_id,
+            "timestamp": datetime.now(),
+            "type": "response",
+            "status": status,
+            "response": response
+        }
+        self.logs.append(log_entry)
+
+    def get_audit_logs(self, start_time: datetime = None, end_time: datetime = None) -> List[Dict]:
+        """获取审计日志"""
+        logs = self.logs
+
+        if start_time:
+            logs = [log for log in logs if log["timestamp"] >= start_time]
+
+        if end_time:
+            logs = [log for log in logs if log["timestamp"] <= end_time]
+
+        return logs
+
+# 使用示例
+def test_security_api_gateway():
+    """测试安全API网关"""
+    gateway = SecurityAPIGateway()
+
+    # 注册认证提供者
+    jwt_provider = JWTAuthenticationProvider("gateway_secret")
+    gateway.register_auth_provider("jwt", jwt_provider)
+
+    # 注册速率限制器
+    gateway.register_rate_limiter("/api/orders", RateLimiter(10, 60))
+
+    # 注册安全验证器
+    validator = SecurityValidator()
+    gateway.register_security_validator("/api/orders", validator)
+
+    # 测试请求
+    test_request = {
+        "endpoint": "/api/orders",
+        "method": "POST",
+        "headers": {
+            "Authorization": "Bearer invalid_token",
+            "X-Forwarded-For": "192.168.1.100",
+            "User-Agent": "TestAgent/1.0"
+        },
+        "data": {
+            "product_id": "123",
+            "quantity": "1"
+        }
+    }
+
+    try:
+        response = gateway.handle_request(test_request)
+        print(f"Response: {response}")
+    except Exception as e:
+        print(f"Error: {e}")
+
+    # 获取审计日志
+    audit_logs = gateway.audit_logger.get_audit_logs()
+    print(f"Audit logs: {len(audit_logs)} entries")
+```
+
+## 本周总结
+
+### 核心知识点
+
+1. **安全设计原则**
+   - 最小权限原则(Least Privilege)
+   - 纵深防御原则(Defense in Depth)
+   - 安全失败原则(Fail Secure)
+   - 简洁性原则(Economy of Mechanism)
+   - 完全仲裁原则(Complete Mediation)
+
+2. **认证与授权**
+   - JWT认证机制
+   - OAuth2认证流程
+   - 多因素认证(MFA)
+   - 基于角色的访问控制(RBAC)
+   - 基于属性的访问控制(ABAC)
+
+3. **数据安全**
+   - 对称加密与非对称加密
+   - 密码哈希与盐值
+   - 数据脱敏技术
+   - 安全数据库设计
+
+4. **安全漏洞防护**
+   - SQL注入防护
+   - XSS攻击防护
+   - CSRF防护
+   - 速率限制
+   - 安全头设置
+
+5. **安全监控与审计**
+   - 安全事件监控
+   - 威胁检测
+   - 审计日志
+   - 安全报告生成
+
+### 实践经验
+
+1. **安全架构设计**
+   - 采用纵深防御策略
+   - 实施最小权限原则
+   - 建立完善的监控体系
+   - 定期进行安全审计
+
+2. **安全最佳实践**
+   - 输入验证和输出编码
+   - 使用HTTPS加密传输
+   - 实施强密码策略
+   - 定期更新依赖库
+
+3. **合规要求**
+   - 数据保护法规(GDPR)
+   - 行业安全标准(PCI DSS)
+   - 等保要求
+   - 安全认证
+
+### 下周预告
+
+下周我们将学习**大规模系统案例分析**，包括：
+- 大型互联网公司架构案例
+- 高并发系统设计
+- 分布式系统挑战与解决方案
+- 性能优化实践
+- 真实项目经验分享
+
+---
+
+**思考题：**
+1. 你的项目中存在哪些安全风险？如何应用本周学习的知识来提升安全性？
+2. 认证和授权的关系是什么？如何设计一个安全的认证授权系统？
+3. 数据安全的重要性是什么？如何保护用户敏感数据？
+
+**扩展阅读：**
+- 《OWASP Top 10》
+- 《The Web Application Hacker's Handbook》
+- 《Cryptography Engineering》
+- 《Designing Secure Software》

@@ -1,0 +1,1211 @@
+---
+title: "第4讲：时序逻辑电路"
+description: "触发器、寄存器、状态机和时序逻辑电路设计"
+---
+
+# 第4讲：时序逻辑电路
+
+## 概述
+
+本讲深入探讨时序逻辑电路的设计原理，包括各种类型的触发器、寄存器、计数器和有限状态机。时序逻辑电路具有记忆功能，是构建数字计算机系统的核心组件。
+
+## 时序逻辑电路基础
+
+### 基本特性
+
+时序逻辑电路与组合逻辑电路的主要区别：
+
+1. **记忆功能**：能够存储信息
+2. **反馈路径**：包含从输出到输入的反馈
+3. **时钟同步**：通常需要时钟信号控制
+4. **状态依赖**：输出取决于当前输入和当前状态
+
+```python
+class SequentialCircuit:
+    """时序逻辑电路基类"""
+
+    def __init__(self, inputs, outputs, states):
+        self.inputs = inputs      # 输入信号
+        self.outputs = outputs    # 输出信号
+        self.states = states      # 状态信号
+        self.current_state = {}   # 当前状态
+        self.next_state = {}      # 下一状态
+        self.combinational = {}  # 组合逻辑部分
+        self.memory_elements = {} # 存储元素
+
+    def update_state(self, input_values):
+        """更新状态（时钟上升沿触发）"""
+        # 计算下一状态
+        next_state = self._compute_next_state(input_values, self.current_state)
+
+        # 更新当前状态
+        self.current_state = next_state.copy()
+
+        # 计算输出
+        outputs = self._compute_outputs(input_values, self.current_state)
+
+        return outputs
+
+    def _compute_next_state(self, inputs, state):
+        """计算下一状态逻辑"""
+        # 这里实现状态转移函数
+        next_state = {}
+        for state_var in self.states:
+            # 简化的状态计算
+            next_state[state_var] = state.get(state_var, False)
+        return next_state
+
+    def _compute_outputs(self, inputs, state):
+        """计算输出逻辑"""
+        # 这里实现输出函数
+        outputs = {}
+        for output_var in self.outputs:
+            # 简化的输出计算
+            outputs[output_var] = state.get(output_var, False)
+        return outputs
+```
+
+### 时序分析
+
+```python
+class TimingAnalyzer:
+    """时序分析器"""
+
+    def __init__(self):
+        self.setup_time = {}      # 建立时间
+        self.hold_time = {}       # 保持时间
+        self.clock_period = 10    # 时钟周期 (ns)
+        self.propagation_delay = {} # 传播延迟
+
+    def analyze_timing(self, circuit):
+        """分析时序约束"""
+        violations = []
+
+        # 检查建立时间
+        setup_violations = self._check_setup_time(circuit)
+        violations.extend(setup_violations)
+
+        # 检查保持时间
+        hold_violations = self._check_hold_time(circuit)
+        violations.extend(hold_violations)
+
+        # 检查时钟频率
+        freq_violations = self._check_clock_frequency(circuit)
+        violations.extend(freq_violations)
+
+        return violations
+
+    def _check_setup_time(self, circuit):
+        """检查建立时间约束"""
+        violations = []
+        # 简化的建立时间检查
+        for element in circuit.memory_elements:
+            if hasattr(element, 'setup_time'):
+                required = element.setup_time
+                available = self.clock_period - self._get_max_delay(circuit, element)
+                if available < required:
+                    violations.append({
+                        'type': 'setup',
+                        'element': element,
+                        'required': required,
+                        'available': available
+                    })
+        return violations
+
+    def _check_hold_time(self, circuit):
+        """检查保持时间约束"""
+        violations = []
+        # 简化的保持时间检查
+        for element in circuit.memory_elements:
+            if hasattr(element, 'hold_time'):
+                required = element.hold_time
+                available = self._get_min_delay(circuit, element)
+                if available < required:
+                    violations.append({
+                        'type': 'hold',
+                        'element': element,
+                        'required': required,
+                        'available': available
+                    })
+        return violations
+
+    def calculate_max_frequency(self, circuit):
+        """计算最大工作频率"""
+        max_delay = self._get_max_delay(circuit, None)
+        max_freq = 1.0 / (max_delay * 1e-9)  # 转换为Hz
+        return max_freq
+```
+
+## 触发器设计
+
+### D触发器
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+// D触发器结构
+typedef struct {
+    bool D;        // 数据输入
+    bool Q;        // 正相输出
+    bool Qn;       // 反相输出
+    bool clock;     // 时钟输入
+    bool prev_clock; // 前一个时钟状态
+    bool reset;     // 异步复位
+    bool set;       // 异步置位
+} DFlipFlop;
+
+// D触发器行为模型
+void d_flip_flop_update(DFlipFlop *dff) {
+    // 异步复位和置位优先级最高
+    if (dff->reset) {
+        dff->Q = false;
+        dff->Qn = true;
+        return;
+    }
+
+    if (dff->set) {
+        dff->Q = true;
+        dff->Qn = false;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (dff->clock && !dff->prev_clock) {
+        dff->Q = dff->D;
+        dff->Qn = !dff->D;
+    }
+
+    // 保存当前时钟状态
+    dff->prev_clock = dff->clock;
+}
+
+// D触发器演示
+void d_flip_flop_demo() {
+    printf("D触发器演示:\n");
+    printf("============\n");
+    printf("时钟  D  Q  Qn\n");
+    printf("----------------\n");
+
+    DFlipFlop dff = {0, 0, 1, 0, 0, 0, 0};
+
+    // 测试序列
+    bool test_sequence[][3] = {
+        {0, 0, 0},  // 时钟低，D低
+        {1, 0, 0},  // 时钟上升沿，D低
+        {0, 0, 1},  // 时钟低，D高
+        {1, 1, 1},  // 时钟上升沿，D高
+        {0, 1, 0},  // 时钟低，D低
+        {1, 0, 1},  // 时钟上升沿，D低
+        {0, 0, 0},  // 时钟低
+        {1, 1, 0},  // 时钟上升沿，D高
+    };
+
+    for (int i = 0; i < 8; i++) {
+        dff.clock = test_sequence[i][0];
+        dff.D = test_sequence[i][1];
+
+        d_flip_flop_update(&dff);
+
+        printf("  %d   %d  %d  %d\n",
+               dff.clock, dff.D, dff.Q, dff.Qn);
+    }
+}
+```
+
+### JK触发器
+
+```c
+// JK触发器结构
+typedef struct {
+    bool J;        // J输入
+    bool K;        // K输入
+    bool Q;        // 正相输出
+    bool Qn;       // 反相输出
+    bool clock;     // 时钟输入
+    bool prev_clock; // 前一个时钟状态
+    bool reset;     // 异步复位
+} JKFlipFlop;
+
+// JK触发器行为模型
+void jk_flip_flop_update(JKFlipFlop *jkff) {
+    // 异步复位
+    if (jkff->reset) {
+        jkff->Q = false;
+        jkff->Qn = true;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (jkff->clock && !jkff->prev_clock) {
+        if (!jkff->J && !jkff->K) {
+            // 保持状态
+            // Q保持不变
+        } else if (jkff->J && !jkff->K) {
+            // 置位
+            jkff->Q = true;
+            jkff->Qn = false;
+        } else if (!jkff->J && jkff->K) {
+            // 复位
+            jkff->Q = false;
+            jkff->Qn = true;
+        } else if (jkff->J && jkff->K) {
+            // 翻转
+            bool temp = jkff->Q;
+            jkff->Q = !temp;
+            jkff->Qn = temp;
+        }
+    }
+
+    // 更新反相输出
+    jkff->Qn = !jkff->Q;
+
+    // 保存当前时钟状态
+    jkff->prev_clock = jkff->clock;
+}
+
+// JK触发器演示
+void jk_flip_flop_demo() {
+    printf("JK触发器演示:\n");
+    printf("=============\n");
+    printf("时钟  J  K  Q  Qn\n");
+    printf("-------------------\n");
+
+    JKFlipFlop jkff = {0, 0, 0, 1, 0, 0, 0};
+
+    // 测试序列
+    bool test_sequence[][4] = {
+        {0, 0, 0, 0},  // 时钟低，J低，K低
+        {1, 0, 0, 1},  // 时钟上升沿，保持
+        {0, 0, 1, 0},  // 时钟低，J低，K高
+        {1, 0, 1, 1},  // 时钟上升沿，复位
+        {0, 1, 0, 0},  // 时钟低，J高，K低
+        {1, 1, 0, 1},  // 时钟上升沿，置位
+        {0, 1, 1, 0},  // 时钟低，J高，K高
+        {1, 1, 1, 1},  // 时钟上升沿，翻转
+    };
+
+    for (int i = 0; i < 8; i++) {
+        jkff.clock = test_sequence[i][0];
+        jkff.J = test_sequence[i][1];
+        jkff.K = test_sequence[i][2];
+
+        jk_flip_flop_update(&jkff);
+
+        printf("  %d   %d  %d  %d  %d\n",
+               jkff.clock, jkff.J, jkff.K, jkff.Q, jkff.Qn);
+    }
+}
+```
+
+### T触发器
+
+```c
+// T触发器结构
+typedef struct {
+    bool T;        // T输入
+    bool Q;        // 正相输出
+    bool Qn;       // 反相输出
+    bool clock;     // 时钟输入
+    bool prev_clock; // 前一个时钟状态
+    bool reset;     // 异步复位
+} TFlipFlop;
+
+// T触发器行为模型
+void t_flip_flop_update(TFlipFlop *tff) {
+    // 异步复位
+    if (tff->reset) {
+        tff->Q = false;
+        tff->Qn = true;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (tff->clock && !tff->prev_clock) {
+        if (tff->T) {
+            // 翻转
+            bool temp = tff->Q;
+            tff->Q = !temp;
+            tff->Qn = temp;
+        }
+        // T=0时保持状态不变
+    }
+
+    // 更新反相输出
+    tff->Qn = !tff->Q;
+
+    // 保存当前时钟状态
+    tff->prev_clock = tff->clock;
+}
+
+// T触发器演示
+void t_flip_flop_demo() {
+    printf("T触发器演示:\n");
+    printf("============\n");
+    printf("时钟  T  Q  Qn\n");
+    printf("----------------\n");
+
+    TFlipFlop tff = {0, 0, 1, 0, 0, 0};
+
+    // 测试序列
+    bool test_sequence[][3] = {
+        {0, 0, 0},  // 时钟低，T低
+        {1, 0, 1},  // 时钟上升沿，保持
+        {0, 0, 0},  // 时钟低
+        {1, 1, 1},  // 时钟上升沿，翻转
+        {0, 1, 0},  // 时钟低
+        {1, 1, 1},  // 时钟上升沿，翻转
+        {0, 0, 0},  // 时钟低，T低
+        {1, 0, 1},  // 时钟上升沿，保持
+    };
+
+    for (int i = 0; i < 8; i++) {
+        tff.clock = test_sequence[i][0];
+        tff.T = test_sequence[i][1];
+
+        t_flip_flop_update(&tff);
+
+        printf("  %d   %d  %d  %d\n",
+               tff.clock, tff.T, tff.Q, tff.Qn);
+    }
+}
+```
+
+## 寄存器和移位器
+
+### 寄存器设计
+
+```c
+#include <stdint.h>
+
+#define REGISTER_WIDTH 32
+
+// 32位寄存器
+typedef struct {
+    uint32_t data;        // 寄存器数据
+    uint32_t input;       // 输入数据
+    bool enable;          // 使能信号
+    bool clock;           // 时钟信号
+    bool reset;           // 异步复位
+    bool prev_clock;      // 前一个时钟状态
+} Register32;
+
+// 32位寄存器行为模型
+void register32_update(Register32 *reg) {
+    // 异步复位
+    if (reg->reset) {
+        reg->data = 0;
+        return;
+    }
+
+    // 时钟上升沿且使能有效时更新
+    if (reg->clock && !reg->prev_clock && reg->enable) {
+        reg->data = reg->input;
+    }
+
+    // 保存当前时钟状态
+    reg->prev_clock = reg->clock;
+}
+
+// 寄存器演示
+void register32_demo() {
+    printf("32位寄存器演示:\n");
+    printf("================\n");
+
+    Register32 reg = {0, 0, false, false, false, false};
+
+    // 测试数据
+    uint32_t test_data[] = {0x12345678, 0xABCDEF00, 0x55555555, 0x00000000};
+    bool test_enable[] = {true, true, false, true};
+    bool test_clock[] = {false, true, false, true};
+
+    for (int i = 0; i < 4; i++) {
+        printf("周期 %d:\n", i);
+        printf("  输入数据: 0x%08X\n", test_data[i]);
+        printf("  使能信号: %d\n", test_enable[i]);
+        printf("  时钟信号: %d\n", test_clock[i]);
+
+        reg.input = test_data[i];
+        reg.enable = test_enable[i];
+        reg.clock = test_clock[i];
+
+        register32_update(&reg);
+
+        printf("  寄存器值: 0x%08X\n", reg.data);
+        printf("  状态: %s\n", (reg.enable && reg.clock) ? "已更新" : "未更新");
+        printf("\n");
+    }
+}
+```
+
+### 移位寄存器
+
+```c
+// 移位寄存器类型
+typedef enum {
+    SHIFT_LEFT,   // 左移
+    SHIFT_RIGHT,  // 右移
+    ROTATE_LEFT,  // 循环左移
+    ROTATE_RIGHT  // 循环右移
+} ShiftType;
+
+// 8位移位寄存器
+typedef struct {
+    uint8_t data;         // 寄存器数据
+    uint8_t serial_in;    // 串行输入
+    uint8_t serial_out;   // 串行输出
+    bool enable;          // 使能信号
+    bool clock;           // 时钟信号
+    bool reset;           // 异步复位
+    bool load;            // 并行加载
+    uint8_t parallel_in;  // 并行输入
+    ShiftType shift_type; // 移位类型
+    int shift_amount;     // 移位数量
+} ShiftRegister8;
+
+// 移位寄存器行为模型
+void shift_register8_update(ShiftRegister8 *sr) {
+    // 异步复位
+    if (sr->reset) {
+        sr->data = 0;
+        sr->serial_out = 0;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (sr->clock && sr->enable) {
+        if (sr->load) {
+            // 并行加载
+            sr->data = sr->parallel_in;
+        } else {
+            // 移位操作
+            uint8_t old_data = sr->data;
+
+            switch (sr->shift_type) {
+                case SHIFT_LEFT:
+                    sr->data = (old_data << 1) | (sr->serial_in & 1);
+                    sr->serial_out = (old_data >> 7) & 1;
+                    break;
+
+                case SHIFT_RIGHT:
+                    sr->data = (old_data >> 1) | ((sr->serial_in & 1) << 7);
+                    sr->serial_out = old_data & 1;
+                    break;
+
+                case ROTATE_LEFT:
+                    sr->data = (old_data << 1) | ((old_data >> 7) & 1);
+                    sr->serial_out = (old_data >> 7) & 1;
+                    break;
+
+                case ROTATE_RIGHT:
+                    sr->data = (old_data >> 1) | ((old_data & 1) << 7);
+                    sr->serial_out = old_data & 1;
+                    break;
+            }
+        }
+    }
+}
+
+// 移位寄存器演示
+void shift_register8_demo() {
+    printf("8位移位寄存器演示:\n");
+    printf("==================\n");
+
+    ShiftRegister8 sr = {0, 0, 0, false, false, false, false, 0, SHIFT_RIGHT, 1};
+
+    // 测试序列
+    struct {
+        bool clock;
+        bool enable;
+        bool load;
+        uint8_t parallel_in;
+        uint8_t serial_in;
+        ShiftType shift_type;
+    } test_sequence[] = {
+        {false, true, true, 0b10101010, 0, SHIFT_RIGHT},  // 并行加载
+        {true, true, false, 0, 1, SHIFT_RIGHT},           // 右移，输入1
+        {false, true, false, 0, 0, SHIFT_RIGHT},          // 时钟低
+        {true, true, false, 0, 0, SHIFT_RIGHT},           // 右移，输入0
+        {false, true, true, 0b11110000, 0, SHIFT_LEFT},   // 并行加载
+        {true, true, false, 0, 1, SHIFT_LEFT},            // 左移，输入1
+    };
+
+    for (int i = 0; i < 6; i++) {
+        printf("步骤 %d:\n", i);
+        printf("  时钟: %d, 使能: %d\n", test_sequence[i].clock, test_sequence[i].enable);
+        printf("  并行输入: 0b%08b\n", test_sequence[i].parallel_in);
+        printf("  串行输入: %d\n", test_sequence[i].serial_in);
+        printf("  移位类型: %d\n", test_sequence[i].shift_type);
+
+        sr.clock = test_sequence[i].clock;
+        sr.enable = test_sequence[i].enable;
+        sr.load = test_sequence[i].load;
+        sr.parallel_in = test_sequence[i].parallel_in;
+        sr.serial_in = test_sequence[i].serial_in;
+        sr.shift_type = test_sequence[i].shift_type;
+
+        shift_register8_update(&sr);
+
+        printf("  寄存器值: 0b%08b\n", sr.data);
+        printf("  串行输出: %d\n", sr.serial_out);
+        printf("\n");
+    }
+}
+```
+
+## 计数器设计
+
+### 二进制计数器
+
+```c
+// 4位二进制计数器
+typedef struct {
+    uint8_t count;         // 计数器值 (4位)
+    bool enable;           // 使能信号
+    bool clock;            // 时钟信号
+    bool reset;            // 异步复位
+    bool load;             // 并行加载
+    uint8_t parallel_load; // 并行加载值
+    bool up_down;          // 0=递增，1=递减
+    bool carry_out;        // 进位输出
+    bool borrow_out;       // 借位输出
+    bool prev_clock;       // 前一个时钟状态
+} Counter4;
+
+// 4位计数器行为模型
+void counter4_update(Counter4 *counter) {
+    // 异步复位
+    if (counter->reset) {
+        counter->count = 0;
+        counter->carry_out = false;
+        counter->borrow_out = false;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (counter->clock && !counter->prev_clock) {
+        uint8_t old_count = counter->count;
+
+        if (counter->load) {
+            // 并行加载
+            counter->count = counter->parallel_load & 0x0F;  // 限制为4位
+        } else if (counter->enable) {
+            // 计数操作
+            if (counter->up_down) {
+                // 递减
+                if (counter->count == 0) {
+                    counter->count = 15;  // 下溢
+                    counter->borrow_out = true;
+                } else {
+                    counter->count--;
+                    counter->borrow_out = false;
+                }
+            } else {
+                // 递增
+                if (counter->count == 15) {
+                    counter->count = 0;   // 上溢
+                    counter->carry_out = true;
+                } else {
+                    counter->count++;
+                    counter->carry_out = false;
+                }
+            }
+        }
+    }
+
+    // 保存当前时钟状态
+    counter->prev_clock = counter->clock;
+}
+
+// 计数器演示
+void counter4_demo() {
+    printf("4位计数器演示:\n");
+    printf("================\n");
+
+    Counter4 counter = {0, true, false, false, false, 0, false, false, false, false};
+
+    // 测试序列
+    struct {
+        bool clock;
+        bool enable;
+        bool load;
+        uint8_t parallel_load;
+        bool up_down;
+    } test_sequence[] = {
+        {false, true, false, 0, false},    // 初始状态
+        {true, true, false, 0, false},     // 递增计数
+        {false, true, false, 0, false},
+        {true, true, false, 0, false},
+        {false, true, false, 0, false},
+        {true, true, false, 0, false},
+        {false, true, true, 10, false},     // 并行加载10
+        {true, true, false, 0, false},      // 继续递增
+        {false, true, false, 0, true},      // 切换到递减
+        {true, true, false, 0, true},       // 递减计数
+    };
+
+    for (int i = 0; i < 10; i++) {
+        printf("周期 %d:\n", i);
+        printf("  时钟: %d, 使能: %d\n", test_sequence[i].clock, test_sequence[i].enable);
+        printf("  加载: %d, 方向: %s\n", test_sequence[i].load,
+               test_sequence[i].up_down ? "递减" : "递增");
+
+        counter.clock = test_sequence[i].clock;
+        counter.enable = test_sequence[i].enable;
+        counter.load = test_sequence[i].load;
+        counter.parallel_load = test_sequence[i].parallel_load;
+        counter.up_down = test_sequence[i].up_down;
+
+        counter4_update(&counter);
+
+        printf("  计数值: %d (0x%X)\n", counter.count, counter.count);
+        printf("  进位: %d, 借位: %d\n", counter.carry_out, counter.borrow_out);
+        printf("\n");
+    }
+}
+```
+
+### 约翰逊计数器
+
+```c
+// 4位约翰逊计数器
+typedef struct {
+    uint8_t shift_reg;     // 移位寄存器 (4位)
+    bool enable;           // 使能信号
+    bool clock;            // 时钟信号
+    bool reset;            // 异步复位
+    bool prev_clock;       // 前一个时钟状态
+} JohnsonCounter4;
+
+// 约翰逊计数器行为模型
+void johnson_counter4_update(JohnsonCounter4 *jc) {
+    // 异步复位
+    if (jc->reset) {
+        jc->shift_reg = 0;
+        return;
+    }
+
+    // 时钟上升沿触发
+    if (jc->clock && !jc->prev_clock && jc->enable) {
+        // 约翰逊计数器：反馈移位寄存器
+        bool feedback = !(jc->shift_reg & 0x08);  // 反馈MSB的反相
+        jc->shift_reg = ((jc->shift_reg << 1) | feedback) & 0x0F;
+    }
+
+    // 保存当前时钟状态
+    jc->prev_clock = jc->clock;
+}
+
+// 约翰逊计数器演示
+void johnson_counter4_demo() {
+    printf("4位约翰逊计数器演示:\n");
+    printf("====================\n");
+
+    JohnsonCounter4 jc = {0, true, false, false, false};
+
+    printf("周期  计数值  二进制\n");
+    printf("--------------------\n");
+
+    for (int i = 0; i < 16; i++) {
+        jc.clock = true;
+        johnson_counter4_update(&jc);
+        jc.clock = false;
+        johnson_counter4_update(&jc);
+
+        printf(" %2d    %2d     0b%04b\n", i, jc.shift_reg, jc.shift_reg);
+    }
+}
+```
+
+## 有限状态机
+
+### 状态机模型
+
+```python
+class FiniteStateMachine:
+    """有限状态机"""
+
+    def __init__(self, states, inputs, outputs, initial_state):
+        self.states = states              # 状态集合
+        self.inputs = inputs              # 输入集合
+        self.outputs = outputs            # 输出集合
+        self.current_state = initial_state # 当前状态
+        self.initial_state = initial_state # 初始状态
+
+        # 状态转移表
+        self.transition_table = {}
+        # 输出表
+        self.output_table = {}
+
+    def add_transition(self, from_state, input_value, to_state):
+        """添加状态转移"""
+        key = (from_state, input_value)
+        self.transition_table[key] = to_state
+
+    def add_output(self, state, input_value, output_value):
+        """添加输出映射"""
+        key = (state, input_value)
+        self.output_table[key] = output_value
+
+    def step(self, input_value):
+        """执行状态转移"""
+        # 计算下一状态
+        key = (self.current_state, input_value)
+        next_state = self.transition_table.get(key, self.current_state)
+
+        # 计算输出
+        output = self.output_table.get(key, 0)
+
+        # 更新状态
+        self.current_state = next_state
+
+        return output, next_state
+
+    def reset(self):
+        """重置状态机"""
+        self.current_state = self.initial_state
+```
+
+### Mealy状态机示例
+
+```python
+def create_traffic_light_fsm():
+    """创建交通灯控制器状态机"""
+
+    # 状态定义
+    RED = 'RED'
+    YELLOW = 'YELLOW'
+    GREEN = 'GREEN'
+    states = [RED, YELLOW, GREEN]
+
+    # 输入定义
+    TIMER_EXPIRED = 'TIMER_EXPIRED'
+    EMERGENCY = 'EMERGENCY'
+    inputs = [TIMER_EXPIRED, EMERGENCY]
+
+    # 输出定义
+    RED_LIGHT = 'RED_LIGHT'
+    YELLOW_LIGHT = 'YELLOW_LIGHT'
+    GREEN_LIGHT = 'GREEN_LIGHT'
+    outputs = [RED_LIGHT, YELLOW_LIGHT, GREEN_LIGHT]
+
+    # 创建状态机
+    fsm = FiniteStateMachine(states, inputs, outputs, RED)
+
+    # 添加状态转移
+    fsm.add_transition(RED, TIMER_EXPIRED, GREEN)
+    fsm.add_transition(RED, EMERGENCY, RED)
+
+    fsm.add_transition(GREEN, TIMER_EXPIRED, YELLOW)
+    fsm.add_transition(GREEN, EMERGENCY, RED)
+
+    fsm.add_transition(YELLOW, TIMER_EXPIRED, RED)
+    fsm.add_transition(YELLOW, EMERGENCY, RED)
+
+    # 添加输出映射 (Mealy机：输出取决于状态和输入)
+    fsm.add_output(RED, TIMER_EXPIRED, RED_LIGHT)
+    fsm.add_output(RED, EMERGENCY, RED_LIGHT)
+
+    fsm.add_output(GREEN, TIMER_EXPIRED, YELLOW_LIGHT)
+    fsm.add_output(GREEN, EMERGENCY, RED_LIGHT)
+
+    fsm.add_output(YELLOW, TIMER_EXPIRED, RED_LIGHT)
+    fsm.add_output(YELLOW, EMERGENCY, RED_LIGHT)
+
+    return fsm
+
+def traffic_light_demo():
+    """交通灯控制器演示"""
+
+    fsm = create_traffic_light_fsm()
+
+    print("交通灯控制器演示 (Mealy状态机):")
+    print("================================\n")
+
+    # 输入序列
+    input_sequence = [
+        TIMER_EXPIRED,  # 红 -> 绿
+        TIMER_EXPIRED,  # 绿 -> 黄
+        TIMER_EXPIRED,  # 黄 -> 红
+        EMERGENCY,      # 红 -> 红 (紧急情况)
+        TIMER_EXPIRED,  # 红 -> 绿
+        EMERGENCY,      # 绿 -> 红
+        TIMER_EXPIRED,  # 红 -> 绿
+        TIMER_EXPIRED,  # 绿 -> 黄
+    ]
+
+    print("步骤  当前状态  输入          输出         下一状态")
+    print("------------------------------------------------")
+
+    for i, input_val in enumerate(input_sequence):
+        output, next_state = fsm.step(input_val)
+
+        print(f" {i:2d}    {fsm.current_state:8s}  {input_val:12s}  {output:12s}  {next_state:8s}")
+
+def create_moore_traffic_light():
+    """创建Moore型交通灯控制器"""
+
+    states = ['RED', 'GREEN', 'YELLOW']
+    inputs = ['TIMER_EXPIRED', 'EMERGENCY']
+    outputs = ['RED_LIGHT', 'GREEN_LIGHT', 'YELLOW_LIGHT']
+
+    fsm = FiniteStateMachine(states, inputs, outputs, 'RED')
+
+    # 状态转移 (与Mealy机相同)
+    fsm.add_transition('RED', 'TIMER_EXPIRED', 'GREEN')
+    fsm.add_transition('RED', 'EMERGENCY', 'RED')
+    fsm.add_transition('GREEN', 'TIMER_EXPIRED', 'YELLOW')
+    fsm.add_transition('GREEN', 'EMERGENCY', 'RED')
+    fsm.add_transition('YELLOW', 'TIMER_EXPIRED', 'RED')
+    fsm.add_transition('YELLOW', 'EMERGENCY', 'RED')
+
+    # 输出映射 (Moore机：输出只取决于状态)
+    for state in states:
+        fsm.add_output(state, 'TIMER_EXPIRED', state + '_LIGHT')
+        fsm.add_output(state, 'EMERGENCY', state + '_LIGHT')
+
+    return fsm
+```
+
+## 实验项目：数字时钟设计
+
+### 项目概述
+
+设计一个数字时钟电路，包括：
+1. 时分秒计数器
+2. 时间设置功能
+3. 显示控制
+4. 闹钟功能
+
+### 完整实现
+
+```c
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+// 时钟结构
+typedef struct {
+    // 计数器
+    Counter4 seconds_units;    // 秒个位 (0-9)
+    Counter4 seconds_tens;     // 秒十位 (0-5)
+    Counter4 minutes_units;    // 分个位 (0-9)
+    Counter4 minutes_tens;     // 分十位 (0-5)
+    Counter4 hours_units;      // 时个位 (0-9)
+    Counter4 hours_tens;       // 时十位 (0-2)
+
+    // 控制信号
+    bool clock_1hz;            // 1Hz时钟
+    bool enable;               // 时钟使能
+    bool set_mode;            // 设置模式
+    bool set_hours;            // 设置小时
+    bool set_minutes;          // 设置分钟
+    bool alarm_enabled;        // 闹钟使能
+
+    // 闹钟设置
+    uint8_t alarm_hours;       // 闹钟小时
+    uint8_t alarm_minutes;     // 闹钟分钟
+    bool alarm_triggered;      // 闹钟触发
+
+    // 显示控制
+    bool display_24h;          // 24小时制
+} DigitalClock;
+
+// 初始化时钟
+void digital_clock_init(DigitalClock *clock) {
+    // 初始化计数器
+    clock->seconds_units = (Counter4){0, true, false, false, false, 0, false, false, false};
+    clock->seconds_tens = (Counter4){0, true, false, false, false, 0, false, false, false};
+    clock->minutes_units = (Counter4){0, true, false, false, false, 0, false, false, false};
+    clock->minutes_tens = (Counter4){0, true, false, false, false, 0, false, false, false};
+    clock->hours_units = (Counter4){0, true, false, false, false, 0, false, false, false};
+    clock->hours_tens = (Counter4){0, true, false, false, false, 0, false, false, false};
+
+    // 设置计数器为十进制模式
+    clock->seconds_units.parallel_load = 9;
+    clock->seconds_tens.parallel_load = 5;
+    clock->minutes_units.parallel_load = 9;
+    clock->minutes_tens.parallel_load = 5;
+    clock->hours_units.parallel_load = 9;
+    clock->hours_tens.parallel_load = 2;
+
+    clock->clock_1hz = false;
+    clock->enable = true;
+    clock->set_mode = false;
+    clock->set_hours = false;
+    clock->set_minutes = false;
+    clock->alarm_enabled = false;
+    clock->alarm_hours = 0;
+    clock->alarm_minutes = 0;
+    clock->alarm_triggered = false;
+    clock->display_24h = true;
+}
+
+// 更新时钟
+void digital_clock_update(DigitalClock *clock) {
+    if (!clock->enable) return;
+
+    // 更新各个计数器
+    counter4_update(&clock->seconds_units);
+    counter4_update(&clock->seconds_tens);
+    counter4_update(&clock->minutes_units);
+    counter4_update(&clock->minutes_tens);
+    counter4_update(&clock->hours_units);
+    counter4_update(&clock->hours_tens);
+
+    // 检查秒个位进位
+    if (clock->seconds_units.carry_out) {
+        clock->seconds_units.enable = false;
+        clock->seconds_tens.enable = true;
+        clock->seconds_units.carry_out = false;
+    } else {
+        clock->seconds_units.enable = true;
+        clock->seconds_tens.enable = false;
+    }
+
+    // 检查秒十位进位
+    if (clock->seconds_tens.carry_out) {
+        clock->seconds_tens.load = true;
+        clock->seconds_tens.parallel_load = 0;
+        clock->minutes_units.enable = true;
+        clock->seconds_tens.carry_out = false;
+    } else {
+        clock->seconds_tens.load = false;
+        clock->minutes_units.enable = false;
+    }
+
+    // 检查分个位进位
+    if (clock->minutes_units.carry_out) {
+        clock->minutes_units.enable = false;
+        clock->minutes_tens.enable = true;
+        clock->minutes_units.carry_out = false;
+    } else {
+        clock->minutes_units.enable = true;
+        clock->minutes_tens.enable = false;
+    }
+
+    // 检查分十位进位
+    if (clock->minutes_tens.carry_out) {
+        clock->minutes_tens.load = true;
+        clock->minutes_tens.parallel_load = 0;
+        clock->hours_units.enable = true;
+        clock->minutes_tens.carry_out = false;
+    } else {
+        clock->minutes_tens.load = false;
+        clock->hours_units.enable = false;
+    }
+
+    // 检查时个位进位
+    if (clock->hours_units.carry_out) {
+        clock->hours_units.enable = false;
+        clock->hours_tens.enable = true;
+        clock->hours_units.carry_out = false;
+    } else {
+        clock->hours_units.enable = true;
+        clock->hours_tens.enable = false;
+    }
+
+    // 24小时制进位处理
+    if (clock->hours_tens.carry_out) {
+        clock->hours_tens.load = true;
+        clock->hours_tens.parallel_load = 0;
+        clock->hours_units.load = true;
+        clock->hours_units.parallel_load = 0;
+        clock->hours_tens.carry_out = false;
+    }
+
+    // 检查闹钟
+    if (clock->alarm_enabled) {
+        uint8_t current_hours = clock->hours_tens.count * 10 + clock->hours_units.count;
+        uint8_t current_minutes = clock->minutes_tens.count * 10 + clock->minutes_units.count;
+
+        if (current_hours == clock->alarm_hours &&
+            current_minutes == clock->alarm_minutes &&
+            clock->seconds_units.count == 0) {
+            clock->alarm_triggered = true;
+        }
+    }
+}
+
+// 获取当前时间字符串
+void get_time_string(DigitalClock *clock, char *buffer, size_t size) {
+    uint8_t hours = clock->hours_tens.count * 10 + clock->hours_units.count;
+    uint8_t minutes = clock->minutes_tens.count * 10 + clock->minutes_units.count;
+    uint8_t seconds = clock->seconds_tens.count * 10 + clock->seconds_units.count;
+
+    if (clock->display_24h) {
+        snprintf(buffer, size, "%02d:%02d:%02d", hours, minutes, seconds);
+    } else {
+        // 12小时制转换
+        bool pm = hours >= 12;
+        hours = hours % 12;
+        if (hours == 0) hours = 12;
+        snprintf(buffer, size, "%d:%02d:%02d %s", hours, minutes, seconds, pm ? "PM" : "AM");
+    }
+}
+
+// 设置时间
+void set_time(DigitalClock *clock, uint8_t hours, uint8_t minutes, uint8_t seconds) {
+    clock->seconds_units.load = true;
+    clock->seconds_units.parallel_load = seconds % 10;
+    clock->seconds_tens.load = true;
+    clock->seconds_tens.parallel_load = seconds / 10;
+
+    clock->minutes_units.load = true;
+    clock->minutes_units.parallel_load = minutes % 10;
+    clock->minutes_tens.load = true;
+    clock->minutes_tens.parallel_load = minutes / 10;
+
+    clock->hours_units.load = true;
+    clock->hours_units.parallel_load = hours % 10;
+    clock->hours_tens.load = true;
+    clock->hours_tens.parallel_load = hours / 10;
+}
+
+// 设置闹钟
+void set_alarm(DigitalClock *clock, uint8_t hours, uint8_t minutes) {
+    clock->alarm_hours = hours;
+    clock->alarm_minutes = minutes;
+    clock->alarm_enabled = true;
+    clock->alarm_triggered = false;
+}
+
+// 时钟演示
+void digital_clock_demo() {
+    printf("数字时钟演示:\n");
+    printf("=============\n");
+
+    DigitalClock clock;
+    digital_clock_init(&clock);
+
+    // 设置初始时间
+    set_time(&clock, 23, 59, 50);
+    set_alarm(&clock, 0, 0);
+
+    printf("时间  闹钟  状态\n");
+    printf("----------------\n");
+
+    // 模拟时钟运行
+    for (int i = 0; i < 20; i++) {
+        // 生成1Hz时钟
+        clock.clock_1hz = !clock.clock_1hz;
+
+        if (clock.clock_1hz) {
+            digital_clock_update(&clock);
+        }
+
+        char time_str[20];
+        get_time_string(&clock, time_str, sizeof(time_str));
+
+        printf("%s  %02d:%02d  %s\n",
+               time_str,
+               clock.alarm_hours, clock.alarm_minutes,
+               clock.alarm_triggered ? "闹钟!" : "正常");
+
+        // 模拟时间流逝
+        if (i == 10) {
+            printf("\n闹钟设置在 00:00\n");
+        }
+
+        // 延时模拟
+        #ifdef _WIN32
+        Sleep(500);  // Windows
+        #else
+        usleep(500000);  // Linux/Unix
+        #endif
+    }
+}
+
+int main() {
+    // 运行各种触发器演示
+    printf("时序逻辑电路演示\n");
+    printf("=================\n\n");
+
+    printf("1. D触发器\n");
+    d_flip_flop_demo();
+    printf("\n");
+
+    printf("2. JK触发器\n");
+    jk_flip_flop_demo();
+    printf("\n");
+
+    printf("3. T触发器\n");
+    t_flip_flop_demo();
+    printf("\n");
+
+    printf("4. 寄存器\n");
+    register32_demo();
+    printf("\n");
+
+    printf("5. 移位寄存器\n");
+    shift_register8_demo();
+    printf("\n");
+
+    printf("6. 计数器\n");
+    counter4_demo();
+    printf("\n");
+
+    printf("7. 约翰逊计数器\n");
+    johnson_counter4_demo();
+    printf("\n");
+
+    printf("8. 数字时钟\n");
+    digital_clock_demo();
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **触发器类型**：
+   - 比较D触发器、JK触发器和T触发器的特点和应用场景
+   - 什么是边沿触发？什么是电平触发？
+
+2. **时序约束**：
+   - 解释建立时间和保持时间的概念
+   - 什么是亚稳态？如何避免？
+
+3. **状态机设计**：
+   - Mealy机和Moore机有什么区别？
+   - 如何设计一个状态机来识别特定序列？
+
+4. **计数器设计**：
+   - 设计一个模12计数器
+   - 如何实现可编程分频器？
+
+### 编程练习
+
+1. **状态机仿真器**：实现通用的状态机仿真工具
+
+2. **时序分析器**：创建时序约束分析工具
+
+3. **触发器库**：实现各种触发器的Verilog模型
+
+4. **计数器设计**：设计任意模数的计数器
+
+### 实验挑战
+
+1. **UART控制器**：设计一个完整的UART收发器
+
+2. **SPI接口**：实现SPI主从控制器
+
+3. **I2C控制器**：设计I2C总线控制器
+
+## 扩展阅读
+
+- **教材章节**：*Digital Design and Computer Architecture* 第4章
+- **在线资源**：
+  - [Finite State Machine Designer](https://madebyevan.com/fsm/)
+  - [Sequential Logic Circuits](https://www.electronics-tutorials.ws/sequential/seq_1.html)
+- **推荐视频**：
+  - [Flip-Flops (YouTube)](https://www.youtube.com/watch?v=K39m6p5z5D8)
+  - [State Machines (YouTube)](https://www.youtube.com/watch?v=i1J3T6S_9L4)
+
+---
+
+*下一讲将深入探讨指令集架构，包括ISA设计、寻址模式和指令格式。*

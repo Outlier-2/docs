@@ -1,0 +1,1328 @@
+---
+title: "Lecture 6: Go模式"
+description: "Go语言在分布式系统中的编程模式和最佳实践"
+---
+
+# Lecture 6: Go模式
+
+## 本周内容
+
+- **Go设计哲学**：简洁性、组合性、并发性和工程实践
+- **并发模式**：Worker Pool、Pipeline、Fan-in/Fan-out、CSP模型
+- **错误处理**：重试机制、断路器模式、超时控制
+- **网络编程**：连接池、负载均衡、服务发现
+- **性能优化**：内存管理、并发控制、资源利用
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/YS4e4q9gBaE" title="Go并发编程模式" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### Go设计哲学
+
+**简洁性 (Simplicity)**
+- 少即是多：语言特性最小化
+- 清晰的语法和语义
+- 减少认知负担
+
+**组合性 (Composition)**
+- 嵌入式组合
+- 接口组合
+- 小型、专注的组件
+
+**并发性 (Concurrency)**
+- CSP（通信顺序进程）模型
+- Goroutine轻量级线程
+- Channel类型安全的通信
+
+**工程实践**
+- 清晰的错误处理
+- 标准化的项目结构
+- 强大的工具链
+
+### Go在分布式系统中的优势
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Go语言优势                          │
+├─────────────────────────────────────────────────────────┤
+│  🔧 简单易学    - 语法简洁，上手快速                   │
+│  ⚡ 高性能      - 编译型语言，接近C++性能              │
+│  🚀 并发原生    - Goroutine和Channel原生支持           │
+│  📦 标准库丰富  - net/http、sync、context等            │
+│  🔄 部署简单    - 静态链接，单文件部署                 │
+│  🛠️ 工具链强大 - go test、go fmt、go mod等          │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 并发编程模式
+
+### 1. Worker Pool模式
+
+Worker Pool是最常用的并发模式之一，用于分发任务到多个工作协程。
+
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "time"
+)
+
+// WorkerPool 工作池结构
+type WorkerPool struct {
+    tasks       chan Task
+    results     chan Result
+    workerCount int
+    wg          sync.WaitGroup
+}
+
+// Task 任务接口
+type Task interface {
+    Execute() Result
+}
+
+// Result 结果接口
+type Result interface{}
+
+// NewWorkerPool 创建工作池
+func NewWorkerPool(workerCount int) *WorkerPool {
+    return &WorkerPool{
+        tasks:       make(chan Task, 100),
+        results:     make(chan Result, 100),
+        workerCount: workerCount,
+    }
+}
+
+// Start 启动工作池
+func (wp *WorkerPool) Start() {
+    for i := 0; i < wp.workerCount; i++ {
+        wp.wg.Add(1)
+        go wp.worker(i)
+    }
+}
+
+// Stop 停止工作池
+func (wp *WorkerPool) Stop() {
+    close(wp.tasks)
+    wp.wg.Wait()
+    close(wp.results)
+}
+
+// worker 工作协程
+func (wp *WorkerPool) worker(id int) {
+    defer wp.wg.Done()
+
+    for task := range wp.tasks {
+        result := task.Execute()
+        wp.results <- result
+        fmt.Printf("Worker %d completed task\n", id)
+    }
+}
+
+// Submit 提交任务
+func (wp *WorkerPool) Submit(task Task) {
+    wp.tasks <- task
+}
+
+// Results 获取结果通道
+func (wp *WorkerPool) Results() <-chan Result {
+    return wp.results
+}
+
+// 具体任务实现
+type MathTask struct {
+    a, b int
+    op   string
+}
+
+func (mt *MathTask) Execute() Result {
+    time.Sleep(time.Millisecond * 100) // 模拟耗时操作
+
+    switch mt.op {
+    case "+":
+        return mt.a + mt.b
+    case "-":
+        return mt.a - mt.b
+    case "*":
+        return mt.a * mt.b
+    case "/":
+        return mt.a / mt.b
+    default:
+        return fmt.Errorf("unknown operation: %s", mt.op)
+    }
+}
+
+func main() {
+    // 创建工作池
+    pool := NewWorkerPool(3)
+    pool.Start()
+    defer pool.Stop()
+
+    // 提交任务
+    tasks := []Task{
+        &MathTask{10, 5, "+"},
+        &MathTask{20, 3, "*"},
+        &MathTask{15, 4, "-"},
+        &MathTask{100, 2, "/"},
+        &MathTask{7, 8, "*"},
+    }
+
+    for _, task := range tasks {
+        pool.Submit(task)
+    }
+
+    // 收集结果
+    for i := 0; i < len(tasks); i++ {
+        result := <-pool.Results()
+        fmt.Printf("Result: %v\n", result)
+    }
+}
+```
+
+### 2. Pipeline模式
+
+Pipeline模式将复杂处理过程分解为多个阶段，每个阶段处理完成后传递给下一阶段。
+
+```go
+package main
+
+import (
+    "fmt"
+    "strconv"
+    "strings"
+    "sync"
+)
+
+// Stage 定义处理阶段
+type Stage func(in <-chan interface{}) <-chan interface{}
+
+// Pipeline 管道结构
+type Pipeline struct {
+    stages []Stage
+}
+
+// NewPipeline 创建管道
+func NewPipeline() *Pipeline {
+    return &Pipeline{
+        stages: make([]Stage, 0),
+    }
+}
+
+// AddStage 添加处理阶段
+func (p *Pipeline) AddStage(stage Stage) {
+    p.stages = append(p.stages, stage)
+}
+
+// Execute 执行管道
+func (p *Pipeline) Execute(input <-chan interface{}) <-chan interface{} {
+    result := input
+
+    for _, stage := range p.stages {
+        result = stage(result)
+    }
+
+    return result
+}
+
+// 辅助函数：创建处理阶段
+func createProcessor(processor func(interface{}) interface{}) Stage {
+    return func(in <-chan interface{}) <-chan interface{} {
+        out := make(chan interface{})
+
+        go func() {
+            defer close(out)
+
+            for data := range in {
+                result := processor(data)
+                out <- result
+            }
+        }()
+
+        return out
+    }
+}
+
+// 数据处理示例
+type Data struct {
+    ID    int
+    Value string
+}
+
+func main() {
+    // 创建输入数据
+    input := make(chan interface{}, 10)
+
+    go func() {
+        defer close(input)
+
+        // 输入数据
+        data := []string{"hello", "world", "go", "pipeline", "example"}
+        for i, item := range data {
+            input <- Data{ID: i, Value: item}
+        }
+    }()
+
+    // 创建管道
+    pipeline := NewPipeline()
+
+    // 添加处理阶段
+    pipeline.AddStage(createProcessor(func(data interface{}) interface{} {
+        d := data.(Data)
+        // 阶段1：转换为大写
+        d.Value = strings.ToUpper(d.Value)
+        return d
+    }))
+
+    pipeline.AddStage(createProcessor(func(data interface{}) interface{} {
+        d := data.(Data)
+        // 阶段2：添加前缀
+        d.Value = fmt.Sprintf("PROCESSED_%s", d.Value)
+        return d
+    }))
+
+    pipeline.AddStage(createProcessor(func(data interface{}) interface{} {
+        d := data.(Data)
+        // 阶段3：计算长度
+        return fmt.Sprintf("ID:%d, Value:%s, Length:%d",
+            d.ID, d.Value, len(d.Value))
+    }))
+
+    // 执行管道
+    output := pipeline.Execute(input)
+
+    // 收集结果
+    for result := range output {
+        fmt.Printf("Final Result: %s\n", result.(string))
+    }
+}
+```
+
+### 3. Fan-in/Fan-out模式
+
+Fan-out将任务分发到多个协程，Fan-in将多个协程的结果合并。
+
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "time"
+)
+
+// Fan-out：分发任务到多个worker
+func fanOut(tasks []Task, workerCount int) []<-chan Result {
+    workers := make([]<-chan Result, workerCount)
+
+    for i := 0; i < workerCount; i++ {
+        workers[i] = worker(i, tasks)
+    }
+
+    return workers
+}
+
+// Worker 处理任务的worker
+func worker(id int, tasks []Task) <-chan Result {
+    results := make(chan Result)
+
+    go func() {
+        defer close(results)
+
+        for _, task := range tasks {
+            if id == len(tasks)%workerCount {
+                result := task.Execute()
+                results <- result
+            }
+        }
+    }()
+
+    return results
+}
+
+// Fan-in：合并多个worker的结果
+func fanIn(workers []<-chan Result) <-chan Result {
+    merged := make(chan Result)
+
+    var wg sync.WaitGroup
+    wg.Add(len(workers))
+
+    for _, worker := range workers {
+        go func(w <-chan Result) {
+            defer wg.Done()
+
+            for result := range w {
+                merged <- result
+            }
+        }(worker)
+    }
+
+    go func() {
+        wg.Wait()
+        close(merged)
+    }()
+
+    return merged
+}
+
+// 并行计算示例
+func main() {
+    // 创建任务
+    tasks := []Task{}
+    for i := 0; i < 20; i++ {
+        tasks = append(tasks, &MathTask{i, i+1, "+"})
+    }
+
+    // Fan-out：分发到5个worker
+    workers := fanOut(tasks, 5)
+
+    // Fan-in：合并结果
+    results := fanIn(workers)
+
+    // 收集结果
+    for result := range results {
+        fmt.Printf("Result: %v\n", result)
+    }
+}
+```
+
+## 错误处理模式
+
+### 1. 重试机制
+
+```go
+package retry
+
+import (
+    "context"
+    "fmt"
+    "math"
+    "math/rand"
+    "time"
+)
+
+// RetryConfig 重试配置
+type RetryConfig struct {
+    MaxAttempts int
+    BaseDelay   time.Duration
+    MaxDelay    time.Duration
+    Jitter      bool
+}
+
+// RetryOperation 重试操作
+func RetryOperation(ctx context.Context, config RetryConfig, operation func() error) error {
+    var lastErr error
+
+    for attempt := 0; attempt < config.MaxAttempts; attempt++ {
+        if attempt > 0 {
+            // 计算退避时间
+            delay := calculateBackoff(config, attempt)
+
+            select {
+            case <-time.After(delay):
+                // 继续重试
+            case <-ctx.Done():
+                return ctx.Err()
+            }
+        }
+
+        // 执行操作
+        err := operation()
+        if err == nil {
+            return nil
+        }
+
+        lastErr = err
+
+        // 检查是否需要重试
+        if !shouldRetry(err) {
+            return err
+        }
+    }
+
+    return fmt.Errorf("operation failed after %d attempts, last error: %v",
+        config.MaxAttempts, lastErr)
+}
+
+// 指数退避计算
+func calculateBackoff(config RetryConfig, attempt int) time.Duration {
+    delay := time.Duration(math.Pow(2, float64(attempt))) * config.BaseDelay
+
+    if delay > config.MaxDelay {
+        delay = config.MaxDelay
+    }
+
+    if config.Jitter {
+        // 添加随机抖动
+        jitter := time.Duration(rand.Int63n(int64(delay)))
+        delay = delay/2 + jitter
+    }
+
+    return delay
+}
+
+// 判断是否需要重试
+func shouldRetry(err error) bool {
+    // 根据错误类型判断是否需要重试
+    switch err {
+    case context.DeadlineExceeded, context.Canceled:
+        return false
+    default:
+        return true
+    }
+}
+
+// 使用示例
+func main() {
+    config := RetryConfig{
+        MaxAttempts: 5,
+        BaseDelay:   time.Second,
+        MaxDelay:    time.Second * 10,
+        Jitter:      true,
+    }
+
+    ctx := context.Background()
+
+    err := RetryOperation(ctx, config, func() error {
+        // 模拟可能失败的操作
+        if rand.Intn(3) != 0 {
+            return fmt.Errorf("temporary failure")
+        }
+        return nil
+    })
+
+    if err != nil {
+        fmt.Printf("Operation failed: %v\n", err)
+    } else {
+        fmt.Println("Operation succeeded")
+    }
+}
+```
+
+### 2. 断路器模式
+
+```go
+package circuitbreaker
+
+import (
+    "sync"
+    "time"
+)
+
+// State 断路器状态
+type State int
+
+const (
+    StateClosed State = iota
+    StateOpen
+    StateHalfOpen
+)
+
+// CircuitBreaker 断路器结构
+type CircuitBreaker struct {
+    mu             sync.Mutex
+    state          State
+    failureCount   int
+    successCount   int
+    threshold      int
+    timeout        time.Duration
+    lastFailure    time.Time
+    resetTimeout   time.Duration
+}
+
+// NewCircuitBreaker 创建断路器
+func NewCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
+    return &CircuitBreaker{
+        state:        StateClosed,
+        threshold:    threshold,
+        timeout:      timeout,
+        resetTimeout: time.Minute,
+    }
+}
+
+// Execute 执行操作
+func (cb *CircuitBreaker) Execute(operation func() error) error {
+    cb.mu.Lock()
+
+    // 检查断路器状态
+    if cb.state == StateOpen {
+        if time.Since(cb.lastFailure) > cb.resetTimeout {
+            cb.state = StateHalfOpen
+            cb.successCount = 0
+        } else {
+            cb.mu.Unlock()
+            return fmt.Errorf("circuit breaker is open")
+        }
+    }
+
+    cb.mu.Unlock()
+
+    // 执行操作
+    err := operation()
+
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+
+    if err != nil {
+        // 操作失败
+        cb.failureCount++
+        cb.lastFailure = time.Now()
+
+        if cb.failureCount >= cb.threshold {
+            cb.state = StateOpen
+        }
+
+        return err
+    } else {
+        // 操作成功
+        cb.failureCount = 0
+
+        if cb.state == StateHalfOpen {
+            cb.successCount++
+            if cb.successCount >= 3 {
+                cb.state = StateClosed
+            }
+        }
+
+        return nil
+    }
+}
+
+// State 获取当前状态
+func (cb *CircuitBreaker) State() State {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+    return cb.state
+}
+
+// Reset 重置断路器
+func (cb *CircuitBreaker) Reset() {
+    cb.mu.Lock()
+    defer cb.mu.Unlock()
+
+    cb.state = StateClosed
+    cb.failureCount = 0
+    cb.successCount = 0
+}
+
+// 使用示例
+func main() {
+    cb := NewCircuitBreaker(3, time.Second*5)
+
+    for i := 0; i < 10; i++ {
+        err := cb.Execute(func() error {
+            // 模拟操作
+            if i < 5 {
+                return fmt.Errorf("operation failed")
+            }
+            return nil
+        })
+
+        fmt.Printf("Attempt %d: State=%v, Error=%v\n",
+            i, cb.State(), err)
+
+        time.Sleep(time.Second)
+    }
+}
+```
+
+## 网络编程模式
+
+### 1. 连接池
+
+```go
+package pool
+
+import (
+    "net"
+    "sync"
+    "time"
+)
+
+// ConnectionPool 连接池结构
+type ConnectionPool struct {
+    mu         sync.Mutex
+    connections chan net.Conn
+    factory    func() (net.Conn, error)
+    maxConns   int
+    current    int
+}
+
+// NewConnectionPool 创建连接池
+func NewConnectionPool(factory func() (net.Conn, error), maxConns int) *ConnectionPool {
+    return &ConnectionPool{
+        connections: make(chan net.Conn, maxConns),
+        factory:    factory,
+        maxConns:   maxConns,
+    }
+}
+
+// Get 获取连接
+func (p *ConnectionPool) Get() (net.Conn, error) {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+
+    select {
+    case conn := <-p.connections:
+        // 从池中获取连接
+        return conn, nil
+    default:
+        // 创建新连接
+        if p.current < p.maxConns {
+            p.current++
+            conn, err := p.factory()
+            if err != nil {
+                p.current--
+                return nil, err
+            }
+            return conn, nil
+        }
+
+        // 等待连接释放
+        p.mu.Unlock()
+        conn := <-p.connections
+        p.mu.Lock()
+        return conn, nil
+    }
+}
+
+// Put 释放连接
+func (p *ConnectionPool) Put(conn net.Conn) {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+
+    select {
+    case p.connections <- conn:
+        // 连接成功放回池中
+    default:
+        // 池已满，关闭连接
+        conn.Close()
+        p.current--
+    }
+}
+
+// Close 关闭连接池
+func (p *ConnectionPool) Close() error {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+
+    close(p.connections)
+
+    for conn := range p.connections {
+        conn.Close()
+    }
+
+    p.current = 0
+    return nil
+}
+
+// 使用示例
+func main() {
+    // 创建连接池
+    pool := NewConnectionPool(func() (net.Conn, error) {
+        return net.Dial("tcp", "localhost:8080")
+    }, 10)
+    defer pool.Close()
+
+    // 使用连接
+    for i := 0; i < 20; i++ {
+        conn, err := pool.Get()
+        if err != nil {
+            fmt.Printf("Error getting connection: %v\n", err)
+            continue
+        }
+
+        // 使用连接
+        _, err = conn.Write([]byte("Hello, Server!"))
+        if err != nil {
+            fmt.Printf("Error writing to connection: %v\n", err)
+        } else {
+            fmt.Printf("Successfully wrote to connection %d\n", i)
+        }
+
+        // 释放连接
+        pool.Put(conn)
+    }
+}
+```
+
+### 2. 超时控制
+
+```go
+package timeout
+
+import (
+    "context"
+    "fmt"
+    "net"
+    "time"
+)
+
+// TimeoutDialer 带超时的拨号器
+type TimeoutDialer struct {
+    dialTimeout   time.Duration
+    readTimeout  time.Duration
+    writeTimeout time.Duration
+}
+
+// NewTimeoutDialer 创建超时拨号器
+func NewTimeoutDialer(dialTimeout, readTimeout, writeTimeout time.Duration) *TimeoutDialer {
+    return &TimeoutDialer{
+        dialTimeout:   dialTimeout,
+        readTimeout:  readTimeout,
+        writeTimeout: writeTimeout,
+    }
+}
+
+// Dial 带超时的拨号
+func (d *TimeoutDialer) Dial(network, address string) (net.Conn, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), d.dialTimeout)
+    defer cancel()
+
+    dialer := &net.Dialer{}
+    conn, err := dialer.DialContext(ctx, network, address)
+    if err != nil {
+        return nil, fmt.Errorf("dial timeout: %v", err)
+    }
+
+    // 设置读写超时
+    if d.readTimeout > 0 {
+        conn.SetReadDeadline(time.Now().Add(d.readTimeout))
+    }
+
+    if d.writeTimeout > 0 {
+        conn.SetWriteDeadline(time.Now().Add(d.writeTimeout))
+    }
+
+    return conn, nil
+}
+
+// TimeoutClient 带超时的客户端
+type TimeoutClient struct {
+    dialer *TimeoutDialer
+}
+
+// NewTimeoutClient 创建超时客户端
+func NewTimeoutClient(dialTimeout, readTimeout, writeTimeout time.Duration) *TimeoutClient {
+    return &TimeoutClient{
+        dialer: NewTimeoutDialer(dialTimeout, readTimeout, writeTimeout),
+    }
+}
+
+// Do 执行带超时的请求
+func (c *TimeoutClient) Do(address string, request []byte) ([]byte, error) {
+    conn, err := c.dialer.Dial("tcp", address)
+    if err != nil {
+        return nil, err
+    }
+    defer conn.Close()
+
+    // 写入请求
+    _, err = conn.Write(request)
+    if err != nil {
+        return nil, fmt.Errorf("write timeout: %v", err)
+    }
+
+    // 读取响应
+    buffer := make([]byte, 4096)
+    n, err := conn.Read(buffer)
+    if err != nil {
+        return nil, fmt.Errorf("read timeout: %v", err)
+    }
+
+    return buffer[:n], nil
+}
+
+// 使用示例
+func main() {
+    client := NewTimeoutClient(
+        time.Second*5,  // 拨号超时
+        time.Second*10, // 读取超时
+        time.Second*5,  // 写入超时
+    )
+
+    request := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    response, err := client.Do("example.com:80", request)
+    if err != nil {
+        fmt.Printf("Request failed: %v\n", err)
+        return
+    }
+
+    fmt.Printf("Response: %s\n", string(response))
+}
+```
+
+## 性能优化模式
+
+### 1. 对象池
+
+```go
+package pool
+
+import (
+    "sync"
+)
+
+// ObjectPool 对象池
+type ObjectPool struct {
+    pool      sync.Pool
+    newFunc   func() interface{}
+    resetFunc func(interface{})
+}
+
+// NewObjectPool 创建对象池
+func NewObjectPool(newFunc func() interface{}, resetFunc func(interface{})) *ObjectPool {
+    return &ObjectPool{
+        pool: sync.Pool{
+            New: newFunc,
+        },
+        newFunc:   newFunc,
+        resetFunc: resetFunc,
+    }
+}
+
+// Get 获取对象
+func (p *ObjectPool) Get() interface{} {
+    return p.pool.Get()
+}
+
+// Put 放回对象
+func (p *ObjectPool) Put(obj interface{}) {
+    if p.resetFunc != nil {
+        p.resetFunc(obj)
+    }
+    p.pool.Put(obj)
+}
+
+// 使用示例：Buffer池
+func main() {
+    bufferPool := NewObjectPool(
+        func() interface{} {
+            return make([]byte, 0, 1024)
+        },
+        func(obj interface{}) {
+            buf := obj.([]byte)
+            buf = buf[:0] // 重置buffer
+        },
+    )
+
+    // 使用buffer
+    buf := bufferPool.Get().([]byte)
+    buf = append(buf, "Hello, World!"...)
+
+    // 使用完后放回池中
+    bufferPool.Put(buf)
+}
+```
+
+### 2. 批量处理
+
+```go
+package batch
+
+import (
+    "sync"
+    "time"
+)
+
+// BatchProcessor 批量处理器
+type BatchProcessor struct {
+    batchSize    int
+    flushTimeout time.Duration
+    buffer       []interface{}
+    processor    func([]interface{})
+    mu           sync.Mutex
+    ticker       *time.Ticker
+    done         chan struct{}
+}
+
+// NewBatchProcessor 创建批量处理器
+func NewBatchProcessor(batchSize int, flushTimeout time.Duration, processor func([]interface{})) *BatchProcessor {
+    bp := &BatchProcessor{
+        batchSize:    batchSize,
+        flushTimeout: flushTimeout,
+        buffer:       make([]interface{}, 0, batchSize),
+        processor:    processor,
+        ticker:       time.NewTicker(flushTimeout),
+        done:         make(chan struct{}),
+    }
+
+    go bp.flushLoop()
+
+    return bp
+}
+
+// Add 添加项目
+func (bp *BatchProcessor) Add(item interface{}) {
+    bp.mu.Lock()
+    defer bp.mu.Unlock()
+
+    bp.buffer = append(bp.buffer, item)
+
+    if len(bp.buffer) >= bp.batchSize {
+        bp.flush()
+    }
+}
+
+// flush 刷新缓冲区
+func (bp *BatchProcessor) flush() {
+    if len(bp.buffer) == 0 {
+        return
+    }
+
+    // 复制缓冲区避免处理过程中的竞争
+    batch := make([]interface{}, len(bp.buffer))
+    copy(batch, bp.buffer)
+    bp.buffer = bp.buffer[:0]
+
+    // 异步处理
+    go bp.processor(batch)
+}
+
+// flushLoop 定期刷新
+func (bp *BatchProcessor) flushLoop() {
+    for {
+        select {
+        case <-bp.ticker.C:
+            bp.mu.Lock()
+            bp.flush()
+            bp.mu.Unlock()
+        case <-bp.done:
+            return
+        }
+    }
+}
+
+// Close 关闭处理器
+func (bp *BatchProcessor) Close() {
+    bp.ticker.Stop()
+    close(bp.done)
+
+    bp.mu.Lock()
+    bp.flush()
+    bp.mu.Unlock()
+}
+
+// 使用示例
+func main() {
+    processor := NewBatchProcessor(100, time.Second, func(items []interface{}) {
+        fmt.Printf("Processing batch of %d items\n", len(items))
+        // 处理批量数据...
+    })
+    defer processor.Close()
+
+    // 添加数据
+    for i := 0; i < 250; i++ {
+        processor.Add(i)
+        time.Sleep(time.Millisecond * 10)
+    }
+}
+```
+
+## 实践项目：分布式任务处理系统
+
+### 项目概述
+
+基于Go模式实现一个分布式任务处理系统，包含：
+
+1. **任务队列**：使用Channel和Worker Pool
+2. **错误处理**：重试机制和断路器
+3. **性能优化**：对象池和批量处理
+4. **监控**：指标收集和健康检查
+
+### 完整实现
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "sync"
+    "time"
+)
+
+// Task 任务定义
+type Task struct {
+    ID        int
+    Payload   interface{}
+    Retry     int
+    CreatedAt time.Time
+}
+
+// Result 结果定义
+type Result struct {
+    TaskID    int
+    Success   bool
+    Value     interface{}
+    Error     error
+    Duration  time.Duration
+}
+
+// TaskProcessor 任务处理器
+type TaskProcessor struct {
+    workerPool    *WorkerPool
+    retryConfig   RetryConfig
+    circuitBreaker *CircuitBreaker
+    metrics       *Metrics
+}
+
+// NewTaskProcessor 创建任务处理器
+func NewTaskProcessor() *TaskProcessor {
+    return &TaskProcessor{
+        workerPool: NewWorkerPool(5),
+        retryConfig: RetryConfig{
+            MaxAttempts: 3,
+            BaseDelay:   time.Second,
+            MaxDelay:    time.Second * 10,
+            Jitter:      true,
+        },
+        circuitBreaker: NewCircuitBreaker(5, time.Second*30),
+        metrics:       NewMetrics(),
+    }
+}
+
+// Start 启动处理器
+func (tp *TaskProcessor) Start() {
+    tp.workerPool.Start()
+}
+
+// Stop 停止处理器
+func (tp *TaskProcessor) Stop() {
+    tp.workerPool.Stop()
+}
+
+// Process 处理任务
+func (tp *TaskProcessor) Process(task Task) Result {
+    start := time.Now()
+
+    result := Result{
+        TaskID: task.ID,
+    }
+
+    // 记录指标
+    tp.metrics.Increment("tasks_total")
+
+    // 使用断路器保护
+    err := tp.circuitBreaker.Execute(func() error {
+        // 使用重试机制
+        return RetryOperation(context.Background(), tp.retryConfig, func() error {
+            // 实际处理任务
+            return tp.executeTask(task)
+        })
+    })
+
+    result.Duration = time.Since(start)
+
+    if err != nil {
+        result.Success = false
+        result.Error = err
+        tp.metrics.Increment("tasks_failed")
+    } else {
+        result.Success = true
+        tp.metrics.Increment("tasks_succeeded")
+    }
+
+    // 记录处理时间
+    tp.metrics.Observe("task_duration_seconds", result.Duration.Seconds())
+
+    return result
+}
+
+// executeTask 执行具体任务
+func (tp *TaskProcessor) executeTask(task Task) error {
+    // 模拟任务处理
+    time.Sleep(time.Millisecond * time.Duration(100+task.ID%200))
+
+    // 模拟随机失败
+    if task.ID%10 == 0 {
+        return fmt.Errorf("task %d failed", task.ID)
+    }
+
+    return nil
+}
+
+// Metrics 指标收集
+type Metrics struct {
+    mu    sync.Mutex
+    data  map[string]float64
+    count map[string]int
+}
+
+// NewMetrics 创建指标收集器
+func NewMetrics() *Metrics {
+    return &Metrics{
+        data:  make(map[string]float64),
+        count: make(map[string]int),
+    }
+}
+
+// Increment 增加计数
+func (m *Metrics) Increment(name string) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    m.count[name]++
+}
+
+// Observe 观察值
+func (m *Metrics) Observe(name string, value float64) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    m.data[name] = value
+}
+
+// Get 获取指标
+func (m *Metrics) Get(name string) (float64, bool) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    value, exists := m.data[name]
+    return value, exists
+}
+
+// GetCount 获取计数
+func (m *Metrics) GetCount(name string) (int, bool) {
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    count, exists := m.count[name]
+    return count, exists
+}
+
+func main() {
+    // 创建任务处理器
+    processor := NewTaskProcessor()
+    processor.Start()
+    defer processor.Stop()
+
+    // 创建任务
+    tasks := make([]Task, 100)
+    for i := 0; i < 100; i++ {
+        tasks[i] = Task{
+            ID:        i,
+            Payload:   fmt.Sprintf("Task-%d", i),
+            CreatedAt: time.Now(),
+        }
+    }
+
+    // 处理任务
+    var wg sync.WaitGroup
+
+    for _, task := range tasks {
+        wg.Add(1)
+        go func(t Task) {
+            defer wg.Done()
+
+            result := processor.Process(t)
+
+            if result.Success {
+                log.Printf("Task %d succeeded in %v",
+                    result.TaskID, result.Duration)
+            } else {
+                log.Printf("Task %d failed: %v",
+                    result.TaskID, result.Error)
+            }
+        }(task)
+    }
+
+    wg.Wait()
+
+    // 输出指标
+    metrics := processor.metrics
+    if count, exists := metrics.GetCount("tasks_total"); exists {
+        log.Printf("Total tasks: %d", count)
+    }
+
+    if count, exists := metrics.GetCount("tasks_succeeded"); exists {
+        log.Printf("Succeeded tasks: %d", count)
+    }
+
+    if count, exists := metrics.GetCount("tasks_failed"); exists {
+        log.Printf("Failed tasks: %d", count)
+    }
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **CSP模型**：解释Go的CSP模型与其他并发模型的区别。
+
+2. **模式选择**：什么情况下使用Worker Pool，什么情况下使用Pipeline？
+
+3. **错误处理**：为什么分布式系统中需要重试机制和断路器？
+
+4. **性能优化**：对象池和批量处理的适用场景是什么？
+
+### 编程题
+
+1. **实现RPC框架**：基于Go模式实现一个简单的RPC框架。
+
+2. **分布式缓存**：实现一个分布式缓存系统，包含缓存淘汰和一致性哈希。
+
+3. **服务发现**：实现一个服务发现系统，支持健康检查和负载均衡。
+
+4. **消息队列**：实现一个基于Channel的消息队列，支持优先级和延迟。
+
+### 设计题
+
+1. **微服务架构**：设计一个基于Go的微服务架构，包含服务注册、发现、调用链追踪。
+
+2. **分布式锁**：实现一个分布式锁服务，支持可重入和超时释放。
+
+3. **配置中心**：设计一个配置中心，支持动态配置和版本管理。
+
+4. **监控系统**：实现一个分布式监控系统，收集和分析系统指标。
+
+## 常见问题
+
+### Q: Goroutine泄漏如何避免？
+
+A: 使用context包来管理Goroutine生命周期，确保资源正确释放。可以使用sync.WaitGroup或专门的监控工具来检测泄漏。
+
+### Q: Channel的缓冲大小如何设置？
+
+A: 根据实际场景调整。对于生产者-消费者模式，缓冲大小应该能处理短暂的生产峰值，但不宜过大以避免内存浪费。
+
+### Q: 如何处理分布式系统中的网络分区？
+
+A: 使用断路器模式来隔离故障服务，结合重试机制和优雅降级策略。实现健康检查和自动故障恢复。
+
+## 扩展资源
+
+### 官方文档
+
+1. **[Go并发编程](https://go.dev/doc/effective_go#concurrency)** - Go官方并发编程指南
+2. **[context包](https://pkg.go.dev/context)** - Context包文档
+3. **[sync包](https://pkg.go.dev/sync)** - 同步原语文档
+
+### 开源项目
+
+1. **[Go-Kit](https://github.com/go-kit/kit)** - 微服务工具包
+2. **[Gin](https://github.com/gin-gonic/gin)** - Web框架
+3. **[Cobra](https://github.com/spf13/cobra)** - CLI框架
+
+### 在线课程
+
+1. **[Go编程语言](https://tour.golang.org/)** - Go官方教程
+2. **[Go并发模式](https://go.dev/blog/pipelines)** - Go官方并发模式博客
+3. **[分布式系统设计](https://www.coursera.org/learn/cloud-computing)** - 分布式系统课程
+
+## 下一步学习
+
+在完成Go模式学习后，你应该继续深入：
+
+1. **系统设计**：学习如何设计高可用、可扩展的分布式系统
+2. **性能优化**：深入学习Go性能分析和优化技巧
+3. **云原生**：学习容器化和Kubernetes相关技术
+4. **监控运维**：学习分布式系统的监控和运维实践
+
+---
+
+*Go语言的简洁性和强大的并发特性使其成为构建现代分布式系统的理想选择。掌握这些模式将帮助你构建高性能、高可用的分布式系统。*

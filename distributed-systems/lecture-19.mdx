@@ -1,0 +1,2275 @@
+---
+title: "Lecture 19: 监控和调试 - 分布式系统可观测性"
+description: "深入理解分布式系统的监控、日志、追踪和故障诊断技术"
+---
+
+# Lecture 19: 监控和调试 - 分布式系统可观测性
+
+## 本周内容
+
+- **监控指标体系**：RED、USE、黄金信号指标和自定义指标
+- **日志系统架构**：ELK、EFK、Loki栈和最佳实践
+- **分布式追踪**：OpenTracing、OpenTelemetry和链路分析
+- **告警机制**：多级告警、智能告警和告警收敛
+- **实践项目**：构建完整的可观测性平台
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/e6g0tY4c5b4" title="分布式系统监控和调试" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 可观测性三大支柱
+
+可观测性（Observability）是理解系统内部状态的能力，通过外部输出来推断系统行为。三大支柱分别是：
+
+**可观测性架构**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    可观测性平台                              │
+├─────────────┬─────────────┬─────────────┬─────────────────┤
+│   指标监控   │   日志系统   │   链路追踪   │     告警系统     │
+│ (Metrics)   │   (Logs)    │  (Tracing)  │   (Alerting)    │
+├─────────────┼─────────────┼─────────────┼─────────────────┤
+│ Prometheus  │ Elasticsearch│    Jaeger   │    AlertManager │
+│   Grafana   │    Kibana   │   Zipkin    │    PagerDuty    │
+│   InfluxDB  │    Fluentd  │ OpenTelemetry│    Slack/Webhook│
+└─────────────┴─────────────┴─────────────┴─────────────────┘
+```
+
+### 监控指标体系详解
+
+#### 1. 指标类型和采集
+
+```go
+// 指标类型定义
+type MetricType int
+
+const (
+    MetricTypeCounter MetricType = iota
+    MetricTypeGauge
+    MetricTypeHistogram
+    MetricTypeSummary
+)
+
+// 指标数据结构
+type Metric struct {
+    Name      string
+    Type      MetricType
+    Labels    map[string]string
+    Value     float64
+    Timestamp time.Time
+}
+
+// 指标收集器接口
+type MetricsCollector interface {
+    Collect() ([]Metric, error)
+    Describe() []string
+}
+
+// 计数器实现
+type Counter struct {
+    name   string
+    labels map[string]string
+    value  float64
+    mu     sync.Mutex
+}
+
+func NewCounter(name string, labels map[string]string) *Counter {
+    return &Counter{
+        name:   name,
+        labels: labels,
+        value:  0,
+    }
+}
+
+func (c *Counter) Inc() {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.value++
+}
+
+func (c *Counter) Add(v float64) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.value += v
+}
+
+func (c *Counter) Collect() []Metric {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    return []Metric{
+        {
+            Name:      c.name,
+            Type:      MetricTypeCounter,
+            Labels:    c.labels,
+            Value:     c.value,
+            Timestamp: time.Now(),
+        },
+    }
+}
+
+// 仪表盘实现
+type Gauge struct {
+    name   string
+    labels map[string]string
+    value  float64
+    mu     sync.Mutex
+}
+
+func NewGauge(name string, labels map[string]string) *Gauge {
+    return &Gauge{
+        name:   name,
+        labels: labels,
+        value:  0,
+    }
+}
+
+func (g *Gauge) Set(v float64) {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    g.value = v
+}
+
+func (g *Gauge) Inc() {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    g.value++
+}
+
+func (g *Gauge) Dec() {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    g.value--
+}
+
+func (g *Gauge) Collect() []Metric {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+
+    return []Metric{
+        {
+            Name:      g.name,
+            Type:      MetricTypeGauge,
+            Labels:    g.labels,
+            Value:     g.value,
+            Timestamp: time.Now(),
+        },
+    }
+}
+
+// 直方图实现
+type Histogram struct {
+    name      string
+    labels    map[string]string
+    buckets   []float64
+    counts    []float64
+    sum       float64
+    count     float64
+    mu        sync.Mutex
+}
+
+func NewHistogram(name string, labels map[string]string, buckets []float64) *Histogram {
+    return &Histogram{
+        name:    name,
+        labels:  labels,
+        buckets: buckets,
+        counts:  make([]float64, len(buckets)+1),
+        sum:     0,
+        count:   0,
+    }
+}
+
+func (h *Histogram) Observe(v float64) {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+
+    h.sum += v
+    h.count++
+
+    // 找到合适的bucket
+    for i, bucket := range h.buckets {
+        if v <= bucket {
+            h.counts[i]++
+            return
+        }
+    }
+    h.counts[len(h.counts)-1]++
+}
+
+func (h *Histogram) Collect() []Metric {
+    h.mu.Lock()
+    defer h.mu.Unlock()
+
+    metrics := make([]Metric, 0, len(h.counts)+2)
+
+    // 添加bucket指标
+    for i, count := range h.counts {
+        bucketLabels := make(map[string]string)
+        for k, v := range h.labels {
+            bucketLabels[k] = v
+        }
+
+        if i < len(h.buckets) {
+            bucketLabels["le"] = fmt.Sprintf("%.2f", h.buckets[i])
+        } else {
+            bucketLabels["le"] = "+Inf"
+        }
+
+        metrics = append(metrics, Metric{
+            Name:      h.name + "_bucket",
+            Type:      MetricTypeHistogram,
+            Labels:    bucketLabels,
+            Value:     count,
+            Timestamp: time.Now(),
+        })
+    }
+
+    // 添加sum和count指标
+    metrics = append(metrics, Metric{
+        Name:      h.name + "_sum",
+        Type:      MetricTypeHistogram,
+        Labels:    h.labels,
+        Value:     h.sum,
+        Timestamp: time.Now(),
+    })
+
+    metrics = append(metrics, Metric{
+        Name:      h.name + "_count",
+        Type:      MetricTypeHistogram,
+        Labels:    h.labels,
+        Value:     h.count,
+        Timestamp: time.Now(),
+    })
+
+    return metrics
+}
+```
+
+#### 2. RED和USE指标
+
+```go
+// RED指标实现
+type REDMetrics struct {
+    requestRate  *Counter
+    errorRate    *Counter
+    duration     *Histogram
+}
+
+func NewREDMetrics(serviceName string) *REDMetrics {
+    return &REDMetrics{
+        requestRate: NewCounter("http_requests_total", map[string]string{"service": serviceName}),
+        errorRate:   NewCounter("http_errors_total", map[string]string{"service": serviceName}),
+        duration:    NewHistogram("http_request_duration_seconds",
+                                map[string]string{"service": serviceName},
+                                []float64{0.1, 0.5, 1.0, 2.5, 5.0, 10.0}),
+    }
+}
+
+func (rm *REDMetrics) RecordRequest(duration time.Duration, isError bool) {
+    rm.requestRate.Inc()
+    if isError {
+        rm.errorRate.Inc()
+    }
+    rm.duration.Observe(duration.Seconds())
+}
+
+// USE指标实现
+type USEMetrics struct {
+    utilization map[string]*Gauge
+    saturation  map[string]*Gauge
+    errors      map[string]*Counter
+}
+
+func NewUSEMetrics() *USEMetrics {
+    return &USEMetrics{
+        utilization: make(map[string]*Gauge),
+        saturation:  make(map[string]*Gauge),
+        errors:      make(map[string]*Counter),
+    }
+}
+
+func (um *USEMetrics) RecordUtilization(resource string, value float64) {
+    if _, exists := um.utilization[resource]; !exists {
+        um.utilization[resource] = NewGauge("resource_utilization",
+            map[string]string{"resource": resource, "type": "utilization"})
+    }
+    um.utilization[resource].Set(value)
+}
+
+func (um *USEMetrics) RecordSaturation(resource string, value float64) {
+    if _, exists := um.saturation[resource]; !exists {
+        um.saturation[resource] = NewGauge("resource_utilization",
+            map[string]string{"resource": resource, "type": "saturation"})
+    }
+    um.saturation[resource].Set(value)
+}
+
+func (um *USEMetrics) RecordError(resource string) {
+    if _, exists := um.errors[resource]; !exists {
+        um.errors[resource] = NewCounter("resource_errors_total",
+            map[string]string{"resource": resource})
+    }
+    um.errors[resource].Inc()
+}
+```
+
+#### 3. 指标存储和查询
+
+```go
+// 时序数据库接口
+type TimeSeriesDB interface {
+    WriteMetrics(metrics []Metric) error
+    QueryRange(query string, start, end time.Time) ([]MetricPoint, error)
+    QueryInstant(query string, timestamp time.Time) (float64, error)
+}
+
+// 内存时序数据库实现
+type InMemoryTimeSeriesDB struct {
+    data map[string][]MetricPoint
+    mu   sync.RWMutex
+}
+
+type MetricPoint struct {
+    Timestamp time.Time
+    Value     float64
+    Labels    map[string]string
+}
+
+func NewInMemoryTimeSeriesDB() *InMemoryTimeSeriesDB {
+    return &InMemoryTimeSeriesDB{
+        data: make(map[string][]MetricPoint),
+    }
+}
+
+func (db *InMemoryTimeSeriesDB) WriteMetrics(metrics []Metric) error {
+    db.mu.Lock()
+    defer db.mu.Unlock()
+
+    for _, metric := range metrics {
+        key := metric.name
+        for k, v := range metric.Labels {
+            key += fmt.Sprintf(":%s=%s", k, v)
+        }
+
+        point := MetricPoint{
+            Timestamp: metric.Timestamp,
+            Value:     metric.Value,
+            Labels:    metric.Labels,
+        }
+
+        db.data[key] = append(db.data[key], point)
+
+        // 保持数据点数量在合理范围内
+        if len(db.data[key]) > 10000 {
+            db.data[key] = db.data[key][1:]
+        }
+    }
+
+    return nil
+}
+
+func (db *InMemoryTimeSeriesDB) QueryRange(query string, start, end time.Time) ([]MetricPoint, error) {
+    db.mu.RLock()
+    defer db.mu.RUnlock()
+
+    var results []MetricPoint
+
+    for key, points := range db.data {
+        if strings.Contains(key, query) {
+            for _, point := range points {
+                if point.Timestamp.After(start) && point.Timestamp.Before(end) {
+                    results = append(results, point)
+                }
+            }
+        }
+    }
+
+    return results, nil
+}
+
+func (db *InMemoryTimeSeriesDB) QueryInstant(query string, timestamp time.Time) (float64, error) {
+    db.mu.RLock()
+    defer db.mu.RUnlock()
+
+    for key, points := range db.data {
+        if strings.Contains(key, query) {
+            for i := len(points) - 1; i >= 0; i-- {
+                if points[i].Timestamp.Before(timestamp) || points[i].Timestamp.Equal(timestamp) {
+                    return points[i].Value, nil
+                }
+            }
+        }
+    }
+
+    return 0, fmt.Errorf("no data found for query: %s", query)
+}
+```
+
+### 日志系统架构
+
+#### 1. 日志收集和聚合
+
+```go
+// 日志级别
+type LogLevel int
+
+const (
+    DebugLevel LogLevel = iota
+    InfoLevel
+    WarnLevel
+    ErrorLevel
+    FatalLevel
+)
+
+// 日志条目
+type LogEntry struct {
+    Timestamp time.Time
+    Level     LogLevel
+    Message   string
+    Fields    map[string]interface{}
+    Caller    string
+    StackTrace string
+}
+
+// 日志格式化接口
+type LogFormatter interface {
+    Format(entry LogEntry) ([]byte, error)
+}
+
+// JSON格式化器
+type JSONFormatter struct{}
+
+func (jf *JSONFormatter) Format(entry LogEntry) ([]byte, error) {
+    data := make(map[string]interface{})
+    data["timestamp"] = entry.Timestamp.Format(time.RFC3339)
+    data["level"] = entry.Level.String()
+    data["message"] = entry.Message
+    data["caller"] = entry.Caller
+
+    for k, v := range entry.Fields {
+        data[k] = v
+    }
+
+    if entry.StackTrace != "" {
+        data["stack_trace"] = entry.StackTrace
+    }
+
+    return json.Marshal(data)
+}
+
+// 日志输出接口
+type LogOutput interface {
+    Write(entry LogEntry) error
+    Close() error
+}
+
+// 文件输出
+type FileOutput struct {
+    file    *os.File
+    encoder *json.Encoder
+    mu      sync.Mutex
+}
+
+func NewFileOutput(filename string) (*FileOutput, error) {
+    file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+    if err != nil {
+        return nil, err
+    }
+
+    return &FileOutput{
+        file:    file,
+        encoder: json.NewEncoder(file),
+    }, nil
+}
+
+func (fo *FileOutput) Write(entry LogEntry) error {
+    fo.mu.Lock()
+    defer fo.mu.Unlock()
+    return fo.encoder.Encode(entry)
+}
+
+func (fo *FileOutput) Close() error {
+    fo.mu.Lock()
+    defer fo.mu.Unlock()
+    return fo.file.Close()
+}
+
+// 控制台输出
+type ConsoleOutput struct {
+    formatter LogFormatter
+}
+
+func NewConsoleOutput(formatter LogFormatter) *ConsoleOutput {
+    return &ConsoleOutput{
+        formatter: formatter,
+    }
+}
+
+func (co *ConsoleOutput) Write(entry LogEntry) error {
+    data, err := co.formatter.Format(entry)
+    if err != nil {
+        return err
+    }
+    fmt.Println(string(data))
+    return nil
+}
+
+func (co *ConsoleOutput) Close() error {
+    return nil
+}
+```
+
+#### 2. 日志收集器
+
+```go
+// 日志收集器
+type Logger struct {
+    name     string
+    level    LogLevel
+    outputs  []LogOutput
+    fields   map[string]interface{}
+    mu       sync.Mutex
+}
+
+func NewLogger(name string, level LogLevel) *Logger {
+    return &Logger{
+        name:    name,
+        level:   level,
+        outputs: make([]LogOutput, 0),
+        fields:  make(map[string]interface{}),
+    }
+}
+
+func (l *Logger) AddOutput(output LogOutput) {
+    l.mu.Lock()
+    defer l.mu.Unlock()
+    l.outputs = append(l.outputs, output)
+}
+
+func (l *Logger) WithField(key string, value interface{}) *Logger {
+    l.mu.Lock()
+    defer l.mu.Unlock()
+
+    newLogger := &Logger{
+        name:    l.name,
+        level:   l.level,
+        outputs: l.outputs,
+        fields:  make(map[string]interface{}),
+    }
+
+    // 复制父字段
+    for k, v := range l.fields {
+        newLogger.fields[k] = v
+    }
+    newLogger.fields[key] = value
+
+    return newLogger
+}
+
+func (l *Logger) WithFields(fields map[string]interface{}) *Logger {
+    l.mu.Lock()
+    defer l.mu.Unlock()
+
+    newLogger := &Logger{
+        name:    l.name,
+        level:   l.level,
+        outputs: l.outputs,
+        fields:  make(map[string]interface{}),
+    }
+
+    // 复制父字段
+    for k, v := range l.fields {
+        newLogger.fields[k] = v
+    }
+
+    // 添加新字段
+    for k, v := range fields {
+        newLogger.fields[k] = v
+    }
+
+    return newLogger
+}
+
+func (l *Logger) log(level LogLevel, message string, fields map[string]interface{}) {
+    if level < l.level {
+        return
+    }
+
+    entry := LogEntry{
+        Timestamp: time.Now(),
+        Level:     level,
+        Message:   message,
+        Fields:    make(map[string]interface{}),
+    }
+
+    // 合并字段
+    l.mu.Lock()
+    for k, v := range l.fields {
+        entry.Fields[k] = v
+    }
+    l.mu.Unlock()
+
+    for k, v := range fields {
+        entry.Fields[k] = v
+    }
+
+    // 获取调用者信息
+    if pc, file, line, ok := runtime.Caller(2); ok {
+        entry.Caller = fmt.Sprintf("%s:%d %s", filepath.Base(file), line,
+            runtime.FuncForPC(pc).Name())
+    }
+
+    // 获取堆栈跟踪（错误级别）
+    if level >= ErrorLevel {
+        buf := make([]byte, 4096)
+        n := runtime.Stack(buf, false)
+        entry.StackTrace = string(buf[:n])
+    }
+
+    // 写入所有输出
+    for _, output := range l.outputs {
+        if err := output.Write(entry); err != nil {
+            fmt.Printf("Failed to write log entry: %v\n", err)
+        }
+    }
+}
+
+func (l *Logger) Debug(message string, fields ...map[string]interface{}) {
+    l.log(DebugLevel, message, mergeFields(fields...))
+}
+
+func (l *Logger) Info(message string, fields ...map[string]interface{}) {
+    l.log(InfoLevel, message, mergeFields(fields...))
+}
+
+func (l *Logger) Warn(message string, fields ...map[string]interface{}) {
+    l.log(WarnLevel, message, mergeFields(fields...))
+}
+
+func (l *Logger) Error(message string, fields ...map[string]interface{}) {
+    l.log(ErrorLevel, message, mergeFields(fields...))
+}
+
+func (l *Logger) Fatal(message string, fields ...map[string]interface{}) {
+    l.log(FatalLevel, message, mergeFields(fields...))
+    os.Exit(1)
+}
+
+func mergeFields(fields ...map[string]interface{}) map[string]interface{} {
+    result := make(map[string]interface{})
+    for _, field := range fields {
+        for k, v := range field {
+            result[k] = v
+        }
+    }
+    return result
+}
+
+func (l LogLevel) String() string {
+    switch l {
+    case DebugLevel:
+        return "DEBUG"
+    case InfoLevel:
+        return "INFO"
+    case WarnLevel:
+        return "WARN"
+    case ErrorLevel:
+        return "ERROR"
+    case FatalLevel:
+        return "FATAL"
+    default:
+        return "UNKNOWN"
+    }
+}
+```
+
+#### 3. 日志聚合和转发
+
+```go
+// 日志聚合器
+type LogAggregator struct {
+    input     chan LogEntry
+    outputs   []LogOutput
+    batchSize int
+    flushInterval time.Duration
+    buffer    []LogEntry
+    mu        sync.Mutex
+    wg        sync.WaitGroup
+    done      chan struct{}
+}
+
+func NewLogAggregator(bufferSize int, batchSize int, flushInterval time.Duration) *LogAggregator {
+    return &LogAggregator{
+        input:        make(chan LogEntry, bufferSize),
+        outputs:      make([]LogOutput, 0),
+        batchSize:    batchSize,
+        flushInterval: flushInterval,
+        buffer:       make([]LogEntry, 0, batchSize),
+        done:         make(chan struct{}),
+    }
+}
+
+func (la *LogAggregator) AddOutput(output LogOutput) {
+    la.mu.Lock()
+    defer la.mu.Unlock()
+    la.outputs = append(la.outputs, output)
+}
+
+func (la *LogAggregator) Start() {
+    la.wg.Add(1)
+    go la.process()
+}
+
+func (la *LogAggregator) Stop() {
+    close(la.done)
+    la.wg.Wait()
+
+    // 刷新剩余日志
+    la.flush()
+
+    // 关闭所有输出
+    for _, output := range la.outputs {
+        output.Close()
+    }
+}
+
+func (la *LogAggregator) Send(entry LogEntry) {
+    select {
+    case la.input <- entry:
+    default:
+        // 缓冲区满，丢弃日志
+        fmt.Printf("Log aggregator buffer full, dropping log entry\n")
+    }
+}
+
+func (la *LogAggregator) process() {
+    defer la.wg.Done()
+
+    ticker := time.NewTicker(la.flushInterval)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case entry := <-la.input:
+            la.mu.Lock()
+            la.buffer = append(la.buffer, entry)
+            if len(la.buffer) >= la.batchSize {
+                la.flush()
+            }
+            la.mu.Unlock()
+
+        case <-ticker.C:
+            la.mu.Lock()
+            la.flush()
+            la.mu.Unlock()
+
+        case <-la.done:
+            return
+        }
+    }
+}
+
+func (la *LogAggregator) flush() {
+    if len(la.buffer) == 0 {
+        return
+    }
+
+    // 复制缓冲区
+    entries := make([]LogEntry, len(la.buffer))
+    copy(entries, la.buffer)
+    la.buffer = la.buffer[:0]
+
+    // 异步写入输出
+    la.wg.Add(1)
+    go func() {
+        defer la.wg.Done()
+
+        for _, output := range la.outputs {
+            for _, entry := range entries {
+                if err := output.Write(entry); err != nil {
+                    fmt.Printf("Failed to write log entry: %v\n", err)
+                }
+            }
+        }
+    }()
+}
+
+// HTTP日志转发器
+type HTTPLogForwarder struct {
+    endpoint string
+    client   *http.Client
+    batchSize int
+    buffer   []LogEntry
+    mu       sync.Mutex
+}
+
+func NewHTTPLogForwarder(endpoint string, batchSize int) *HTTPLogForwarder {
+    return &HTTPLogForwarder{
+        endpoint: endpoint,
+        client: &http.Client{
+            Timeout: 30 * time.Second,
+        },
+        batchSize: batchSize,
+        buffer:   make([]LogEntry, 0, batchSize),
+    }
+}
+
+func (hf *HTTPLogForwarder) Write(entry LogEntry) error {
+    hf.mu.Lock()
+    defer hf.mu.Unlock()
+
+    hf.buffer = append(hf.buffer, entry)
+
+    if len(hf.buffer) >= hf.batchSize {
+        return hf.flush()
+    }
+
+    return nil
+}
+
+func (hf *HTTPLogForwarder) flush() error {
+    if len(hf.buffer) == 0 {
+        return nil
+    }
+
+    data, err := json.Marshal(hf.buffer)
+    if err != nil {
+        return err
+    }
+
+    req, err := http.NewRequest("POST", hf.endpoint, bytes.NewBuffer(data))
+    if err != nil {
+        return err
+    }
+    req.Header.Set("Content-Type", "application/json")
+
+    resp, err := hf.client.Do(req)
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode >= 400 {
+        return fmt.Errorf("HTTP log forwarder returned status: %d", resp.StatusCode)
+    }
+
+    hf.buffer = hf.buffer[:0]
+    return nil
+}
+
+func (hf *HTTPLogForwarder) Close() error {
+    hf.mu.Lock()
+    defer hf.mu.Unlock()
+    return hf.flush()
+}
+```
+
+### 分布式追踪系统
+
+#### 1. 追踪基础结构
+
+```go
+// 追踪上下文
+type TraceContext struct {
+    TraceID   string
+    SpanID    string
+    ParentID  string
+    Sampled   bool
+    Baggage   map[string]string
+}
+
+// Span类型
+type Span struct {
+    TraceID    string
+    SpanID     string
+    ParentID   string
+    Operation  string
+    Start      time.Time
+    Finish     time.Time
+    Duration   time.Duration
+    Tags       map[string]string
+    Logs       []SpanLog
+    References []SpanReference
+}
+
+type SpanLog struct {
+    Timestamp time.Time
+    Fields    map[string]interface{}
+}
+
+type SpanReference struct {
+    RefType string
+    TraceID string
+    SpanID  string
+}
+
+// 追踪器接口
+type Tracer interface {
+    StartSpan(operation string, opts ...SpanOption) *Span
+    Inject(context context.Context, carrier interface{}) error
+    Extract(context context.Context, carrier interface{}) (TraceContext, error)
+}
+
+// Span选项
+type SpanOption func(*Span)
+
+func WithParent(parent *Span) SpanOption {
+    return func(s *Span) {
+        s.ParentID = parent.SpanID
+        s.TraceID = parent.TraceID
+    }
+}
+
+func WithStartTime(start time.Time) SpanOption {
+    return func(s *Span) {
+        s.Start = start
+    }
+}
+
+func WithTags(tags map[string]string) SpanOption {
+    return func(s *Span) {
+        if s.Tags == nil {
+            s.Tags = make(map[string]string)
+        }
+        for k, v := range tags {
+            s.Tags[k] = v
+        }
+    }
+}
+
+// Jaeger追踪器实现
+type JaegerTracer struct {
+    serviceName string
+    endpoint    string
+    buffer      chan *Span
+    batchSize   int
+    flushInterval time.Duration
+    client      *http.Client
+}
+
+func NewJaegerTracer(serviceName, endpoint string) *JaegerTracer {
+    return &JaegerTracer{
+        serviceName: serviceName,
+        endpoint:    endpoint,
+        buffer:      make(chan *Span, 10000),
+        batchSize:   100,
+        flushInterval: 5 * time.Second,
+        client: &http.Client{
+            Timeout: 30 * time.Second,
+        },
+    }
+}
+
+func (jt *JaegerTracer) StartSpan(operation string, opts ...SpanOption) *Span {
+    span := &Span{
+        SpanID:    generateID(),
+        Operation: operation,
+        Start:     time.Now(),
+        Tags:      make(map[string]string),
+        Logs:      make([]SpanLog, 0),
+    }
+
+    // 如果没有父Span，生成新的TraceID
+    span.TraceID = generateID()
+
+    // 应用选项
+    for _, opt := range opts {
+        opt(span)
+    }
+
+    // 设置默认标签
+    span.Tags["component"] = jt.serviceName
+    span.Tags["span.kind"] = "server"
+
+    return span
+}
+
+func (jt *JaegerTracer) Inject(ctx context.Context, carrier interface{}) error {
+    switch c := carrier.(type) {
+    case http.Header:
+        span := SpanFromContext(ctx)
+        if span != nil {
+            c.Set("X-Trace-Id", span.TraceID)
+            c.Set("X-Span-Id", span.SpanID)
+            if span.ParentID != "" {
+                c.Set("X-Parent-Span-Id", span.ParentID)
+            }
+        }
+    default:
+        return fmt.Errorf("unsupported carrier type: %T", carrier)
+    }
+    return nil
+}
+
+func (jt *JaegerTracer) Extract(ctx context.Context, carrier interface{}) (TraceContext, error) {
+    switch c := carrier.(type) {
+    case http.Header:
+        traceID := c.Get("X-Trace-Id")
+        spanID := c.Get("X-Span-Id")
+        parentID := c.Get("X-Parent-Span-Id")
+
+        if traceID == "" || spanID == "" {
+            return TraceContext{}, fmt.Errorf("missing tracing headers")
+        }
+
+        return TraceContext{
+            TraceID:  traceID[0],
+            SpanID:   spanID[0],
+            ParentID: parentID[0],
+        }, nil
+    default:
+        return TraceContext{}, fmt.Errorf("unsupported carrier type: %T", carrier)
+    }
+}
+
+// 上下文管理
+type contextKey struct{}
+
+func ContextWithSpan(ctx context.Context, span *Span) context.Context {
+    return context.WithValue(ctx, contextKey{}, span)
+}
+
+func SpanFromContext(ctx context.Context) *Span {
+    span, _ := ctx.Value(contextKey{}).(*Span)
+    return span
+}
+
+// 生成随机ID
+func generateID() string {
+    b := make([]byte, 16)
+    if _, err := rand.Read(b); err != nil {
+        return fmt.Sprintf("%016x", time.Now().UnixNano())
+    }
+    return hex.EncodeToString(b)
+}
+```
+
+#### 2. 链路追踪中间件
+
+```go
+// HTTP追踪中间件
+func TraceMiddleware(tracer Tracer) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // 尝试提取追踪上下文
+            ctx, err := tracer.Extract(r.Context(), r.Header)
+            if err != nil {
+                // 没有追踪上下文，创建新的
+                ctx = TraceContext{
+                    TraceID: generateID(),
+                    SpanID:  generateID(),
+                    Sampled: true,
+                }
+            }
+
+            // 创建Span
+            span := tracer.StartSpan(r.URL.Path,
+                WithTags(map[string]string{
+                    "http.method": r.Method,
+                    "http.url":    r.URL.String(),
+                    "component":   "http",
+                }),
+            )
+
+            // 注入上下文到响应Writer
+            wrappedWriter := &responseWriter{ResponseWriter: w, span: span}
+
+            // 将Span放入上下文
+            r = r.WithContext(ContextWithSpan(r.Context(), span))
+
+            defer func() {
+                span.Finish = time.Now()
+                span.Duration = span.Finish.Sub(span.Start)
+
+                // 添加状态码标签
+                if wrappedWriter.statusCode > 0 {
+                    span.Tags["http.status_code"] = fmt.Sprintf("%d", wrappedWriter.statusCode)
+                }
+
+                // 发送Span到追踪系统
+                if jt, ok := tracer.(*JaegerTracer); ok {
+                    jt.buffer <- span
+                }
+            }()
+
+            next.ServeHTTP(wrappedWriter, r)
+        })
+    }
+}
+
+type responseWriter struct {
+    http.ResponseWriter
+    statusCode int
+    span       *Span
+}
+
+func (rw *responseWriter) WriteHeader(statusCode int) {
+    rw.statusCode = statusCode
+    rw.ResponseWriter.WriteHeader(statusCode)
+}
+
+// 数据库追踪包装器
+type TracedDB struct {
+    db    *sql.DB
+    tracer Tracer
+}
+
+func NewTracedDB(db *sql.DB, tracer Tracer) *TracedDB {
+    return &TracedDB{
+        db:     db,
+        tracer: tracer,
+    }
+}
+
+func (tdb *TracedDB) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
+    span := tdb.tracer.StartSpan("db.query",
+        WithTags(map[string]string{
+            "db.type":     "sql",
+            "db.statement": query,
+            "db.user":     "user",
+        }),
+    )
+
+    ctx = ContextWithSpan(ctx, span)
+    defer func() {
+        span.Finish = time.Now()
+        span.Duration = span.Finish.Sub(span.Start)
+    }()
+
+    rows, err := tdb.db.QueryContext(ctx, query, args...)
+    if err != nil {
+        span.Tags["error"] = "true"
+        span.Logs = append(span.Logs, SpanLog{
+            Timestamp: time.Now(),
+            Fields: map[string]interface{}{
+                "event":   "error",
+                "message": err.Error(),
+            },
+        })
+    }
+
+    return rows, err
+}
+
+func (tdb *TracedDB) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+    span := tdb.tracer.StartSpan("db.exec",
+        WithTags(map[string]string{
+            "db.type":     "sql",
+            "db.statement": query,
+            "db.user":     "user",
+        }),
+    )
+
+    ctx = ContextWithSpan(ctx, span)
+    defer func() {
+        span.Finish = time.Now()
+        span.Duration = span.Finish.Sub(span.Start)
+    }()
+
+    result, err := tdb.db.ExecContext(ctx, query, args...)
+    if err != nil {
+        span.Tags["error"] = "true"
+        span.Logs = append(span.Logs, SpanLog{
+            Timestamp: time.Now(),
+            Fields: map[string]interface{}{
+                "event":   "error",
+                "message": err.Error(),
+            },
+        })
+    }
+
+    return result, err
+}
+```
+
+### 告警系统
+
+#### 1. 告警规则引擎
+
+```go
+// 告警级别
+type AlertLevel int
+
+const (
+    InfoAlert AlertLevel = iota
+    WarningAlert
+    CriticalAlert
+    EmergencyAlert
+)
+
+// 告警状态
+type AlertStatus int
+
+const (
+    AlertFiring AlertStatus = iota
+    AlertResolved
+    AlertSuppressed
+)
+
+// 告警规则
+type AlertRule struct {
+    ID          string
+    Name        string
+    Expression  string
+    Duration    time.Duration
+    Labels      map[string]string
+    Annotations map[string]string
+    Level       AlertLevel
+    Enabled     bool
+}
+
+// 告警事件
+type AlertEvent struct {
+    RuleID      string
+    RuleName    string
+    Level       AlertLevel
+    Status      AlertStatus
+    Value       float64
+    Labels      map[string]string
+    Annotations map[string]string
+    Timestamp   time.Time
+}
+
+// 告警评估器
+type AlertEvaluator struct {
+    rules      map[string]*AlertRule
+    metricsDB  TimeSeriesDB
+    alerts     map[string]*AlertState
+    dispatcher *AlertDispatcher
+    mu         sync.RWMutex
+}
+
+type AlertState struct {
+    Rule        *AlertRule
+    LastValue   float64
+    LastCheck   time.Time
+    Status      AlertStatus
+    FiredAt     time.Time
+    ResolvedAt  time.Time
+    ActiveSince time.Time
+}
+
+func NewAlertEvaluator(metricsDB TimeSeriesDB, dispatcher *AlertDispatcher) *AlertEvaluator {
+    return &AlertEvaluator{
+        rules:      make(map[string]*AlertRule),
+        metricsDB:  metricsDB,
+        alerts:     make(map[string]*AlertState),
+        dispatcher: dispatcher,
+    }
+}
+
+func (ae *AlertEvaluator) AddRule(rule *AlertRule) {
+    ae.mu.Lock()
+    defer ae.mu.Unlock()
+    ae.rules[rule.ID] = rule
+}
+
+func (ae *AlertEvaluator) RemoveRule(ruleID string) {
+    ae.mu.Lock()
+    defer ae.mu.Unlock()
+    delete(ae.rules, ruleID)
+}
+
+func (ae *AlertEvaluator) EvaluateAll() {
+    ae.mu.RLock()
+    rules := make([]*AlertRule, 0, len(ae.rules))
+    for _, rule := range ae.rules {
+        if rule.Enabled {
+            rules = append(rules, rule)
+        }
+    }
+    ae.mu.RUnlock()
+
+    for _, rule := range rules {
+        ae.evaluateRule(rule)
+    }
+}
+
+func (ae *AlertEvaluator) evaluateRule(rule *AlertRule) {
+    // 解析和评估表达式
+    value, err := ae.evaluateExpression(rule.Expression)
+    if err != nil {
+        return
+    }
+
+    // 获取或创建告警状态
+    ae.mu.Lock()
+    state, exists := ae.alerts[rule.ID]
+    if !exists {
+        state = &AlertState{
+            Rule:      rule,
+            Status:    AlertResolved,
+            LastCheck: time.Now(),
+        }
+        ae.alerts[rule.ID] = state
+    }
+    ae.mu.Unlock()
+
+    // 更新状态
+    state.LastValue = value
+    state.LastCheck = time.Now()
+
+    // 判断告警条件
+    shouldFire := ae.shouldFire(rule, value)
+    shouldResolve := !shouldFire && state.Status == AlertFiring
+
+    if shouldFire && state.Status != AlertFiring {
+        // 触发告警
+        state.Status = AlertFiring
+        state.FiredAt = time.Now()
+        state.ActiveSince = time.Now()
+
+        event := &AlertEvent{
+            RuleID:      rule.ID,
+            RuleName:    rule.Name,
+            Level:       rule.Level,
+            Status:      AlertFiring,
+            Value:       value,
+            Labels:      rule.Labels,
+            Annotations: rule.Annotations,
+            Timestamp:   time.Now(),
+        }
+
+        ae.dispatcher.Dispatch(event)
+
+    } else if shouldResolve && state.Status == AlertFiring {
+        // 解决告警
+        state.Status = AlertResolved
+        state.ResolvedAt = time.Now()
+
+        event := &AlertEvent{
+            RuleID:      rule.ID,
+            RuleName:    rule.Name,
+            Level:       rule.Level,
+            Status:      AlertResolved,
+            Value:       value,
+            Labels:      rule.Labels,
+            Annotations: rule.Annotations,
+            Timestamp:   time.Now(),
+        }
+
+        ae.dispatcher.Dispatch(event)
+    }
+}
+
+func (ae *AlertEvaluator) evaluateExpression(expression string) (float64, error) {
+    // 简化的表达式解析
+    // 实际实现可以使用完整的表达式解析器
+    if strings.Contains(expression, ">") {
+        parts := strings.Split(expression, ">")
+        if len(parts) == 2 {
+            metricName := strings.TrimSpace(parts[0])
+            threshold, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+            if err != nil {
+                return 0, err
+            }
+
+            value, err := ae.metricsDB.QueryInstant(metricName, time.Now())
+            if err != nil {
+                return 0, err
+            }
+            return value, nil
+        }
+    }
+
+    return 0, fmt.Errorf("unsupported expression: %s", expression)
+}
+
+func (ae *AlertEvaluator) shouldFire(rule *AlertRule, value float64) bool {
+    // 简化的条件判断
+    if strings.Contains(rule.Expression, ">") {
+        parts := strings.Split(rule.Expression, ">")
+        if len(parts) == 2 {
+            threshold, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+            return value > threshold
+        }
+    }
+    return false
+}
+```
+
+#### 2. 告警分发器
+
+```go
+// 告警通知器接口
+type AlertNotifier interface {
+    Send(event *AlertEvent) error
+    Name() string
+}
+
+// 邮件通知器
+type EmailNotifier struct {
+    smtpHost     string
+    smtpPort     int
+    username     string
+    password     string
+    fromAddress  string
+    toAddresses  []string
+    client       *smtp.Client
+}
+
+func NewEmailNotifier(smtpHost string, smtpPort int, username, password, from string, to []string) *EmailNotifier {
+    return &EmailNotifier{
+        smtpHost:    smtpHost,
+        smtpPort:    smtpPort,
+        username:    username,
+        password:    password,
+        fromAddress: from,
+        toAddresses: to,
+    }
+}
+
+func (en *EmailNotifier) Send(event *AlertEvent) error {
+    if en.client == nil {
+        conn, err := smtp.Dial(fmt.Sprintf("%s:%d", en.smtpHost, en.smtpPort))
+        if err != nil {
+            return err
+        }
+        en.client = conn
+    }
+
+    subject := fmt.Sprintf("[ALERT] %s - %s", event.Level, event.RuleName)
+    body := en.formatEmailBody(event)
+
+    // 设置邮件头
+    en.client.Mail(en.fromAddress)
+    for _, to := range en.toAddresses {
+        en.client.Rcpt(to)
+    }
+
+    // 发送邮件内容
+    wc, err := en.client.Data()
+    if err != nil {
+        return err
+    }
+    defer wc.Close()
+
+    // 写入邮件头
+    fmt.Fprintf(wc, "From: %s\r\n", en.fromAddress)
+    fmt.Fprintf(wc, "To: %s\r\n", strings.Join(en.toAddresses, ","))
+    fmt.Fprintf(wc, "Subject: %s\r\n", subject)
+    fmt.Fprintf(wc, "MIME-Version: 1.0\r\n")
+    fmt.Fprintf(wc, "Content-Type: text/html; charset=UTF-8\r\n")
+    fmt.Fprintf(wc, "\r\n")
+
+    // 写入邮件正文
+    _, err = fmt.Fprint(wc, body)
+    return err
+}
+
+func (en *EmailNotifier) formatEmailBody(event *AlertEvent) string {
+    status := "FIRED"
+    if event.Status == AlertResolved {
+        status = "RESOLVED"
+    }
+
+    color := "#dc3545" // 红色
+    if event.Status == AlertResolved {
+        color = "#28a745" // 绿色
+    }
+
+    return fmt.Sprintf(`
+    <html>
+    <body>
+        <h2 style="color: %s;">Alert %s</h2>
+        <table border="1" style="border-collapse: collapse;">
+            <tr><td><strong>Rule:</strong></td><td>%s</td></tr>
+            <tr><td><strong>Status:</strong></td><td>%s</td></tr>
+            <tr><td><strong>Level:</strong></td><td>%s</td></tr>
+            <tr><td><strong>Value:</strong></td><td>%.2f</td></tr>
+            <tr><td><strong>Time:</strong></td><td>%s</td></tr>
+        </table>
+        %s
+    </body>
+    </html>
+    `, color, status, event.RuleName, status, event.Level, event.Value,
+        event.Timestamp.Format(time.RFC3339), en.formatAnnotations(event.Annotations))
+}
+
+func (en *EmailNotifier) formatAnnotations(annotations map[string]string) string {
+    if len(annotations) == 0 {
+        return ""
+    }
+
+    var result string
+    result += "<h3>Annotations:</h3>"
+    result += "<ul>"
+    for k, v := range annotations {
+        result += fmt.Sprintf("<li><strong>%s:</strong> %s</li>", k, v)
+    }
+    result += "</ul>"
+    return result
+}
+
+func (en *EmailNotifier) Name() string {
+    return "email"
+}
+
+// Slack通知器
+type SlackNotifier struct {
+    webhookURL string
+    client     *http.Client
+}
+
+func NewSlackNotifier(webhookURL string) *SlackNotifier {
+    return &SlackNotifier{
+        webhookURL: webhookURL,
+        client: &http.Client{
+            Timeout: 30 * time.Second,
+        },
+    }
+}
+
+func (sn *SlackNotifier) Send(event *AlertEvent) error {
+    message := sn.formatSlackMessage(event)
+
+    payload := map[string]interface{}{
+        "text":        message,
+        "attachments": []map[string]interface{}{sn.formatAttachment(event)},
+    }
+
+    data, err := json.Marshal(payload)
+    if err != nil {
+        return err
+    }
+
+    resp, err := sn.client.Post(sn.webhookURL, "application/json", bytes.NewBuffer(data))
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("slack webhook returned status: %d", resp.StatusCode)
+    }
+
+    return nil
+}
+
+func (sn *SlackNotifier) formatSlackMessage(event *AlertEvent) string {
+    status := "🔥 FIRED"
+    if event.Status == AlertResolved {
+        status = "✅ RESOLVED"
+    }
+
+    emoji := "🚨"
+    if event.Status == AlertResolved {
+        emoji = "✅"
+    }
+
+    return fmt.Sprintf("%s *%s* - %s", emoji, status, event.RuleName)
+}
+
+func (sn *SlackNotifier) formatAttachment(event *AlertEvent) map[string]interface{} {
+    color := "#dc3545" // 红色
+    if event.Status == AlertResolved {
+        color = "#28a745" // 绿色
+    }
+
+    fields := []map[string]interface{}{
+        {"title": "Level", "value": event.Level.String(), "short": true},
+        {"title": "Value", "value": fmt.Sprintf("%.2f", event.Value), "short": true},
+        {"title": "Time", "value": event.Timestamp.Format(time.RFC3339), "short": false},
+    }
+
+    // 添加标签
+    if len(event.Labels) > 0 {
+        labels := ""
+        for k, v := range event.Labels {
+            labels += fmt.Sprintf("%s: %s\n", k, v)
+        }
+        fields = append(fields, map[string]interface{}{
+            "title": "Labels", "value": labels, "short": false,
+        })
+    }
+
+    // 添加注释
+    if len(event.Annotations) > 0 {
+        annotations := ""
+        for k, v := range event.Annotations {
+            annotations += fmt.Sprintf("%s: %s\n", k, v)
+        }
+        fields = append(fields, map[string]interface{}{
+            "title": "Annotations", "value": annotations, "short": false,
+        })
+    }
+
+    return map[string]interface{}{
+        "color":  color,
+        "fields": fields,
+    }
+}
+
+func (sn *SlackNotifier) Name() string {
+    return "slack"
+}
+
+// 告警分发器
+type AlertDispatcher struct {
+    notifiers []AlertNotifier
+    mu        sync.RWMutex
+}
+
+func NewAlertDispatcher() *AlertDispatcher {
+    return &AlertDispatcher{
+        notifiers: make([]AlertNotifier, 0),
+    }
+}
+
+func (ad *AlertDispatcher) AddNotifier(notifier AlertNotifier) {
+    ad.mu.Lock()
+    defer ad.mu.Unlock()
+    ad.notifiers = append(ad.notifiers, notifier)
+}
+
+func (ad *AlertDispatcher) RemoveNotifier(name string) {
+    ad.mu.Lock()
+    defer ad.mu.Unlock()
+
+    for i, notifier := range ad.notifiers {
+        if notifier.Name() == name {
+            ad.notifiers = append(ad.notifiers[:i], ad.notifiers[i+1:]...)
+            break
+        }
+    }
+}
+
+func (ad *AlertDispatcher) Dispatch(event *AlertEvent) {
+    ad.mu.RLock()
+    notifiers := make([]AlertNotifier, len(ad.notifiers))
+    copy(notifiers, ad.notifiers)
+    ad.mu.RUnlock()
+
+    // 异步发送通知
+    for _, notifier := range notifiers {
+        go func(n AlertNotifier) {
+            if err := n.Send(event); err != nil {
+                fmt.Printf("Failed to send alert via %s: %v\n", n.Name(), err)
+            }
+        }(notifier)
+    }
+}
+```
+
+### 完整的可观测性平台
+
+```go
+// 可观测性平台
+type ObservabilityPlatform struct {
+    metricsCollector *MetricsCollector
+    logger          *Logger
+    tracer          *JaegerTracer
+    alertEvaluator  *AlertEvaluator
+    alertDispatcher *AlertDispatcher
+    config          *ObservabilityConfig
+}
+
+type ObservabilityConfig struct {
+    Metrics struct {
+        Enabled    bool
+        Port       int
+        Exporters  []string
+    }
+    Logging struct {
+        Level      string
+        Outputs    []LogOutput
+    }
+    Tracing struct {
+        Enabled    bool
+        Service    string
+        Endpoint   string
+    }
+    Alerting struct {
+        Enabled    bool
+        Rules      []*AlertRule
+    }
+}
+
+func NewObservabilityPlatform(config *ObservabilityConfig) *ObservabilityPlatform {
+    // 初始化指标收集器
+    metricsCollector := NewMetricsCollector()
+
+    // 初始化日志系统
+    logger := NewLogger("observability", InfoLevel)
+    for _, output := range config.Logging.Outputs {
+        logger.AddOutput(output)
+    }
+
+    // 初始化追踪系统
+    var tracer *JaegerTracer
+    if config.Tracing.Enabled {
+        tracer = NewJaegerTracer(config.Tracing.Service, config.Tracing.Endpoint)
+    }
+
+    // 初始化告警系统
+    var alertEvaluator *AlertEvaluator
+    var alertDispatcher *AlertDispatcher
+    if config.Alerting.Enabled {
+        alertDispatcher = NewAlertDispatcher()
+        alertEvaluator = NewAlertEvaluator(metricsCollector.db, alertDispatcher)
+
+        // 添加告警规则
+        for _, rule := range config.Alerting.Rules {
+            alertEvaluator.AddRule(rule)
+        }
+    }
+
+    return &ObservabilityPlatform{
+        metricsCollector: metricsCollector,
+        logger:          logger,
+        tracer:          tracer,
+        alertEvaluator:  alertEvaluator,
+        alertDispatcher: alertDispatcher,
+        config:          config,
+    }
+}
+
+func (op *ObservabilityPlatform) Start() {
+    // 启动指标导出
+    if op.config.Metrics.Enabled {
+        go op.startMetricsServer()
+    }
+
+    // 启动告警评估
+    if op.config.Alerting.Enabled {
+        go op.startAlertEvaluation()
+    }
+
+    op.logger.Info("Observability platform started", map[string]interface{}{
+        "metrics_enabled": op.config.Metrics.Enabled,
+        "tracing_enabled": op.config.Tracing.Enabled,
+        "alerting_enabled": op.config.Alerting.Enabled,
+    })
+}
+
+func (op *ObservabilityPlatform) startMetricsServer() {
+    mux := http.NewServeMux()
+    mux.HandleFunc("/metrics", op.handleMetricsRequest)
+    mux.HandleFunc("/health", op.handleHealthRequest)
+
+    server := &http.Server{
+        Addr:    fmt.Sprintf(":%d", op.config.Metrics.Port),
+        Handler: mux,
+    }
+
+    op.logger.Info("Starting metrics server", map[string]interface{}{
+        "port": op.config.Metrics.Port,
+    })
+
+    if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        op.logger.Error("Metrics server failed", map[string]interface{}{
+            "error": err.Error(),
+        })
+    }
+}
+
+func (op *ObservabilityPlatform) startAlertEvaluation() {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        op.alertEvaluator.EvaluateAll()
+    }
+}
+
+func (op *ObservabilityPlatform) handleMetricsRequest(w http.ResponseWriter, r *http.Request) {
+    metrics := op.metricsCollector.CollectAll()
+
+    var lines []string
+    for _, metric := range metrics {
+        line := op.formatMetric(metric)
+        lines = append(lines, line)
+    }
+
+    w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+    fmt.Fprintln(w, strings.Join(lines, "\n"))
+}
+
+func (op *ObservabilityPlatform) formatMetric(metric Metric) string {
+    var labels []string
+    for k, v := range metric.Labels {
+        labels = append(labels, fmt.Sprintf("%s=\"%s\"", k, v))
+    }
+
+    labelStr := ""
+    if len(labels) > 0 {
+        labelStr = fmt.Sprintf("{%s}", strings.Join(labels, ","))
+    }
+
+    return fmt.Sprintf("%s%s %f %d", metric.Name, labelStr, metric.Value, metric.Timestamp.Unix())
+}
+
+func (op *ObservabilityPlatform) handleHealthRequest(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+}
+
+// HTTP中间件集成
+func (op *ObservabilityPlatform) Middleware() func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // 添加追踪
+            if op.config.Tracing.Enabled {
+                span := op.tracer.StartSpan(r.URL.Path,
+                    WithTags(map[string]string{
+                        "http.method": r.Method,
+                        "http.url":    r.URL.String(),
+                    }),
+                )
+                defer func() {
+                    span.Finish = time.Now()
+                    span.Duration = span.Finish.Sub(span.Start)
+                }()
+
+                r = r.WithContext(ContextWithSpan(r.Context(), span))
+            }
+
+            // 包装ResponseWriter以记录状态码
+            wrappedWriter := &responseWriter{ResponseWriter: w}
+            start := time.Now()
+
+            defer func() {
+                duration := time.Since(start)
+
+                // 记录指标
+                op.metricsCollector.RecordHTTPRequest(r.Method, r.URL.Path, wrappedWriter.statusCode, duration)
+
+                // 记录日志
+                op.logger.Info("HTTP request", map[string]interface{}{
+                    "method":     r.Method,
+                    "path":       r.URL.Path,
+                    "status":     wrappedWriter.statusCode,
+                    "duration":   duration.String(),
+                    "user_agent": r.UserAgent(),
+                })
+            }()
+
+            next.ServeHTTP(wrappedWriter, r)
+        })
+    }
+}
+```
+
+### 实践项目：构建分布式监控系统
+
+#### 1. 项目结构
+
+```
+monitoring-platform/
+├── main.go
+├── config/
+│   └── config.go
+├── metrics/
+│   ├── collector.go
+│   ├── storage.go
+│   └── exporter.go
+├── logging/
+│   ├── logger.go
+│   ├── formatters.go
+│   └── outputs.go
+├── tracing/
+│   ├── tracer.go
+│   └── middleware.go
+├── alerting/
+│   ├── rules.go
+│   ├── evaluator.go
+│   └── notifiers.go
+├── dashboard/
+│   ├── templates/
+│   └── static/
+└── api/
+    └── api.go
+```
+
+#### 2. 配置管理
+
+```go
+// config/config.go
+package config
+
+import (
+    "encoding/json"
+    "os"
+    "time"
+)
+
+type Config struct {
+    Server struct {
+        Port     int    `json:"port"`
+        LogLevel string `json:"log_level"`
+    } `json:"server"`
+
+    Metrics struct {
+        Enabled  bool     `json:"enabled"`
+        Port     int      `json:"port"`
+        Interval Duration `json:"interval"`
+        Storage  struct {
+            Type     string `json:"type"`
+            Endpoint string `json:"endpoint"`
+        } `json:"storage"`
+    } `json:"metrics"`
+
+    Logging struct {
+        Level   string `json:"level"`
+        Outputs []struct {
+            Type   string `json:"type"`
+            Params map[string]interface{} `json:"params"`
+        } `json:"outputs"`
+    } `json:"logging"`
+
+    Tracing struct {
+        Enabled  bool   `json:"enabled"`
+        Service  string `json:"service"`
+        Endpoint string `json:"endpoint"`
+    } `json:"tracing"`
+
+    Alerting struct {
+        Enabled bool          `json:"enabled"`
+        Rules   []*AlertRule  `json:"rules"`
+        Notifiers []struct {
+            Type   string                 `json:"type"`
+            Params map[string]interface{} `json:"params"`
+        } `json:"notifiers"`
+    } `json:"alerting"`
+}
+
+type AlertRule struct {
+    ID          string            `json:"id"`
+    Name        string            `json:"name"`
+    Expression  string            `json:"expression"`
+    Duration    Duration          `json:"duration"`
+    Labels      map[string]string `json:"labels"`
+    Annotations map[string]string `json:"annotations"`
+    Level       string            `json:"level"`
+    Enabled     bool              `json:"enabled"`
+}
+
+type Duration struct {
+    time.Duration
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+    var s string
+    if err := json.Unmarshal(data, &s); err != nil {
+        return err
+    }
+
+    duration, err := time.ParseDuration(s)
+    if err != nil {
+        return err
+    }
+
+    d.Duration = duration
+    return nil
+}
+
+func LoadConfig(path string) (*Config, error) {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+
+    var config Config
+    if err := json.Unmarshal(data, &config); err != nil {
+        return nil, err
+    }
+
+    // 设置默认值
+    if config.Server.Port == 0 {
+        config.Server.Port = 8080
+    }
+    if config.Server.LogLevel == "" {
+        config.Server.LogLevel = "info"
+    }
+    if config.Metrics.Interval.Duration == 0 {
+        config.Metrics.Interval.Duration = 15 * time.Second
+    }
+
+    return &config, nil
+}
+```
+
+#### 3. 主程序
+
+```go
+// main.go
+package main
+
+import (
+    "flag"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+    "monitoring-platform/config"
+    "monitoring-platform/metrics"
+    "monitoring-platform/logging"
+    "monitoring-platform/tracing"
+    "monitoring-platform/alerting"
+)
+
+func main() {
+    configPath := flag.String("config", "config.json", "Configuration file path")
+    flag.Parse()
+
+    // 加载配置
+    cfg, err := config.LoadConfig(*configPath)
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    // 初始化日志系统
+    logger := logging.NewLogger("monitoring", logging.InfoLevel)
+
+    // 初始化日志输出
+    for _, outputCfg := range cfg.Logging.Outputs {
+        switch outputCfg.Type {
+        case "file":
+            filename := outputCfg.Params["filename"].(string)
+            output, err := logging.NewFileOutput(filename)
+            if err != nil {
+                log.Fatalf("Failed to create file output: %v", err)
+            }
+            logger.AddOutput(output)
+        case "console":
+            formatter := &logging.JSONFormatter{}
+            output := logging.NewConsoleOutput(formatter)
+            logger.AddOutput(output)
+        }
+    }
+
+    // 初始化指标系统
+    metricsCollector := metrics.NewCollector()
+
+    // 初始化追踪系统
+    var tracer *tracing.JaegerTracer
+    if cfg.Tracing.Enabled {
+        tracer = tracing.NewJaegerTracer(cfg.Tracing.Service, cfg.Tracing.Endpoint)
+    }
+
+    // 初始化告警系统
+    var alertManager *alerting.Manager
+    if cfg.Alerting.Enabled {
+        alertManager = alerting.NewManager()
+
+        // 添加告警规则
+        for _, ruleCfg := range cfg.Alerting.Rules {
+            rule := &alerting.Rule{
+                ID:          ruleCfg.ID,
+                Name:        ruleCfg.Name,
+                Expression:  ruleCfg.Expression,
+                Duration:    ruleCfg.Duration.Duration,
+                Labels:      ruleCfg.Labels,
+                Annotations: ruleCfg.Annotations,
+                Level:       alerting.LevelFromString(ruleCfg.Level),
+                Enabled:     ruleCfg.Enabled,
+            }
+            alertManager.AddRule(rule)
+        }
+
+        // 添加通知器
+        for _, notifierCfg := range cfg.Alerting.Notifiers {
+            switch notifierCfg.Type {
+            case "email":
+                emailParams := notifierCfg.Params
+                notifier := alerting.NewEmailNotifier(
+                    emailParams["smtp_host"].(string),
+                    int(emailParams["smtp_port"].(float64)),
+                    emailParams["username"].(string),
+                    emailParams["password"].(string),
+                    emailParams["from"].(string),
+                    emailParams["to"].([]string),
+                )
+                alertManager.AddNotifier(notifier)
+            case "slack":
+                slackParams := notifierCfg.Params
+                notifier := alerting.NewSlackNotifier(slackParams["webhook_url"].(string))
+                alertManager.AddNotifier(notifier)
+            }
+        }
+
+        alertManager.Start()
+    }
+
+    // 设置HTTP路由
+    mux := http.NewServeMux()
+
+    // 指标端点
+    mux.Handle("/metrics", promhttp.Handler())
+
+    // 健康检查端点
+    mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        fmt.Fprintln(w, `{"status": "healthy"}`)
+    })
+
+    // 指标查询API
+    mux.HandleFunc("/api/v1/query", func(w http.ResponseWriter, r *http.Request) {
+        query := r.URL.Query().Get("query")
+        if query == "" {
+            http.Error(w, "Missing query parameter", http.StatusBadRequest)
+            return
+        }
+
+        result, err := metricsCollector.Query(query)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(result)
+    })
+
+    // 告警状态API
+    mux.HandleFunc("/api/v1/alerts", func(w http.ResponseWriter, r *http.Request) {
+        if alertManager == nil {
+            http.Error(w, "Alerting not enabled", http.StatusNotFound)
+            return
+        }
+
+        alerts := alertManager.GetAlerts()
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(alerts)
+    })
+
+    // 启动HTTP服务器
+    server := &http.Server{
+        Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+        Handler: mux,
+    }
+
+    go func() {
+        logger.Info("Starting monitoring platform", map[string]interface{}{
+            "port": cfg.Server.Port,
+        })
+        if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            logger.Error("Server failed", map[string]interface{}{
+                "error": err.Error(),
+            })
+            os.Exit(1)
+        }
+    }()
+
+    // 等待中断信号
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+
+    logger.Info("Shutting down monitoring platform...")
+
+    // 优雅关闭
+    if alertManager != nil {
+        alertManager.Stop()
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    if err := server.Shutdown(ctx); err != nil {
+        logger.Error("Server shutdown failed", map[string]interface{}{
+            "error": err.Error(),
+        })
+    }
+
+    logger.Info("Monitoring platform stopped")
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **可观测性**：解释可观测性三大支柱（指标、日志、追踪）的关系和区别。
+
+2. **监控指标**：比较RED、USE、黄金信号等不同的监控指标体系。
+
+3. **分布式追踪**：解释OpenTelemetry如何统一追踪标准。
+
+4. **告警策略**：如何设计有效的告警规则和通知策略？
+
+### 编程题
+
+1. **自定义指标**：实现一个自定义的指标收集器，监控特定的业务指标。
+
+2. **日志分析**：实现一个日志分析器，提取关键信息并生成报告。
+
+3. **链路追踪**：为现有应用添加完整的分布式追踪支持。
+
+4. **智能告警**：实现基于机器学习的异常检测告警系统。
+
+### 设计题
+
+1. **大规模监控**：设计一个支持大规模集群的监控架构。
+
+2. **多租户监控**：设计支持多租户的监控系统。
+
+3. **实时监控**：设计实时监控和告警系统。
+
+4. **成本优化**：优化监控系统的存储和计算成本。
+
+## 常见问题
+
+### Q: 如何平衡监控精度和性能开销？
+
+A: 采用分级监控策略：
+- **关键指标**：高频采集，低延迟
+- **一般指标**：中频采集，适度延迟
+- **调试指标**：低频采集，高延迟
+- **采样策略**：对高流量进行采样
+
+### Q: 如何处理监控数据的海量存储？
+
+A: 采用数据分层和压缩策略：
+- **热数据**：高可用，快速查询
+- **温数据**：压缩存储，成本优化
+- **冷数据**：归档存储，低成本
+- **数据聚合**：定期聚合，减少存储
+
+### Q: 如何避免告警疲劳？
+
+A: 实施告警优化策略：
+- **告警分级**：区分严重程度
+- **告警收敛**：合并相关告警
+- **静默规则**：设置维护窗口
+- **智能过滤**：基于上下文过滤
+
+## 扩展资源
+
+### 必读论文
+
+1. **[Dapper, a Large-Scale Distributed Systems Tracing Infrastructure](https://research.google/pubs/pub36356/)** - Google分布式追踪系统
+2. **[The Log-Structured Merge-Tree](https://www.cs.umb.edu/~poneil/lsmtree.pdf)** - LSM树存储引擎
+3. **[Prometheus: A Next-Generation Monitoring System](https://scholar.google.com/scholar?cluster=12035751645957450735)** - Prometheus监控系统
+
+### 实践项目
+
+1. **[Prometheus](https://prometheus.io/)** - 开源监控和告警系统
+2. **[Grafana](https://grafana.com/)** - 开源可视化平台
+3. **[Jaeger](https://www.jaegertracing.io/)** - 开源分布式追踪系统
+4. **[Fluentd](https://www.fluentd.org/)** - 开源日志收集器
+
+### 在线课程
+
+1. **[Monitoring Distributed Systems](https://www.coursera.org/learn/monitoring-distributed-systems)** - 分布式系统监控课程
+2. **[Observability in Cloud Native](https://www.linuxfoundation.org/resources/blog/observability-cloud-native/)** - 云原生可观测性
+3. **[SRE Fundamentals](https://sre.google/sre-book/table-of-contents/)** - SRE基础书籍
+
+## 下一步学习
+
+在掌握可观测性技术后，你可以继续学习：
+
+1. **AIOps**：人工智能运维和自动化
+2. **混沌工程**：系统弹性和故障注入
+3. **Service Mesh**：服务网格和流量管理
+4. **云原生监控**：Kubernetes和容器化监控
+
+---
+
+*可观测性是现代分布式系统的命脉，通过完善的监控、日志和追踪体系，我们能够深入理解系统行为，快速定位问题，保障系统的稳定性和可靠性。*

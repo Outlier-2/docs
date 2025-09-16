@@ -1,0 +1,2443 @@
+---
+title: "大规模系统案例分析"
+description: "深入分析大型互联网公司架构设计、高并发系统解决方案和分布式系统最佳实践"
+---
+
+# 第9周：大规模系统案例分析
+
+## 本周学习目标
+
+- 分析大型互联网公司的架构设计模式
+- 理解高并发系统的关键挑战和解决方案
+- 学习分布式系统的最佳实践
+- 掌握性能优化和扩展性设计
+- 分析真实系统的架构演进过程
+
+## 大型互联网公司架构案例
+
+### Netflix架构分析
+
+```python
+# Netflix架构分析
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+from datetime import datetime
+import json
+
+@dataclass
+class SystemComponent:
+    """系统组件"""
+    name: str
+    type: str
+    responsibility: str
+    dependencies: List[str]
+    scalability: str
+    availability: str
+
+@dataclass
+class ArchitecturePattern:
+    """架构模式"""
+    name: str
+    description: str
+    benefits: List[str]
+    challenges: List[str]
+    use_cases: List[str]
+
+class NetflixArchitectureAnalyzer:
+    """Netflix架构分析器"""
+
+    def __init__(self):
+        self.components = {}
+        self.patterns = {}
+        self.microservices = {}
+        self.data_flow = {}
+        self._initialize_netflix_architecture()
+
+    def _initialize_netflix_architecture(self):
+        """初始化Netflix架构"""
+        # 核心组件
+        self.components = {
+            "eureka": SystemComponent(
+                name="Eureka",
+                type="Service Discovery",
+                responsibility="服务注册与发现",
+                dependencies=["Zuul", "Ribbon"],
+                scalability="High",
+                availability="High"
+            ),
+            "zuul": SystemComponent(
+                name="Zuul",
+                type="API Gateway",
+                responsibility="API路由和过滤",
+                dependencies=["Eureka", "Ribbon"],
+                scalability="High",
+                availability="High"
+            ),
+            "ribbon": SystemComponent(
+                name="Ribbon",
+                type="Load Balancer",
+                responsibility="客户端负载均衡",
+                dependencies=["Eureka"],
+                scalability="High",
+                availability="High"
+            ),
+            "hystrix": SystemComponent(
+                name="Hystrix",
+                type="Circuit Breaker",
+                responsibility="熔断器和容错",
+                dependencies=["Ribbon"],
+                scalability="High",
+                availability="High"
+            ),
+            "feign": SystemComponent(
+                name="Feign",
+                type="HTTP Client",
+                responsibility="声明式HTTP客户端",
+                dependencies=["Hystrix", "Ribbon"],
+                scalability="High",
+                availability="High"
+            )
+        }
+
+        # 架构模式
+        self.patterns = {
+            "microservices": ArchitecturePattern(
+                name="Microservices Architecture",
+                description="将应用拆分为小型、独立的服务",
+                benefits=["独立部署", "技术栈自由", "弹性伸缩", "故障隔离"],
+                challenges=["分布式复杂性", "服务发现", "数据一致性", "监控难度"],
+                use_cases=["大型应用", "快速迭代", "多团队开发"]
+            ),
+            "circuit_breaker": ArchitecturePattern(
+                name="Circuit Breaker Pattern",
+                description="防止级联故障的容错模式",
+                benefits=["故障隔离", "快速失败", "自动恢复", "降级保护"],
+                challenges=["配置复杂性", "误报问题", "监控需求"],
+                use_cases=["分布式系统", "高可用性", "故障恢复"]
+            ),
+            "api_gateway": ArchitecturePattern(
+                name="API Gateway Pattern",
+                description="统一入口处理所有外部请求",
+                benefits=["路由管理", "认证授权", "限流保护", "监控统计"],
+                challenges=["单点故障", "性能瓶颈", "配置复杂性"],
+                use_cases=["微服务架构", "API管理", "安全控制"]
+            )
+        }
+
+        # 微服务架构
+        self.microservices = {
+            "user_service": {
+                "description": "用户管理服务",
+                "endpoints": ["/users", "/users/{id}", "/users/{id}/profile"],
+                "database": "MySQL",
+                "cache": "Redis",
+                "dependencies": ["auth_service"]
+            },
+            "video_service": {
+                "description": "视频处理服务",
+                "endpoints": ["/videos", "/videos/{id}", "/videos/{id}/stream"],
+                "database": "Cassandra",
+                "cache": "Redis",
+                "storage": "S3",
+                "dependencies": ["user_service", "recommendation_service"]
+            },
+            "recommendation_service": {
+                "description": "推荐系统服务",
+                "endpoints": ["/recommendations", "/recommendations/{user_id}"],
+                "database": "Elasticsearch",
+                "cache": "Redis",
+                "ml_models": ["collaborative_filtering", "content_based"],
+                "dependencies": ["user_service", "video_service"]
+            }
+        }
+
+    def analyze_architecture(self) -> Dict:
+        """分析Netflix架构"""
+        return {
+            "overview": "Netflix采用微服务架构，支持高并发、高可用的流媒体服务",
+            "key_characteristics": [
+                "高可用性：99.99%+",
+                "全球部署：多区域复制",
+                "弹性伸缩：自动扩缩容",
+                "故障隔离：服务级隔离",
+                "实时监控：全面监控体系"
+            ],
+            "components": self._analyze_components(),
+            "patterns": self._analyze_patterns(),
+            "challenges": self._analyze_challenges(),
+            "lessons_learned": self._analyze_lessons()
+        }
+
+    def _analyze_components(self) -> Dict:
+        """分析组件"""
+        analysis = {}
+        for name, component in self.components.items():
+            analysis[name] = {
+                "role": component.responsibility,
+                "scalability": component.scalability,
+                "availability": component.availability,
+                "criticality": self._assess_criticality(component),
+                "failure_impact": self._assess_failure_impact(component)
+            }
+        return analysis
+
+    def _analyze_patterns(self) -> Dict:
+        """分析架构模式"""
+        analysis = {}
+        for name, pattern in self.patterns.items():
+            analysis[name] = {
+                "adoption_level": self._assess_adoption_level(pattern),
+                "implementation_complexity": self._assess_complexity(pattern),
+                "benefits_realized": pattern.benefits,
+                "challenges_overcome": pattern.challenges
+            }
+        return analysis
+
+    def _analyze_challenges(self) -> List[Dict]:
+        """分析挑战"""
+        return [
+            {
+                "challenge": "服务发现和注册",
+                "solution": "使用Eureka实现服务注册与发现",
+                "result": "动态服务发现，支持弹性伸缩"
+            },
+            {
+                "challenge": "负载均衡",
+                "solution": "Ribbon客户端负载均衡 + Eureka",
+                "result": "高效的客户端负载均衡，减少网络跳转"
+            },
+            {
+                "challenge": "容错处理",
+                "solution": "Hystrix熔断器模式",
+                "result": "防止级联故障，提高系统可用性"
+            },
+            {
+                "challenge": "API管理",
+                "solution": "Zuul API网关",
+                "result": "统一的API入口，简化客户端调用"
+            }
+        ]
+
+    def _analyze_lessons(self) -> List[Dict]:
+        """分析经验教训"""
+        return [
+            {
+                "lesson": "微服务架构的复杂性管理",
+                "insight": "需要完善的监控、日志和追踪系统",
+                "recommendation": "投资构建可观测性平台"
+            },
+            {
+                "lesson": "数据一致性的挑战",
+                "insight": "分布式事务处理复杂，需要权衡一致性",
+                "recommendation": "采用最终一致性模式"
+            },
+            {
+                "lesson": "性能优化的重要性",
+                "insight": "高并发场景下性能是关键挑战",
+                "recommendation": "持续性能监控和优化"
+            },
+            {
+                "lesson": "自动化运维的必要性",
+                "insight": "大规模系统需要自动化部署和运维",
+                "recommendation": "构建完整的CI/CD流水线"
+            }
+        ]
+
+    def _assess_criticality(self, component: SystemComponent) -> str:
+        """评估组件关键性"""
+        critical_components = ["eureka", "zuul"]
+        return "Critical" if component.name.lower() in critical_components else "Important"
+
+    def _assess_failure_impact(self, component: SystemComponent) -> str:
+        """评估故障影响"""
+        if component.name.lower() == "eureka":
+            return "Service discovery failure"
+        elif component.name.lower() == "zuul":
+            return "API gateway failure"
+        else:
+            return "Partial service disruption"
+
+    def _assess_adoption_level(self, pattern: ArchitecturePattern) -> str:
+        """评估采用程度"""
+        adoption_levels = {
+            "microservices": "Full",
+            "circuit_breaker": "Full",
+            "api_gateway": "Full"
+        }
+        return adoption_levels.get(pattern.name.lower().replace(" ", "_"), "Partial")
+
+    def _assess_complexity(self, pattern: ArchitecturePattern) -> str:
+        """评估实现复杂度"""
+        complexity_map = {
+            "microservices": "High",
+            "circuit_breaker": "Medium",
+            "api_gateway": "Medium"
+        }
+        return complexity_map.get(pattern.name.lower().replace(" ", "_"), "Medium")
+```
+
+### Amazon架构分析
+
+```python
+# Amazon架构分析
+class AmazonArchitectureAnalyzer:
+    """Amazon架构分析器"""
+
+    def __init__(self):
+        self.services = {}
+        self.architecture_principles = {}
+        self.scalability_strategies = {}
+        self._initialize_amazon_architecture()
+
+    def _initialize_amazon_architecture(self):
+        """初始化Amazon架构"""
+        # 核心服务
+        self.services = {
+            "s3": {
+                "name": "Simple Storage Service",
+                "type": "Object Storage",
+                "description": "高可用的对象存储服务",
+                "architecture": "Distributed Storage",
+                "consistency_model": "Eventual Consistency",
+                "scalability": "Horizontal",
+                "availability": "99.99%"
+            },
+            "dynamodb": {
+                "name": "DynamoDB",
+                "type": "NoSQL Database",
+                "description": "键值对和文档数据库",
+                "architecture": "Distributed Database",
+                "consistency_model": "Configurable Consistency",
+                "scalability": "Horizontal",
+                "availability": "99.99%"
+            },
+            "ec2": {
+                "name": "Elastic Compute Cloud",
+                "type": "Compute Service",
+                "description": "可扩展的计算资源",
+                "architecture": "Virtualization",
+                "scalability": "Vertical & Horizontal",
+                "availability": "99.95%"
+            },
+            "lambda": {
+                "name": "Lambda",
+                "type": "Serverless Computing",
+                "description": "事件驱动的计算服务",
+                "architecture": "Function-as-a-Service",
+                "scalability": "Automatic",
+                "availability": "99.95%"
+            }
+        }
+
+        # 架构原则
+        self.architecture_principles = {
+            "loose_coupling": {
+                "description": "松耦合架构",
+                "implementation": "通过消息队列和事件驱动实现",
+                "benefits": ["独立扩展", "故障隔离", "技术自由"]
+            },
+            "service_oriented": {
+                "description": "服务导向架构",
+                "implementation": "构建可重用的服务组件",
+                "benefits": ["模块化", "可维护性", "团队自治"]
+            },
+            "automation": {
+                "description": "自动化运维",
+                "implementation": "基础设施即代码和自动化工具",
+                "benefits": ["效率提升", "减少错误", "快速部署"]
+            }
+        }
+
+        # 扩展性策略
+        self.scalability_strategies = {
+            "horizontal_scaling": {
+                "description": "水平扩展",
+                "implementation": "增加更多服务器实例",
+                "services": ["EC2", "ECS", "Lambda"],
+                "advantages": ["无限扩展", "高可用性", "成本优化"]
+            },
+            "vertical_scaling": {
+                "description": "垂直扩展",
+                "implementation": "增加单个服务器的资源",
+                "services": ["RDS", "ElasticCache"],
+                "advantages": "简单实现",
+                "limitations": ["硬件限制", "单点故障"]
+            },
+            "elastic_scaling": {
+                "description": "弹性扩展",
+                "implementation": "根据负载自动调整资源",
+                "services": ["Auto Scaling", "Lambda"],
+                "advantages": ["成本优化", "资源利用率", "自动化"]
+            }
+        }
+
+    def analyze_amazon_architecture(self) -> Dict:
+        """分析Amazon架构"""
+        return {
+            "overview": "Amazon Web Services是全球领先的云计算平台，提供完整的云服务生态",
+            "key_features": [
+                "全球基础设施：25个地理区域，81个可用区",
+                "服务丰富性：200+种云服务",
+                "安全合规：多层次安全防护",
+                "成本优化：按需付费模式",
+                "高可用性：多可用区部署"
+            ],
+            "architectural_innovations": self._analyze_innovations(),
+            "scalability_lessons": self._analyze_scalability_lessons(),
+            "reliability_patterns": self._analyze_reliability_patterns(),
+            "evolution_journey": self._analyze_evolution()
+        }
+
+    def _analyze_innovations(self) -> List[Dict]:
+        """分析架构创新"""
+        return [
+            {
+                "innovation": "微服务架构",
+                "description": "Amazon从单体架构演进到微服务架构",
+                "impact": "提高了系统的灵活性和可扩展性",
+                "key_technologies": ["Service Discovery", "API Gateway", "Containerization"]
+            },
+            {
+                "innovation": "云原生架构",
+                "description": "为云环境设计的架构模式",
+                "impact": "充分发挥云计算的优势",
+                "key_technologies": ["Serverless", "Containers", "Microservices"]
+            },
+            {
+                "innovation": "DevOps文化",
+                "description": "开发和运维的深度整合",
+                "impact": "提高部署频率和系统稳定性",
+                "key_practices": ["CI/CD", "Infrastructure as Code", "Monitoring"]
+            },
+            {
+                "innovation": "数据驱动决策",
+                "description": "基于数据的架构决策",
+                "impact": "优化系统性能和用户体验",
+                "key_tools": ["CloudWatch", "X-Ray", "Athena"]
+            }
+        ]
+
+    def _analyze_scalability_lessons(self) -> List[Dict]:
+        """分析扩展性经验"""
+        return [
+            {
+                "lesson": "设计可扩展的系统",
+                "insight": "在架构设计阶段就要考虑扩展性",
+                "best_practice": "使用无状态架构和分布式缓存"
+            },
+            {
+                "lesson": "自动化扩展",
+                "insight": "手动扩展无法应对突发流量",
+                "best_practice": "实施自动扩展策略和监控"
+            },
+            {
+                "lesson": "数据库扩展策略",
+                "insight": "数据库通常是扩展瓶颈",
+                "best_practice": "使用读写分离、分库分表、NoSQL"
+            },
+            {
+                "lesson": "缓存的重要性",
+                "insight": "缓存是提高性能的关键",
+                "best_practice": "多级缓存策略和缓存失效机制"
+            }
+        ]
+
+    def _analyze_reliability_patterns(self) -> List[Dict]:
+        """分析可靠性模式"""
+        return [
+            {
+                "pattern": "故障隔离",
+                "description": "将系统隔离为独立的故障域",
+                "implementation": "微服务架构和可用区部署",
+                "benefits": "防止故障传播，提高整体可用性"
+            },
+            {
+                "pattern": "冗余设计",
+                "description": "关键组件的冗余部署",
+                "implementation": "多可用区、多区域复制",
+                "benefits": "高可用性和灾难恢复能力"
+            },
+            {
+                "pattern": "优雅降级",
+                "description": "在部分故障时保持核心功能",
+                "implementation": "断路器模式和限流策略",
+                "benefits": "提高用户体验和系统稳定性"
+            },
+            {
+                "pattern": "监控和告警",
+                "description": "全面的系统监控",
+                "implementation": "分布式追踪和集中式日志",
+                "benefits": "快速故障检测和响应"
+            }
+        ]
+
+    def _analyze_evolution(self) -> List[Dict]:
+        """分析架构演进"""
+        return [
+            {
+                "phase": "单体架构 (1994-2002)",
+                "description": "早期的单体电商系统",
+                "challenges": ["扩展性差", "部署复杂", "技术栈限制"],
+                "solutions": "服务化改造"
+            },
+            {
+                "phase": "服务化架构 (2002-2006)",
+                "description": "向SOA架构转型",
+                "challenges": ["服务治理", "数据一致性", "性能问题"],
+                "solutions": "标准化服务和中间件"
+            },
+            {
+                "phase": "云服务架构 (2006-2014)",
+                "description": "AWS云服务平台的构建",
+                "challenges": ["多租户", "资源隔离", "安全合规"],
+                "solutions": "虚拟化技术和自动化"
+            },
+            {
+                "phase": "云原生架构 (2014-现在)",
+                "description": "云原生技术的广泛应用",
+                "challenges": ["微服务治理", "容器编排", "Serverless"],
+                "solutions": "Kubernetes和云原生生态"
+            }
+        ]
+```
+
+## 高并发系统设计
+
+### 高并发系统特征
+
+```python
+# 高并发系统特征分析
+from enum import Enum
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+import asyncio
+import threading
+import time
+
+class ConcurrencyLevel(Enum):
+    """并发级别"""
+    LOW = "low"           # 低并发：<1000 QPS
+    MEDIUM = "medium"     # 中等并发：1000-10000 QPS
+    HIGH = "high"         # 高并发：10000-100000 QPS
+    EXTREME = "extreme"   # 极高并发：>100000 QPS
+
+@dataclass
+class PerformanceMetrics:
+    """性能指标"""
+    qps: int              # 每秒查询数
+    response_time: float  # 响应时间(毫秒)
+    throughput: float     # 吞吐量(MB/s)
+    error_rate: float     # 错误率
+    availability: float   # 可用性
+    concurrent_users: int # 并发用户数
+
+class HighConcurrencySystem:
+    """高并发系统"""
+
+    def __init__(self, name: str, concurrency_level: ConcurrencyLevel):
+        self.name = name
+        self.concurrency_level = concurrency_level
+        self.performance_baseline = self._define_performance_baseline()
+        self.optimization_strategies = []
+        self.scaling_policies = []
+
+    def _define_performance_baseline(self) -> PerformanceMetrics:
+        """定义性能基线"""
+        baseline_map = {
+            ConcurrencyLevel.LOW: PerformanceMetrics(
+                qps=500, response_time=100, throughput=10, error_rate=0.01, availability=0.99, concurrent_users=100
+            ),
+            ConcurrencyLevel.MEDIUM: PerformanceMetrics(
+                qps=5000, response_time=200, throughput=100, error_rate=0.02, availability=0.995, concurrent_users=1000
+            ),
+            ConcurrencyLevel.HIGH: PerformanceMetrics(
+                qps=50000, response_time=500, throughput=1000, error_rate=0.05, availability=0.999, concurrent_users=10000
+            ),
+            ConcurrencyLevel.EXTREME: PerformanceMetrics(
+                qps=500000, response_time=1000, throughput=10000, error_rate=0.1, availability=0.9999, concurrent_users=100000
+            )
+        }
+        return baseline_map[self.concurrency_level]
+
+    def add_optimization_strategy(self, strategy: Dict):
+        """添加优化策略"""
+        self.optimization_strategies.append(strategy)
+
+    def add_scaling_policy(self, policy: Dict):
+        """添加扩展策略"""
+        self.scaling_policies.append(policy)
+
+    def design_system_architecture(self) -> Dict:
+        """设计系统架构"""
+        return {
+            "system_name": self.name,
+            "concurrency_level": self.concurrency_level.value,
+            "performance_requirements": self._format_performance_metrics(),
+            "architecture_components": self._design_components(),
+            "optimization_strategies": self.optimization_strategies,
+            "scaling_policies": self.scaling_policies,
+            "monitoring_plan": self._design_monitoring_plan(),
+            "risk_assessment": self._assess_risks()
+        }
+
+    def _format_performance_metrics(self) -> Dict:
+        """格式化性能指标"""
+        return {
+            "baseline": {
+                "qps": f"{self.performance_baseline.qps:,}",
+                "response_time": f"{self.performance_baseline.response_time}ms",
+                "throughput": f"{self.performance_baseline.throughput}MB/s",
+                "error_rate": f"{self.performance_baseline.error_rate*100}%",
+                "availability": f"{self.performance_baseline.availability*100}%",
+                "concurrent_users": f"{self.performance_baseline.concurrent_users:,}"
+            },
+            "targets": {
+                "qps": f"{self.performance_baseline.qps * 2:,}",
+                "response_time": f"{self.performance_baseline.response_time * 0.5}ms",
+                "error_rate": f"{self.performance_baseline.error_rate * 0.5}%",
+                "availability": f"{min(self.performance_baseline.availability * 1.01, 0.9999)*100}%"
+            }
+        }
+
+    def _design_components(self) -> List[Dict]:
+        """设计架构组件"""
+        components = []
+
+        # 负载均衡层
+        components.append({
+            "layer": "Load Balancer",
+            "technology": "NGINX/HAProxy",
+            "role": "流量分发和健康检查",
+            "scaling": "Horizontal",
+            "high_availability": "Active-Standby"
+        })
+
+        # API网关层
+        components.append({
+            "layer": "API Gateway",
+            "technology": "Spring Cloud Gateway/Kong",
+            "role": "API路由、认证、限流",
+            "scaling": "Horizontal",
+            "features": ["Rate Limiting", "Authentication", "Circuit Breaker"]
+        })
+
+        # 应用服务层
+        components.append({
+            "layer": "Application Services",
+            "technology": "Spring Boot/Node.js",
+            "role": "业务逻辑处理",
+            "scaling": "Horizontal",
+            "architecture": "Microservices"
+        })
+
+        # 缓存层
+        components.append({
+            "layer": "Cache Layer",
+            "technology": "Redis Cluster",
+            "role": "热点数据缓存",
+            "scaling": "Cluster",
+            "strategy": "Multi-level Cache"
+        })
+
+        # 数据库层
+        components.append({
+            "layer": "Database Layer",
+            "technology": "MySQL Cluster + MongoDB",
+            "role": "数据持久化",
+            "scaling": "Read/Write Split + Sharding",
+            "strategy": "Polyglot Persistence"
+        })
+
+        return components
+
+    def _design_monitoring_plan(self) -> Dict:
+        """设计监控计划"""
+        return {
+            "infrastructure_monitoring": {
+                "tools": ["Prometheus", "Grafana", "Zabbix"],
+                "metrics": ["CPU", "Memory", "Disk", "Network"]
+            },
+            "application_monitoring": {
+                "tools": ["APM", "Distributed Tracing", "Logging"],
+                "metrics": ["Response Time", "Error Rate", "Throughput"]
+            },
+            "business_monitoring": {
+                "tools": ["Custom Dashboard", "Alerting"],
+                "metrics": ["User Activity", "Revenue", "Conversion Rate"]
+            },
+            "alerting_rules": {
+                "critical": ["Error Rate > 5%", "Response Time > 2s", "Availability < 99%"],
+                "warning": ["CPU > 80%", "Memory > 85%", "Disk > 90%"]
+            }
+        }
+
+    def _assess_risks(self) -> List[Dict]:
+        """风险评估"""
+        return [
+            {
+                "risk": "数据库瓶颈",
+                "probability": "High",
+                "impact": "High",
+                "mitigation": "读写分离、分库分表、缓存优化"
+            },
+            {
+                "risk": "缓存雪崩",
+                "probability": "Medium",
+                "impact": "High",
+                "mitigation": "缓存预热、分布式锁、降级策略"
+            },
+            {
+                "risk": "网络拥塞",
+                "probability": "Medium",
+                "impact": "Medium",
+                "mitigation": "CDN、压缩、连接池优化"
+            },
+            {
+                "risk": "系统过载",
+                "probability": "High",
+                "impact": "High",
+                "mitigation": "限流、降级、自动扩容"
+            }
+        ]
+
+class ConcurrencyOptimization:
+    """并发优化策略"""
+
+    def __init__(self):
+        self.strategies = {
+            "database": self._database_optimization,
+            "cache": self._cache_optimization,
+            "architecture": self._architecture_optimization,
+            "code": self._code_optimization
+        }
+
+    def optimize_system(self, system: HighConcurrencySystem) -> Dict:
+        """优化系统"""
+        optimization_results = {}
+
+        for strategy_name, strategy_func in self.strategies.items():
+            result = strategy_func(system)
+            optimization_results[strategy_name] = result
+
+        return optimization_results
+
+    def _database_optimization(self, system: HighConcurrencySystem) -> Dict:
+        """数据库优化"""
+        return {
+            "read_write_separation": {
+                "description": "读写分离",
+                "benefit": "提高读取性能",
+                "implementation": "主从复制，读操作分发到从库"
+            },
+            "database_sharding": {
+                "description": "数据库分片",
+                "benefit": "分散数据存储压力",
+                "implementation": "按用户ID或时间范围分片"
+            },
+            "connection_pooling": {
+                "description": "连接池优化",
+                "benefit": "减少连接创建开销",
+                "implementation": "HikariCP或Druid连接池"
+            },
+            "query_optimization": {
+                "description": "查询优化",
+                "benefit": "提高查询效率",
+                "implementation": "索引优化、查询重写、执行计划分析"
+            }
+        }
+
+    def _cache_optimization(self, system: HighConcurrencySystem) -> Dict:
+        """缓存优化"""
+        return {
+            "multi_level_cache": {
+                "description": "多级缓存",
+                "benefit": "减少数据库访问",
+                "implementation": "本地缓存 + 分布式缓存"
+            },
+            "cache_preheating": {
+                "description": "缓存预热",
+                "benefit": "避免冷启动问题",
+                "implementation": "系统启动时加载热点数据"
+            },
+            "cache_eviction": {
+                "description": "缓存淘汰策略",
+                "benefit": "控制内存使用",
+                "implementation": "LRU、LFU、TTL策略"
+            },
+            "cache_consistency": {
+                "description": "缓存一致性",
+                "benefit": "保证数据准确性",
+                "implementation": "失效通知、双写一致性"
+            }
+        }
+
+    def _architecture_optimization(self, system: HighConcurrencySystem) -> Dict:
+        """架构优化"""
+        return {
+            "microservices": {
+                "description": "微服务架构",
+                "benefit": "独立扩展和部署",
+                "implementation": "服务拆分、服务网格"
+            },
+            "async_processing": {
+                "description": "异步处理",
+                "benefit": "提高系统响应速度",
+                "implementation": "消息队列、事件驱动"
+            },
+            "cdn_acceleration": {
+                "description": "CDN加速",
+                "benefit": "减少网络延迟",
+                "implementation": "静态资源分发、边缘计算"
+            },
+            "auto_scaling": {
+                "description": "自动扩缩容",
+                "benefit": "适应流量变化",
+                "implementation": "基于指标的自动扩缩容"
+            }
+        }
+
+    def _code_optimization(self, system: HighConcurrencySystem) -> Dict:
+        """代码优化"""
+        return {
+            "connection_reuse": {
+                "description": "连接复用",
+                "benefit": "减少连接开销",
+                "implementation": "HTTP keep-alive、连接池"
+            },
+            "batch_processing": {
+                "description": "批量处理",
+                "benefit": "减少网络往返",
+                "implementation": "批量查询、批量更新"
+            },
+            "compression": {
+                "description": "数据压缩",
+                "benefit": "减少网络传输",
+                "implementation": "Gzip压缩、Protocol Buffers"
+            },
+            "parallel_processing": {
+                "description": "并行处理",
+                "benefit": "提高处理效率",
+                "implementation": "多线程、协程、并行流"
+            }
+        }
+```
+
+### 性能优化实战
+
+```python
+# 性能优化实战
+import time
+import threading
+import asyncio
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from typing import List, Dict, Optional
+from functools import wraps
+
+class PerformanceOptimizer:
+    """性能优化器"""
+
+    def __init__(self):
+        self.metrics_collector = MetricsCollector()
+        self.optimization_history = []
+
+    def measure_performance(self, func: Callable, *args, **kwargs):
+        """测量函数性能"""
+        start_time = time.time()
+        start_memory = self._get_memory_usage()
+
+        result = func(*args, **kwargs)
+
+        end_time = time.time()
+        end_memory = self._get_memory_usage()
+
+        metrics = {
+            "function": func.__name__,
+            "execution_time": end_time - start_time,
+            "memory_usage": end_memory - start_memory,
+            "timestamp": time.time()
+        }
+
+        self.metrics_collector.record_metrics(metrics)
+        return result, metrics
+
+    def optimize_database_access(self, query_func: Callable):
+        """优化数据库访问"""
+        @wraps(query_func)
+        def wrapper(*args, **kwargs):
+            # 添加查询缓存
+            cache_key = self._generate_cache_key(query_func.__name__, args, kwargs)
+            cached_result = self._get_cached_result(cache_key)
+
+            if cached_result is not None:
+                return cached_result
+
+            # 执行查询
+            result, metrics = self.measure_performance(query_func, *args, **kwargs)
+
+            # 缓存结果
+            self._cache_result(cache_key, result)
+
+            return result
+
+        return wrapper
+
+    def optimize_io_operations(self, io_func: Callable):
+        """优化IO操作"""
+        @wraps(io_func)
+        async def async_wrapper(*args, **kwargs):
+            # 使用异步IO
+            return await io_func(*args, **kwargs)
+
+        @wraps(io_func)
+        def sync_wrapper(*args, **kwargs):
+            # 使用线程池
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future = executor.submit(io_func, *args, **kwargs)
+                return future.result()
+
+        return async_wrapper if asyncio.iscoroutinefunction(io_func) else sync_wrapper
+
+    def optimize_cpu_intensive(self, cpu_func: Callable):
+        """优化CPU密集型任务"""
+        @wraps(cpu_func)
+        def wrapper(*args, **kwargs):
+            # 使用进程池
+            with ProcessPoolExecutor() as executor:
+                future = executor.submit(cpu_func, *args, **kwargs)
+                return future.result()
+
+        return wrapper
+
+    def implement_batch_processing(self, process_func: Callable, batch_size: int = 100):
+        """实现批量处理"""
+        @wraps(process_func)
+        def wrapper(items: List, *args, **kwargs):
+            results = []
+            for i in range(0, len(items), batch_size):
+                batch = items[i:i + batch_size]
+                batch_result = process_func(batch, *args, **kwargs)
+                results.extend(batch_result)
+            return results
+
+        return wrapper
+
+    def _generate_cache_key(self, func_name: str, args: tuple, kwargs: dict) -> str:
+        """生成缓存键"""
+        import hashlib
+        key_data = f"{func_name}{args}{kwargs}"
+        return hashlib.md5(key_data.encode()).hexdigest()
+
+    def _get_cached_result(self, cache_key: str) -> Optional[Any]:
+        """获取缓存结果"""
+        # 简化实现
+        return None
+
+    def _cache_result(self, cache_key: str, result: Any):
+        """缓存结果"""
+        # 简化实现
+        pass
+
+    def _get_memory_usage(self) -> float:
+        """获取内存使用量"""
+        import psutil
+        return psutil.Process().memory_info().rss / 1024 / 1024  # MB
+
+class MetricsCollector:
+    """指标收集器"""
+
+    def __init__(self):
+        self.metrics = []
+        self.performance_baselines = {}
+
+    def record_metrics(self, metrics: Dict):
+        """记录性能指标"""
+        self.metrics.append(metrics)
+
+    def set_baseline(self, function_name: str, baseline: Dict):
+        """设置性能基线"""
+        self.performance_baselines[function_name] = baseline
+
+    def analyze_performance(self, function_name: str) -> Dict:
+        """分析性能"""
+        function_metrics = [m for m in self.metrics if m['function'] == function_name]
+
+        if not function_metrics:
+            return {"error": "No metrics found"}
+
+        avg_execution_time = sum(m['execution_time'] for m in function_metrics) / len(function_metrics)
+        avg_memory_usage = sum(m['memory_usage'] for m in function_metrics) / len(function_metrics)
+
+        analysis = {
+            "function": function_name,
+            "total_calls": len(function_metrics),
+            "avg_execution_time": avg_execution_time,
+            "avg_memory_usage": avg_memory_usage,
+            "max_execution_time": max(m['execution_time'] for m in function_metrics),
+            "min_execution_time": min(m['execution_time'] for m in function_metrics)
+        }
+
+        # 比较基线
+        if function_name in self.performance_baselines:
+            baseline = self.performance_baselines[function_name]
+            analysis['baseline_comparison'] = {
+                "execution_time_diff": avg_execution_time - baseline.get('execution_time', 0),
+                "memory_usage_diff": avg_memory_usage - baseline.get('memory_usage', 0),
+                "performance_change": self._calculate_performance_change(analysis, baseline)
+            }
+
+        return analysis
+
+    def _calculate_performance_change(self, current: Dict, baseline: Dict) -> str:
+        """计算性能变化"""
+        if 'execution_time' not in baseline:
+            return "Unknown"
+
+        current_time = current['avg_execution_time']
+        baseline_time = baseline['execution_time']
+
+        if baseline_time == 0:
+            return "Unknown"
+
+        change = ((current_time - baseline_time) / baseline_time) * 100
+
+        if change > 10:
+            return f"Degraded {change:.1f}%"
+        elif change < -10:
+            return f"Improved {abs(change):.1f}%"
+        else:
+            return "Stable"
+
+# 性能优化示例
+def performance_optimization_demo():
+    """性能优化演示"""
+    optimizer = PerformanceOptimizer()
+
+    # 示例1：数据库查询优化
+    @optimizer.optimize_database_access
+    def get_user_data(user_id: int):
+        """获取用户数据"""
+        # 模拟数据库查询
+        time.sleep(0.1)  # 模拟查询延迟
+        return {"id": user_id, "name": f"User {user_id}", "email": f"user{user_id}@example.com"}
+
+    # 示例2：IO操作优化
+    @optimizer.optimize_io_operations
+    def read_file_content(file_path: str):
+        """读取文件内容"""
+        with open(file_path, 'r') as f:
+            return f.read()
+
+    # 示例3：CPU密集型任务优化
+    @optimizer.optimize_cpu_intensive
+    def calculate_factorial(n: int) -> int:
+        """计算阶乘"""
+        if n <= 1:
+            return 1
+        return n * calculate_factorial(n - 1)
+
+    # 示例4：批量处理
+    @optimizer.implement_batch_processing
+    def process_user_data_batch(users: List[Dict]) -> List[Dict]:
+        """批量处理用户数据"""
+        results = []
+        for user in users:
+            # 处理用户数据
+            processed_user = {
+                "id": user["id"],
+                "processed": True,
+                "timestamp": time.time()
+            }
+            results.append(processed_user)
+        return results
+
+    # 测试优化效果
+    print("Testing performance optimizations...")
+
+    # 测试数据库查询
+    start_time = time.time()
+    for i in range(100):
+        user_data = get_user_data(i)
+    db_time = time.time() - start_time
+    print(f"Database queries: {db_time:.2f}s for 100 queries")
+
+    # 测试批量处理
+    users = [{"id": i, "name": f"User {i}"} for i in range(1000)]
+    start_time = time.time()
+    processed_users = process_user_data_batch(users)
+    batch_time = time.time() - start_time
+    print(f"Batch processing: {batch_time:.2f}s for 1000 users")
+
+    # 分析性能
+    db_analysis = optimizer.metrics_collector.analyze_performance("get_user_data")
+    print(f"Database performance analysis: {db_analysis}")
+```
+
+## 分布式系统最佳实践
+
+### 分布式系统设计模式
+
+```python
+# 分布式系统设计模式
+from enum import Enum
+from typing import Dict, List, Optional, Callable, Any
+from dataclasses import dataclass
+import json
+
+class DistributedPattern(Enum):
+    """分布式系统模式"""
+    EVENT_SOURCING = "event_sourcing"
+    CQRS = "cqrs"
+    SAGA = "saga"
+    OUTBOX = "outbox"
+    COMPENSATING_TRANSACTION = "compensating_transaction"
+    TWO_PHASE_COMMIT = "two_phase_commit"
+    EVENTUAL_CONSISTENCY = "eventual_consistency"
+
+@dataclass
+class PatternImplementation:
+    """模式实现"""
+    pattern: DistributedPattern
+    description: str
+    use_case: str
+    implementation: str
+    benefits: List[str]
+    challenges: List[str]
+
+class DistributedSystemDesigner:
+    """分布式系统设计器"""
+
+    def __init__(self):
+        self.patterns = {}
+        self.system_components = {}
+        self.communication_patterns = {}
+        self.consistency_models = {}
+        self._initialize_patterns()
+
+    def _initialize_patterns(self):
+        """初始化分布式模式"""
+        self.patterns = {
+            DistributedPattern.EVENT_SOURCING: PatternImplementation(
+                pattern=DistributedPattern.EVENT_SOURCING,
+                description="事件溯源：将状态变化存储为事件序列",
+                use_case="需要审计和历史回溯的系统",
+                implementation="事件存储、事件重放、快照",
+                benefits=["完整的审计日志", "时间旅行调试", "事件驱动架构"],
+                challenges=["事件存储管理", "版本兼容性", "查询复杂性"]
+            ),
+            DistributedPattern.CQRS: PatternImplementation(
+                pattern=DistributedPattern.CQRS,
+                description="命令查询职责分离：分离读写模型",
+                use_case="高读写负载的系统",
+                implementation="命令模型、查询模型、数据同步",
+                benefits=["读写优化", "独立扩展", "业务逻辑清晰"],
+                challenges=["数据一致性", "系统复杂性", "延迟问题"]
+            ),
+            DistributedPattern.SAGA: PatternImplementation(
+                pattern=DistributedPattern.SAGA,
+                description="Saga模式：分布式事务的补偿机制",
+                use_case="跨服务的事务处理",
+                implementation="事件驱动、补偿事务、状态管理",
+                benefits=["数据一致性", "故障恢复", "业务流程控制"],
+                challenges=["补偿逻辑复杂", "状态管理困难", "调试复杂"]
+            )
+        }
+
+        self.communication_patterns = {
+            "request_response": {
+                "description": "请求-响应模式",
+                "use_case": "同步通信",
+                "implementation": "HTTP/REST, gRPC",
+                "latency": "Low",
+                "reliability": "High"
+            },
+            "event_driven": {
+                "description": "事件驱动模式",
+                "use_case": "异步通信",
+                "implementation": "Message Queue, Event Bus",
+                "latency": "Medium",
+                "reliability": "Medium"
+            },
+            "pub_sub": {
+                "description": "发布-订阅模式",
+                "use_case": "一对多通信",
+                "implementation": "Kafka, RabbitMQ",
+                "latency": "Low",
+                "reliability": "High"
+            }
+        }
+
+        self.consistency_models = {
+            "strong_consistency": {
+                "description": "强一致性",
+                "guarantee": "所有节点同时看到相同数据",
+                "latency": "High",
+                "availability": "Low",
+                "use_case": "金融交易"
+            },
+            "eventual_consistency": {
+                "description": "最终一致性",
+                "guarantee": "数据最终会一致",
+                "latency": "Low",
+                "availability": "High",
+                "use_case": "社交媒体"
+            },
+            "weak_consistency": {
+                "description": "弱一致性",
+                "guarantee": "不保证立即一致性",
+                "latency": "Very Low",
+                "availability": "Very High",
+                "use_case": "计数器"
+            }
+        }
+
+    def design_distributed_system(self, requirements: Dict) -> Dict:
+        """设计分布式系统"""
+        return {
+            "system_requirements": requirements,
+            "recommended_patterns": self._recommend_patterns(requirements),
+            "architecture_design": self._create_architecture_design(requirements),
+            "consistency_strategy": self._design_consistency_strategy(requirements),
+            "communication_design": self._design_communication(requirements),
+            "scalability_plan": self._create_scalability_plan(requirements),
+            "fault_tolerance": self._design_fault_tolerance(requirements)
+        }
+
+    def _recommend_patterns(self, requirements: Dict) -> List[Dict]:
+        """推荐分布式模式"""
+        recommendations = []
+        system_type = requirements.get('system_type', 'general')
+        data_volume = requirements.get('data_volume', 'medium')
+        consistency_requirement = requirements.get('consistency', 'eventual')
+
+        if system_type == 'ecommerce':
+            recommendations.extend([
+                {"pattern": "Saga", "reason": "处理跨服务订单事务"},
+                {"pattern": "Event Sourcing", "reason": "订单状态跟踪和审计"},
+                {"pattern": "CQRS", "reason": "订单查询优化"}
+            ])
+        elif system_type == 'social_media':
+            recommendations.extend([
+                {"pattern": "Event Sourcing", "reason": "用户活动追踪"},
+                {"pattern": "CQRS", "reason": "内容查询优化"},
+                {"pattern": "Outbox", "reason": "可靠的事件发布"}
+            ])
+
+        if data_volume == 'large':
+            recommendations.append({"pattern": "Event Sourcing", "reason": "处理大量历史数据"})
+
+        if consistency_requirement == 'eventual':
+            recommendations.append({"pattern": "Eventual Consistency", "reason": "高可用性要求"})
+
+        return recommendations
+
+    def _create_architecture_design(self, requirements: Dict) -> Dict:
+        """创建架构设计"""
+        return {
+            "layers": [
+                {
+                    "name": "API Gateway",
+                    "responsibility": "API路由和过滤",
+                    "technologies": ["Kong", "Spring Cloud Gateway"]
+                },
+                {
+                    "name": "Business Services",
+                    "responsibility": "核心业务逻辑",
+                    "technologies": ["Spring Boot", "Node.js"],
+                    "pattern": "Microservices"
+                },
+                {
+                    "name": "Data Services",
+                    "responsibility": "数据访问和管理",
+                    "technologies": ["PostgreSQL", "MongoDB", "Redis"],
+                    "pattern": "Polyglot Persistence"
+                },
+                {
+                    "name": "Message Broker",
+                    "responsibility": "异步通信",
+                    "technologies": ["Kafka", "RabbitMQ"],
+                    "pattern": "Event-Driven"
+                }
+            ],
+            "cross_cutting": [
+                {
+                    "concern": "Service Discovery",
+                    "implementation": "Eureka, Consul"
+                },
+                {
+                    "concern": "Configuration Management",
+                    "implementation": "Spring Cloud Config, Consul"
+                },
+                {
+                    "concern": "Monitoring",
+                    "implementation": "Prometheus, Grafana, ELK"
+                }
+            ]
+        }
+
+    def _design_consistency_strategy(self, requirements: Dict) -> Dict:
+        """设计一致性策略"""
+        consistency_requirement = requirements.get('consistency', 'eventual')
+
+        strategy = {
+            "model": consistency_requirement,
+            "implementation": {},
+            "trade_offs": {}
+        }
+
+        if consistency_requirement == 'strong':
+            strategy["implementation"] = {
+                "database": "ACID transactions",
+                "replication": "Synchronous replication",
+                "coordination": "Two-phase commit"
+            }
+            strategy["trade_offs"] = {
+                "availability": "Reduced",
+                "latency": "Increased",
+                "scalability": "Limited"
+            }
+        elif consistency_requirement == 'eventual':
+            strategy["implementation"] = {
+                "database": "BASE transactions",
+                "replication": "Asynchronous replication",
+                "coordination": "Event-driven consistency"
+            }
+            strategy["trade_offs"] = {
+                "availability": "High",
+                "latency": "Low",
+                "scalability": "Excellent"
+            }
+
+        return strategy
+
+    def _design_communication(self, requirements: Dict) -> Dict:
+        """设计通信模式"""
+        return {
+            "synchronous": {
+                "protocol": "HTTP/REST, gRPC",
+                "use_case": "需要立即响应的操作",
+                "reliability": "High",
+                "latency": "Low"
+            },
+            "asynchronous": {
+                "protocol": "Kafka, RabbitMQ",
+                "use_case": "后台处理和事件通知",
+                "reliability": "Medium",
+                "latency": "Medium"
+            },
+            "real_time": {
+                "protocol": "WebSockets, WebRTC",
+                "use_case": "实时通信和协作",
+                "reliability": "Medium",
+                "latency": "Very Low"
+            }
+        }
+
+    def _create_scalability_plan(self, requirements: Dict) -> Dict:
+        """创建扩展性计划"""
+        return {
+            "horizontal_scaling": {
+                "services": ["API Gateway", "Business Services"],
+                "technology": "Kubernetes, Docker",
+                "strategy": "Auto-scaling based on metrics"
+            },
+            "vertical_scaling": {
+                "services": ["Database", "Cache"],
+                "technology": "Cloud instances",
+                "strategy": "Resource optimization"
+            },
+            "data_scaling": {
+                "strategy": "Sharding, Replication",
+                "implementation": "Database clustering"
+            }
+        }
+
+    def _design_fault_tolerance(self, requirements: Dict) -> Dict:
+        """设计容错机制"""
+        return {
+            "circuit_breaker": {
+                "implementation": "Hystrix, Resilience4j",
+                "purpose": "防止级联故障"
+            },
+            "retry_mechanism": {
+                "implementation": "Exponential backoff",
+                "purpose": "临时故障恢复"
+            },
+            "fallback": {
+                "implementation": "缓存或默认值",
+                "purpose": "服务降级"
+            },
+            "health_check": {
+                "implementation": "Active health monitoring",
+                "purpose": "故障检测"
+            }
+        }
+```
+
+### 分布式事务处理
+
+```python
+# 分布式事务处理
+from enum import Enum
+from typing import Dict, List, Optional, Callable, Any
+from dataclasses import dataclass
+import asyncio
+import json
+from datetime import datetime
+
+class TransactionStatus(Enum):
+    """事务状态"""
+    ACTIVE = "active"
+    COMMITTED = "committed"
+    ROLLED_BACK = "rolled_back"
+    FAILED = "failed"
+
+class SagaStep:
+    """Saga步骤"""
+
+    def __init__(self, name: str, action: Callable, compensation: Callable):
+        self.name = name
+        self.action = action
+        self.compensation = compensation
+        self.status = "pending"
+        self.result = None
+        self.error = None
+
+class SagaCoordinator:
+    """Saga协调器"""
+
+    def __init__(self):
+        self.sagas = {}
+        self.steps = {}
+        self.event_log = []
+
+    def create_saga(self, saga_id: str, steps: List[SagaStep]) -> str:
+        """创建Saga事务"""
+        self.sagas[saga_id] = {
+            "id": saga_id,
+            "status": TransactionStatus.ACTIVE,
+            "steps": steps,
+            "created_at": datetime.now(),
+            "updated_at": datetime.now()
+        }
+        return saga_id
+
+    async def execute_saga(self, saga_id: str) -> Dict:
+        """执行Saga事务"""
+        if saga_id not in self.sagas:
+            raise ValueError(f"Saga {saga_id} not found")
+
+        saga = self.sagas[saga_id]
+
+        try:
+            # 正向执行
+            for step in saga["steps"]:
+                await self._execute_step(step)
+
+            saga["status"] = TransactionStatus.COMMITTED
+            self._log_event(saga_id, "COMMIT", "Saga completed successfully")
+
+            return {"status": "success", "saga_id": saga_id}
+
+        except Exception as e:
+            # 补偿执行
+            await self._compensate_saga(saga_id)
+            saga["status"] = TransactionStatus.FAILED
+            self._log_event(saga_id, "FAILED", f"Saga failed: {str(e)}")
+
+            return {"status": "failed", "saga_id": saga_id, "error": str(e)}
+
+    async def _execute_step(self, step: SagaStep):
+        """执行单个步骤"""
+        try:
+            step.status = "executing"
+            step.result = await step.action()
+            step.status = "completed"
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            raise e
+
+    async def _compensate_saga(self, saga_id: str):
+        """补偿Saga事务"""
+        saga = self.sagas[saga_id]
+
+        # 反向执行补偿操作
+        for step in reversed(saga["steps"]):
+            if step.status == "completed":
+                try:
+                    await step.compensation(step.result)
+                    step.status = "compensated"
+                except Exception as e:
+                    step.status = "compensation_failed"
+                    self._log_event(saga_id, "COMPENSATION_FAILED", f"Step {step.name} compensation failed: {str(e)}")
+
+    def _log_event(self, saga_id: str, event_type: str, message: str):
+        """记录事件日志"""
+        self.event_log.append({
+            "saga_id": saga_id,
+            "event_type": event_type,
+            "message": message,
+            "timestamp": datetime.now()
+        })
+
+class TwoPhaseCommitCoordinator:
+    """两阶段提交协调器"""
+
+    def __init__(self):
+        self.participants = {}
+        self.transactions = {}
+
+    def register_participant(self, name: str, prepare: Callable, commit: Callable, rollback: Callable):
+        """注册参与者"""
+        self.participants[name] = {
+            "prepare": prepare,
+            "commit": commit,
+            "rollback": rollback
+        }
+
+    def begin_transaction(self, transaction_id: str, participants: List[str]) -> str:
+        """开始事务"""
+        self.transactions[transaction_id] = {
+            "id": transaction_id,
+            "status": TransactionStatus.ACTIVE,
+            "participants": participants,
+            "votes": {},
+            "created_at": datetime.now()
+        }
+        return transaction_id
+
+    async def commit_transaction(self, transaction_id: str) -> Dict:
+        """提交事务"""
+        if transaction_id not in self.transactions:
+            raise ValueError(f"Transaction {transaction_id} not found")
+
+        transaction = self.transactions[transaction_id]
+
+        try:
+            # 第一阶段：准备阶段
+            if not await self._prepare_phase(transaction_id):
+                await self._rollback_phase(transaction_id)
+                return {"status": "failed", "transaction_id": transaction_id}
+
+            # 第二阶段：提交阶段
+            await self._commit_phase(transaction_id)
+            transaction["status"] = TransactionStatus.COMMITTED
+
+            return {"status": "success", "transaction_id": transaction_id}
+
+        except Exception as e:
+            await self._rollback_phase(transaction_id)
+            transaction["status"] = TransactionStatus.FAILED
+            return {"status": "failed", "transaction_id": transaction_id, "error": str(e)}
+
+    async def _prepare_phase(self, transaction_id: str) -> bool:
+        """准备阶段"""
+        transaction = self.transactions[transaction_id]
+
+        for participant_name in transaction["participants"]:
+            if participant_name not in self.participants:
+                raise ValueError(f"Participant {participant_name} not found")
+
+            participant = self.participants[participant_name]
+
+            try:
+                vote = await participant["prepare"](transaction_id)
+                transaction["votes"][participant_name] = vote
+
+                if vote != "commit":
+                    return False
+
+            except Exception as e:
+                transaction["votes"][participant_name] = "abort"
+                return False
+
+        return True
+
+    async def _commit_phase(self, transaction_id: str):
+        """提交阶段"""
+        transaction = self.transactions[transaction_id]
+
+        for participant_name in transaction["participants"]:
+            participant = self.participants[participant_name]
+
+            try:
+                await participant["commit"](transaction_id)
+            except Exception as e:
+                # 记录错误但继续提交其他参与者
+                print(f"Commit failed for {participant_name}: {e}")
+
+    async def _rollback_phase(self, transaction_id: str):
+        """回滚阶段"""
+        transaction = self.transactions[transaction_id]
+
+        for participant_name in transaction["participants"]:
+            participant = self.participants[participant_name]
+
+            try:
+                await participant["rollback"](transaction_id)
+            except Exception as e:
+                print(f"Rollback failed for {participant_name}: {e}")
+
+class EventualConsistencyManager:
+    """最终一致性管理器"""
+
+    def __init__(self):
+        self.data_stores = {}
+        self.conflict_resolution_strategies = {}
+        self.event_log = []
+
+    def register_data_store(self, name: str, store: Dict):
+        """注册数据存储"""
+        self.data_stores[name] = store
+
+    def register_conflict_resolution(self, conflict_type: str, strategy: Callable):
+        """注册冲突解决策略"""
+        self.conflict_resolution_strategies[conflict_type] = strategy
+
+    def write_data(self, data_id: str, data: Dict, store_names: List[str]) -> str:
+        """写入数据（最终一致性）"""
+        event_id = f"event_{int(time.time())}"
+        timestamp = datetime.now()
+
+        # 记录写入事件
+        self.event_log.append({
+            "event_id": event_id,
+            "type": "write",
+            "data_id": data_id,
+            "data": data,
+            "stores": store_names,
+            "timestamp": timestamp
+        })
+
+        # 异步写入到各个存储
+        asyncio.create_task(self._replicate_data(event_id, data_id, data, store_names))
+
+        return event_id
+
+    async def _replicate_data(self, event_id: str, data_id: str, data: Dict, store_names: List[str]):
+        """异步复制数据"""
+        for store_name in store_names:
+            try:
+                if store_name in self.data_stores:
+                    self.data_stores[store_name][data_id] = data
+                    await asyncio.sleep(0.1)  # 模拟网络延迟
+            except Exception as e:
+                print(f"Replication failed for {store_name}: {e}")
+
+    def read_data(self, data_id: str, store_name: str) -> Optional[Dict]:
+        """读取数据"""
+        if store_name in self.data_stores:
+            return self.data_stores[store_name].get(data_id)
+        return None
+
+    def resolve_conflicts(self, data_id: str) -> Dict:
+        """解决数据冲突"""
+        # 收集所有存储的数据版本
+        versions = {}
+        for store_name, store in self.data_stores.items():
+            if data_id in store:
+                versions[store_name] = store[data_id]
+
+        if not versions:
+            return {}
+
+        # 如果只有一个版本，直接返回
+        if len(versions) == 1:
+            return list(versions.values())[0]
+
+        # 解决冲突
+        resolved_data = self._apply_conflict_resolution(data_id, versions)
+
+        # 同步解决后的数据
+        for store_name in self.data_stores.keys():
+            self.data_stores[store_name][data_id] = resolved_data
+
+        return resolved_data
+
+    def _apply_conflict_resolution(self, data_id: str, versions: Dict) -> Dict:
+        """应用冲突解决策略"""
+        # 简化实现：使用最新时间戳的策略
+        latest_version = None
+        latest_timestamp = None
+
+        for version_data in versions.values():
+            timestamp = version_data.get("timestamp", 0)
+            if latest_timestamp is None or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+                latest_version = version_data
+
+        return latest_version or {}
+```
+
+## 实战项目：大型社交网络架构
+
+### 系统架构设计
+
+```python
+# 大型社交网络架构
+class SocialNetworkArchitecture:
+    """社交网络架构"""
+
+    def __init__(self):
+        self.user_count = 0
+        self.posts_count = 0
+        self.connections_count = 0
+        self.services = {}
+        self.data_stores = {}
+        self.cache_systems = {}
+        self.message_queues = {}
+        self.monitoring = {}
+        self._initialize_architecture()
+
+    def _initialize_architecture(self):
+        """初始化架构组件"""
+        # 微服务
+        self.services = {
+            "user_service": {
+                "description": "用户管理服务",
+                "endpoints": ["/users", "/users/{id}", "/users/{id}/profile"],
+                "database": "PostgreSQL",
+                "cache": "Redis",
+                "sharding_strategy": "user_id"
+            },
+            "post_service": {
+                "description": "帖子服务",
+                "endpoints": ["/posts", "/posts/{id}", "/posts/{id}/comments"],
+                "database": "Cassandra",
+                "cache": "Redis",
+                "sharding_strategy": "post_id"
+            },
+            "feed_service": {
+                "description": "信息流服务",
+                "endpoints": ["/feed", "/feed/{user_id}"],
+                "database": "Redis",
+                "cache": "Redis",
+                "real_time": "WebSockets"
+            },
+            "notification_service": {
+                "description": "通知服务",
+                "endpoints": ["/notifications", "/notifications/{user_id}"],
+                "database": "MongoDB",
+                "cache": "Redis",
+                "push": "Firebase Cloud Messaging"
+            },
+            "search_service": {
+                "description": "搜索服务",
+                "endpoints": ["/search", "/search/users", "/search/posts"],
+                "database": "Elasticsearch",
+                "cache": "Redis",
+                "indexing": "Real-time"
+            }
+        }
+
+        # 数据存储
+        self.data_stores = {
+            "user_db": {
+                "type": "PostgreSQL",
+                "purpose": "用户数据存储",
+                "replication": "Master-Slave",
+                "backup": "Daily snapshots"
+            },
+            "post_db": {
+                "type": "Cassandra",
+                "purpose": "帖子数据存储",
+                "replication": "Multi-region",
+                "backup": "Continuous"
+            },
+            "cache_db": {
+                "type": "Redis Cluster",
+                "purpose": "缓存和会话存储",
+                "replication": "Master-Slave",
+                "persistence": "RDB + AOF"
+            },
+            "search_db": {
+                "type": "Elasticsearch",
+                "purpose": "搜索索引",
+                "replication": "Replica shards",
+                "backup": "Snapshots"
+            }
+        }
+
+        # 缓存系统
+        self.cache_systems = {
+            "user_cache": {
+                "type": "Redis",
+                "purpose": "用户配置文件缓存",
+                "ttl": "1 hour",
+                "eviction": "LRU"
+            },
+            "post_cache": {
+                "type": "Redis",
+                "purpose": "热门帖子缓存",
+                "ttl": "30 minutes",
+                "eviction": "LFU"
+            },
+            "feed_cache": {
+                "type": "Redis",
+                "purpose": "用户信息流缓存",
+                "ttl": "10 minutes",
+                "eviction": "TTL"
+            }
+        }
+
+        # 消息队列
+        self.message_queues = {
+            "post_events": {
+                "type": "Kafka",
+                "purpose": "帖子事件流",
+                "partitions": 10,
+                "replication": 3
+            },
+            "user_events": {
+                "type": "Kafka",
+                "purpose": "用户事件流",
+                "partitions": 5,
+                "replication": 3
+            },
+            "notification_events": {
+                "type": "RabbitMQ",
+                "purpose": "通知事件",
+                "queues": ["email", "push", "sms"]
+            }
+        }
+
+    def design_system(self, requirements: Dict) -> Dict:
+        """设计系统架构"""
+        return {
+            "system_overview": "大型社交网络平台，支持亿级用户和实时互动",
+            "architecture_type": "Microservices with Event-Driven Architecture",
+            "key_requirements": requirements,
+            "technical_architecture": self._create_technical_architecture(),
+            "data_architecture": self._create_data_architecture(),
+            "performance_optimization": self._create_performance_strategy(),
+            "scalability_plan": self._create_scalability_plan(),
+            "monitoring_strategy": self._create_monitoring_strategy()
+        }
+
+    def _create_technical_architecture(self) -> Dict:
+        """创建技术架构"""
+        return {
+            "frontend": {
+                "web": "React.js with Next.js",
+                "mobile": "React Native",
+                "cdn": "Cloudflare + Akamai"
+            },
+            "backend": {
+                "api_gateway": "Kong with Lua plugins",
+                "services": "Spring Boot + Node.js",
+                "communication": "REST + gRPC + WebSocket"
+            },
+            "data_layer": {
+                "databases": "PostgreSQL + Cassandra + MongoDB + Elasticsearch",
+                "caching": "Redis Cluster",
+                "messaging": "Kafka + RabbitMQ"
+            },
+            "infrastructure": {
+                "containerization": "Docker + Kubernetes",
+                "orchestration": "Kubernetes",
+                "ci_cd": "Jenkins + GitLab CI",
+                "monitoring": "Prometheus + Grafana + ELK"
+            }
+        }
+
+    def _create_data_architecture(self) -> Dict:
+        """创建数据架构"""
+        return {
+            "data_model": {
+                "users": "关系型数据",
+                "posts": "文档型数据",
+                "relationships": "图型数据",
+                "analytics": "时序数据"
+            },
+            "data_flow": {
+                "write_path": "API Gateway → Service → Database → Cache",
+                "read_path": "Cache → Database → Service → API Gateway",
+                "event_flow": "Service → Message Queue → Consumer Services"
+            },
+            "consistency": {
+                "user_data": "Strong consistency",
+                "post_data": "Eventual consistency",
+                "feed_data": "Eventual consistency",
+                "analytics_data": "Eventual consistency"
+            }
+        }
+
+    def _create_performance_strategy(self) -> Dict:
+        """创建性能策略"""
+        return {
+            "cache_strategy": {
+                "multi_level": ["Browser cache", "CDN cache", "Redis cache", "Database cache"],
+                "cache_warming": "Preload热门用户和帖子",
+                "cache_invalidation": "基于事件驱动的失效"
+            },
+            "database_optimization": {
+                "indexing": "优化的索引策略",
+                "query_optimization": "查询重写和执行计划优化",
+                "connection_pooling": "连接池管理"
+            },
+            "network_optimization": {
+                "compression": "Gzip压缩",
+                "keep_alive": "HTTP keep-alive",
+                "load_balancing": "智能负载均衡"
+            }
+        }
+
+    def _create_scalability_plan(self) -> Dict:
+        """创建扩展性计划"""
+        return {
+            "horizontal_scaling": {
+                "web_servers": "基于CPU/内存的自动扩缩容",
+                "app_servers": "基于请求量的自动扩缩容",
+                "database_servers": "读写分离和分片"
+            },
+            "vertical_scaling": {
+                "compute_resources": "增加CPU和内存",
+                "storage_resources": "增加存储容量",
+                "network_resources": "增加带宽"
+            },
+            "elastic_scaling": {
+                "auto_scaling_groups": "基于指标自动扩缩容",
+                "serverless": "Lambda函数用于突发流量",
+                "cdn": "全球CDN加速"
+            }
+        }
+
+    def _create_monitoring_strategy(self) -> Dict:
+        """创建监控策略"""
+        return {
+            "infrastructure_monitoring": {
+                "tools": ["Prometheus", "Grafana", "Zabbix"],
+                "metrics": ["CPU", "Memory", "Disk", "Network"],
+                "alerting": "基于阈值的告警"
+            },
+            "application_monitoring": {
+                "tools": ["APM", "Distributed Tracing", "Logging"],
+                "metrics": ["Response Time", "Error Rate", "Throughput"],
+                "alerting": "异常检测和告警"
+            },
+            "business_monitoring": {
+                "tools": ["Custom Dashboard", "Real-time Analytics"],
+                "metrics": ["Active Users", "Post Volume", "Engagement Rate"],
+                "alerting": "业务指标异常告警"
+            }
+        }
+
+    def simulate_user_activity(self, num_users: int, duration: int = 60):
+        """模拟用户活动"""
+        print(f"Simulating {num_users} users for {duration} seconds...")
+
+        # 模拟用户注册
+        for i in range(num_users):
+            user_id = f"user_{i}"
+            self._create_user(user_id)
+            self.user_count += 1
+
+        # 模拟用户活动
+        for _ in range(duration):
+            # 随机选择用户进行活动
+            active_users = random.sample(range(num_users), min(num_users // 10, 1000))
+
+            for user_id in active_users:
+                activity = random.choice(["post", "like", "comment", "follow"])
+                self._simulate_activity(f"user_{user_id}", activity)
+
+            time.sleep(1)
+
+        print(f"Simulation completed:")
+        print(f"  Total users: {self.user_count}")
+        print(f"  Total posts: {self.posts_count}")
+        print(f"  Total connections: {self.connections_count}")
+
+    def _create_user(self, user_id: str):
+        """创建用户"""
+        user_data = {
+            "id": user_id,
+            "name": f"User {user_id}",
+            "email": f"{user_id}@example.com",
+            "created_at": datetime.now(),
+            "profile": {
+                "bio": f"I am {user_id}",
+                "avatar": f"avatar_{user_id}.jpg"
+            }
+        }
+
+        # 存储到用户数据库
+        if "user_db" in self.data_stores:
+            self.data_stores["user_db"][user_id] = user_data
+
+        # 缓存用户数据
+        if "user_cache" in self.cache_systems:
+            self.cache_systems["user_cache"][user_id] = user_data
+
+    def _simulate_activity(self, user_id: str, activity: str):
+        """模拟用户活动"""
+        if activity == "post":
+            post_id = f"post_{self.posts_count}"
+            post_data = {
+                "id": post_id,
+                "user_id": user_id,
+                "content": f"Post by {user_id} at {datetime.now()}",
+                "created_at": datetime.now(),
+                "likes": 0,
+                "comments": []
+            }
+
+            # 存储帖子
+            if "post_db" in self.data_stores:
+                self.data_stores["post_db"][post_id] = post_data
+
+            self.posts_count += 1
+
+        elif activity == "like":
+            # 模拟点赞
+            if self.posts_count > 0:
+                post_id = f"post_{random.randint(0, self.posts_count - 1)}"
+                if "post_db" in self.data_stores and post_id in self.data_stores["post_db"]:
+                    self.data_stores["post_db"][post_id]["likes"] += 1
+
+        elif activity == "follow":
+            # 模拟关注
+            followed_user = f"user_{random.randint(0, self.user_count - 1)}"
+            if followed_user != user_id:
+                self.connections_count += 1
+
+        elif activity == "comment":
+            # 模拟评论
+            if self.posts_count > 0:
+                post_id = f"post_{random.randint(0, self.posts_count - 1)}"
+                if "post_db" in self.data_stores and post_id in self.data_stores["post_db"]:
+                    comment = {
+                        "user_id": user_id,
+                        "content": f"Comment by {user_id}",
+                        "created_at": datetime.now()
+                    }
+                    self.data_stores["post_db"][post_id]["comments"].append(comment)
+
+    def generate_performance_report(self) -> Dict:
+        """生成性能报告"""
+        return {
+            "system_metrics": {
+                "total_users": self.user_count,
+                "total_posts": self.posts_count,
+                "total_connections": self.connections_count,
+                "active_services": len(self.services),
+                "data_stores": len(self.data_stores)
+            },
+            "performance_indicators": {
+                "user_growth_rate": f"{(self.user_count / max(1, self.user_count - 100) - 1) * 100:.1f}%",
+                "post_creation_rate": f"{self.posts_count / max(1, self.user_count):.2f} posts/user",
+                "connection_density": f"{self.connections_count / max(1, self.user_count * (self.user_count - 1)) * 100:.1f}%"
+            },
+            "scalability_assessment": {
+                "current_scale": "Medium",
+                "bottlenecks": ["Database connections", "Cache memory", "Network bandwidth"],
+                "recommendations": [
+                    "Implement database sharding",
+                    "Add more Redis nodes",
+                    "Optimize network configuration"
+                ]
+            }
+        }
+
+# 系统部署示例
+def deploy_social_network():
+    """部署社交网络系统"""
+    social_network = SocialNetworkArchitecture()
+
+    # 设计系统架构
+    requirements = {
+        "users": "100 million",
+        "posts": "1 billion",
+        "connections": "10 billion",
+        "availability": "99.99%",
+        "latency": "<100ms"
+    }
+
+    architecture = social_network.design_system(requirements)
+    print("System Architecture Designed:")
+    print(json.dumps(architecture, indent=2, default=str))
+
+    # 模拟用户活动
+    social_network.simulate_user_activity(10000, 30)
+
+    # 生成性能报告
+    performance_report = social_network.generate_performance_report()
+    print("\nPerformance Report:")
+    print(json.dumps(performance_report, indent=2, default=str))
+
+    return social_network
+```
+
+## 本周作业
+
+### 作业1：分析现有系统架构
+
+```python
+# 系统架构分析
+class SystemArchitectureAnalyzer:
+    """系统架构分析器"""
+
+    def __init__(self):
+        self.analysis_framework = {
+            "scalability": self._analyze_scalability,
+            "reliability": self._analyze_reliability,
+            "maintainability": self._analyze_maintainability,
+            "performance": self._analyze_performance,
+            "security": self._analyze_security
+        }
+
+    def analyze_system(self, system_description: Dict) -> Dict:
+        """分析系统架构"""
+        analysis_results = {}
+
+        for aspect, analyzer in self.analysis_framework.items():
+            analysis_results[aspect] = analyzer(system_description)
+
+        return {
+            "system_overview": system_description,
+            "analysis_results": analysis_results,
+            "recommendations": self._generate_recommendations(analysis_results),
+            "risk_assessment": self._assess_risks(analysis_results)
+        }
+
+    def _analyze_scalability(self, system: Dict) -> Dict:
+        """分析扩展性"""
+        return {
+            "horizontal_scaling": self._check_horizontal_scaling(system),
+            "vertical_scaling": self._check_vertical_scaling(system),
+            "elastic_scaling": self._check_elastic_scaling(system),
+            "data_scaling": self._check_data_scaling(system)
+        }
+
+    def _analyze_reliability(self, system: Dict) -> Dict:
+        """分析可靠性"""
+        return {
+            "fault_tolerance": self._check_fault_tolerance(system),
+            "redundancy": self._check_redundancy(system),
+            "disaster_recovery": self._check_disaster_recovery(system),
+            "monitoring": self._check_monitoring(system)
+        }
+
+    def _analyze_maintainability(self, system: Dict) -> Dict:
+        """分析可维护性"""
+        return {
+            "modularity": self._check_modularity(system),
+            "documentation": self._check_documentation(system),
+            "testing": self._check_testing(system),
+            "deployment": self._check_deployment(system)
+        }
+
+    def _analyze_performance(self, system: Dict) -> Dict:
+        """分析性能"""
+        return {
+            "response_time": self._check_response_time(system),
+            "throughput": self._check_throughput(system),
+            "resource_utilization": self._check_resource_utilization(system),
+            "bottlenecks": self._identify_bottlenecks(system)
+        }
+
+    def _analyze_security(self, system: Dict) -> Dict:
+        """分析安全性"""
+        return {
+            "authentication": self._check_authentication(system),
+            "authorization": self._check_authorization(system),
+            "encryption": self._check_encryption(system),
+            "audit": self._check_audit(system)
+        }
+
+    def _check_horizontal_scaling(self, system: Dict) -> Dict:
+        """检查水平扩展"""
+        return {
+            "capability": "High" if "load_balancer" in system else "Low",
+            "implementation": "Load balancer with multiple instances",
+            "recommendations": ["Add auto-scaling groups", "Implement service discovery"]
+        }
+
+    def _check_vertical_scaling(self, system: Dict) -> Dict:
+        """检查垂直扩展"""
+        return {
+            "capability": "Medium",
+            "implementation": "Resource upgrade options",
+            "recommendations": ["Monitor resource usage", "Plan capacity upgrades"]
+        }
+
+    def _generate_recommendations(self, analysis: Dict) -> List[Dict]:
+        """生成建议"""
+        recommendations = []
+
+        # 扩展性建议
+        if analysis["scalability"]["horizontal_scaling"]["capability"] == "Low":
+            recommendations.append({
+                "priority": "High",
+                "area": "Scalability",
+                "recommendation": "Implement horizontal scaling with load balancers"
+            })
+
+        # 可靠性建议
+        if analysis["reliability"]["fault_tolerance"]["capability"] == "Low":
+            recommendations.append({
+                "priority": "High",
+                "area": "Reliability",
+                "recommendation": "Implement circuit breakers and retry mechanisms"
+            })
+
+        return recommendations
+
+    def _assess_risks(self, analysis: Dict) -> List[Dict]:
+        """评估风险"""
+        risks = []
+
+        # 扩展性风险
+        if analysis["scalability"]["data_scaling"]["capability"] == "Low":
+            risks.append({
+                "risk": "Database bottleneck",
+                "probability": "High",
+                "impact": "High",
+                "mitigation": "Implement database sharding and replication"
+            })
+
+        return risks
+
+# 使用示例
+def analyze_example_system():
+    """分析示例系统"""
+    analyzer = SystemArchitectureAnalyzer()
+
+    example_system = {
+        "name": "E-commerce Platform",
+        "architecture": "Microservices",
+        "components": ["API Gateway", "User Service", "Product Service", "Order Service"],
+        "databases": ["PostgreSQL", "Redis", "Elasticsearch"],
+        "load_balancer": "NGINX",
+        "monitoring": "Prometheus + Grafana"
+    }
+
+    analysis = analyzer.analyze_system(example_system)
+    print("System Analysis:")
+    print(json.dumps(analysis, indent=2, default=str))
+```
+
+### 作业2：设计高并发API系统
+
+```python
+# 高并发API系统设计
+class HighConcurrencyAPIDesigner:
+    """高并发API系统设计器"""
+
+    def __init__(self):
+        self.design_patterns = {}
+        self.optimization_techniques = {}
+        self.scaling_strategies = {}
+
+    def design_api_system(self, requirements: Dict) -> Dict:
+        """设计API系统"""
+        return {
+            "requirements": requirements,
+            "architecture": self._design_architecture(requirements),
+            "endpoints": self._design_endpoints(requirements),
+            "data_layer": self._design_data_layer(requirements),
+            "caching": self._design_caching_strategy(requirements),
+            "monitoring": self._design_monitoring(requirements),
+            "deployment": self._design_deployment(requirements)
+        }
+
+    def _design_architecture(self, requirements: Dict) -> Dict:
+        """设计架构"""
+        expected_qps = requirements.get("qps", 10000)
+
+        if expected_qps < 1000:
+            architecture_type = "Monolithic"
+        elif expected_qps < 10000:
+            architecture_type = "Microservices"
+        else:
+            architecture_type = "Event-Driven Microservices"
+
+        return {
+            "type": architecture_type,
+            "layers": [
+                "CDN",
+                "Load Balancer",
+                "API Gateway",
+                "Application Layer",
+                "Data Layer"
+            ],
+            "technologies": self._select_technologies(architecture_type)
+        }
+
+    def _design_endpoints(self, requirements: Dict) -> List[Dict]:
+        """设计API端点"""
+        endpoints = []
+
+        # 用户相关端点
+        endpoints.extend([
+            {
+                "path": "/api/v1/users",
+                "method": "GET",
+                "description": "获取用户列表",
+                "auth": "Required",
+                "rate_limit": "1000/hour",
+                "cache": "5 minutes"
+            },
+            {
+                "path": "/api/v1/users/{id}",
+                "method": "GET",
+                "description": "获取用户详情",
+                "auth": "Required",
+                "rate_limit": "5000/hour",
+                "cache": "10 minutes"
+            }
+        ])
+
+        # 数据相关端点
+        endpoints.extend([
+            {
+                "path": "/api/v1/data",
+                "method": "POST",
+                "description": "创建数据",
+                "auth": "Required",
+                "rate_limit": "10000/hour",
+                "validation": "Strict"
+            },
+            {
+                "path": "/api/v1/data/{id}",
+                "method": "GET",
+                "description": "获取数据",
+                "auth": "Required",
+                "rate_limit": "10000/hour",
+                "cache": "1 minute"
+            }
+        ])
+
+        return endpoints
+
+    def _design_data_layer(self, requirements: Dict) -> Dict:
+        """设计数据层"""
+        data_volume = requirements.get("data_volume", "medium")
+
+        return {
+            "primary_database": self._select_primary_database(data_volume),
+            "cache_database": "Redis Cluster",
+            "search_database": "Elasticsearch",
+            "backup_strategy": "Real-time replication + Daily snapshots",
+            "disaster_recovery": "Multi-region replication"
+        }
+
+    def _design_caching_strategy(self, requirements: Dict) -> Dict:
+        """设计缓存策略"""
+        return {
+            "levels": [
+                "Browser Cache",
+                "CDN Cache",
+                "Application Cache",
+                "Database Cache"
+            ],
+            "cache_invalidation": "TTL + Event-driven",
+            "cache_warming": "Preload hot data",
+            "cache_hit_ratio": "Target: 80%"
+        }
+
+    def _select_technologies(self, architecture_type: str) -> List[str]:
+        """选择技术栈"""
+        if architecture_type == "Monolithic":
+            return ["Spring Boot", "PostgreSQL", "Redis", "Docker"]
+        elif architecture_type == "Microservices":
+            return ["Spring Cloud", "PostgreSQL", "Redis", "Kafka", "Kubernetes"]
+        else:
+            return ["Spring Cloud", "PostgreSQL", "Redis", "Kafka", "Kubernetes", "Serverless"]
+
+    def _select_primary_database(self, data_volume: str) -> str:
+        """选择主数据库"""
+        if data_volume == "small":
+            return "PostgreSQL"
+        elif data_volume == "medium":
+            return "PostgreSQL with read replicas"
+        else:
+            return "PostgreSQL sharded cluster"
+
+# 使用示例
+def design_high_concurrency_api():
+    """设计高并发API系统"""
+    designer = HighConcurrencyAPIDesigner()
+
+    requirements = {
+        "qps": 50000,
+        "data_volume": "large",
+        "availability": "99.99%",
+        "latency": "<100ms",
+        "users": "1 million"
+    }
+
+    api_design = designer.design_api_system(requirements)
+    print("High-Concurrency API Design:")
+    print(json.dumps(api_design, indent=2, default=str))
+```
+
+## 本周总结
+
+### 核心知识点
+
+1. **大规模系统架构**
+   - 微服务架构设计
+   - 事件驱动架构
+   - 分布式系统模式
+   - 云原生架构
+
+2. **高并发系统设计**
+   - 并发级别和性能指标
+   - 扩展性策略
+   - 性能优化技术
+   - 监控和调优
+
+3. **分布式系统最佳实践**
+   - 分布式事务处理
+   - 一致性模型选择
+   - 故障容错机制
+   - 服务治理
+
+4. **真实案例分析**
+   - Netflix架构分析
+   - Amazon架构分析
+   - 大型社交网络架构
+   - 性能优化实践
+
+### 实践经验
+
+1. **架构设计原则**
+   - 简单性优于复杂性
+   - 考虑扩展性和可维护性
+   - 平衡一致性和可用性
+   - 架构演进比完美设计更重要
+
+2. **性能优化策略**
+   - 缓存是第一选择
+   - 数据库优化是关键
+   - 网络优化不可忽视
+   - 监控是优化的基础
+
+3. **分布式系统挑战**
+   - 网络分区和延迟
+   - 数据一致性保证
+   - 服务发现和治理
+   - 故障检测和恢复
+
+### 下周预告
+
+下周我们将学习**毕业项目实战**，包括：
+- 完整的系统设计项目
+- 综合运用所学知识
+- 项目展示和评估
+- 职业发展建议
+- 学习路径规划
+
+---
+
+**思考题：**
+1. 你所负责的系统最大的挑战是什么？如何应用本周学习的知识来解决？
+2. 在设计高并发系统时，你会优先考虑哪些因素？为什么？
+3. 分布式系统的一致性、可用性、分区容忍性如何平衡？
+
+**扩展阅读：**
+- 《Designing Data-Intensive Applications》
+- 《The Art of Scalability》
+- 《Building Microservices》
+- 《System Design Interview》

@@ -1,0 +1,1833 @@
+---
+title: "第7讲：流水线技术"
+description: "流水线设计原理、冒险处理、分支预测和性能优化"
+---
+
+# 第7讲：流水线技术
+
+## 概述
+
+本讲深入探讨流水线技术的核心原理，包括流水线的设计、各种类型的冒险及其处理方法、分支预测技术以及性能优化策略。流水线技术是现代处理器性能提升的关键技术。
+
+## 流水线基本原理
+
+### 流水线概念
+
+```python
+class Pipeline:
+    """流水线处理器模型"""
+
+    def __init__(self):
+        # 流水线阶段
+        self.stages = ['IF', 'ID', 'EX', 'MEM', 'WB']
+        self.pipeline_registers = {
+            'IF_ID': None,
+            'ID_EX': None,
+            'EX_MEM': None,
+            'MEM_WB': None
+        }
+
+        # 流水线状态
+        self.stage_instructions = {
+            'IF': None,
+            'ID': None,
+            'EX': None,
+            'MEM': None,
+            'WB': None
+        }
+
+        # 处理器状态
+        self.pc = 0x00400000
+        self.registers = [0] * 32
+        self.memory = {}
+
+        # 统计信息
+        self.cycle_count = 0
+        self.instructions_completed = 0
+        self.stall_cycles = 0
+        self.branch_mispredictions = 0
+
+    def pipeline_stage_descriptions(self):
+        """流水线阶段描述"""
+        descriptions = {
+            'IF': '取指令 (Instruction Fetch)',
+            'ID': '译码与寄存器读取 (Instruction Decode & Register Read)',
+            'EX': '执行与地址计算 (Execute & Address Calculation)',
+            'MEM': '存储器访问 (Memory Access)',
+            'WB': '写回 (Write Back)'
+        }
+
+        print("流水线阶段:")
+        print("===========")
+        for stage, desc in descriptions.items():
+            print(f"{stage}: {desc}")
+
+    def ideal_pipeline_performance(self, num_instructions):
+        """理想流水线性能计算"""
+        # 理想情况下，每周期完成一条指令
+        # 填充流水线需要4个周期（IF到WB）
+        # 之后每周期完成一条指令
+
+        fill_cycles = len(self.stages) - 1
+        execution_cycles = num_instructions
+        total_cycles = fill_cycles + execution_cycles
+
+        cpi = total_cycles / num_instructions
+
+        print(f"\n理想流水线性能:")
+        print(f"===============")
+        print(f"指令数量: {num_instructions}")
+        print(f"填充周期: {fill_cycles}")
+        print(f"执行周期: {execution_cycles}")
+        print(f"总周期数: {total_cycles}")
+        print(f"CPI: {cpi:.2f}")
+
+        return total_cycles, cpi
+
+    def pipeline_speedup(self, num_instructions, single_cycle_time, pipeline_cycle_time):
+        """流水线加速比计算"""
+        # 单周期处理器执行时间
+        single_cycle_total = num_instructions * single_cycle_time
+
+        # 流水线执行时间
+        fill_cycles = len(self.stages) - 1
+        pipeline_total = (fill_cycles + num_instructions) * pipeline_cycle_time
+
+        speedup = single_cycle_total / pipeline_total
+
+        print(f"\n流水线加速比分析:")
+        print(f"=================")
+        print(f"单周期周期时间: {single_cycle_time} ns")
+        print(f"流水线周期时间: {pipeline_cycle_time} ns")
+        print(f"单周期总时间: {single_cycle_total:.1f} ns")
+        print(f"流水线总时间: {pipeline_total:.1f} ns")
+        print(f"加速比: {speedup:.2f}x")
+
+        return speedup
+
+# 流水线基础演示
+def pipeline_basics_demo():
+    """流水线基础概念演示"""
+    print("流水线技术基础")
+    print("===============")
+
+    pipeline = Pipeline()
+    pipeline.pipeline_stage_descriptions()
+
+    # 性能分析
+    num_instructions = 100
+    pipeline.ideal_pipeline_performance(num_instructions)
+
+    # 加速比分析
+    # 假设单周期处理器需要5ns完成一条指令
+    # 流水线每个阶段需要1ns
+    speedup = pipeline.pipeline_speedup(num_instructions, 5.0, 1.0)
+
+    print(f"\n最大理论加速比: {len(pipeline.stages):.0f}x")
+    print(f"实际加速比: {speedup:.2f}x")
+```
+
+### 流水线寄存器设计
+
+```c
+#include <stdint.h>
+#include <stdbool.h>
+
+// 流水线寄存器结构
+typedef struct {
+    // IF/ID寄存器
+    struct {
+        uint32_t instruction;
+        uint32_t pc_plus4;
+    } if_id;
+
+    // ID/EX寄存器
+    struct {
+        uint32_t instruction;
+        uint32_t pc_plus4;
+        uint32_t reg_data1;
+        uint32_t reg_data2;
+        uint32_t sign_extend;
+        uint32_t rt;
+        uint32_t rd;
+        uint8_t reg_dst;
+        uint8_t alu_src;
+        uint8_t mem_to_reg;
+        uint8_t reg_write;
+        uint8_t mem_read;
+        uint8_t mem_write;
+        uint8_t branch;
+        uint8_t alu_op;
+    } id_ex;
+
+    // EX/MEM寄存器
+    struct {
+        uint32_t alu_result;
+        uint32_t alu_result_unbuffered;
+        uint32_t write_data;
+        uint32_t rt;
+        uint8_t reg_dst;
+        uint8_t mem_to_reg;
+        uint8_t reg_write;
+        uint8_t mem_read;
+        uint8_t mem_write;
+        uint8_t branch;
+        uint32_t branch_target;
+        bool zero_flag;
+    } ex_mem;
+
+    // MEM/WB寄存器
+    struct {
+        uint32_t alu_result;
+        uint32_t memory_data;
+        uint32_t write_register;
+        uint8_t reg_dst;
+        uint8_t mem_to_reg;
+        uint8_t reg_write;
+    } mem_wb;
+
+    // 控制信号
+    bool if_id_write;
+    bool pc_write;
+    bool if_id_flush;
+    bool id_ex_flush;
+
+} PipelineRegisters;
+
+// 初始化流水线寄存器
+void pipeline_registers_init(PipelineRegisters *pr) {
+    memset(pr, 0, sizeof(PipelineRegisters));
+
+    // 设置默认值
+    pr->if_id_write = true;
+    pr->pc_write = true;
+    pr->if_id_flush = false;
+    pr->id_ex_flush = false;
+}
+
+// 更新IF/ID寄存器
+void update_if_id(PipelineRegisters *pr, uint32_t instruction, uint32_t pc_plus4) {
+    if (pr->if_id_write && !pr->if_id_flush) {
+        pr->if_id.instruction = instruction;
+        pr->if_id.pc_plus4 = pc_plus4;
+    } else if (pr->if_id_flush) {
+        pr->if_id.instruction = 0;  // NOP指令
+        pr->if_id.pc_plus4 = 0;
+    }
+}
+
+// 更新ID/EX寄存器
+void update_id_ex(PipelineRegisters *pr, uint32_t instruction, uint32_t pc_plus4,
+                 uint32_t reg_data1, uint32_t reg_data2, uint32_t sign_extend,
+                 uint32_t rt, uint32_t rd, uint8_t reg_dst, uint8_t alu_src,
+                 uint8_t mem_to_reg, uint8_t reg_write, uint8_t mem_read,
+                 uint8_t mem_write, uint8_t branch, uint8_t alu_op) {
+    if (!pr->id_ex_flush) {
+        pr->id_ex.instruction = instruction;
+        pr->id_ex.pc_plus4 = pc_plus4;
+        pr->id_ex.reg_data1 = reg_data1;
+        pr->id_ex.reg_data2 = reg_data2;
+        pr->id_ex.sign_extend = sign_extend;
+        pr->id_ex.rt = rt;
+        pr->id_ex.rd = rd;
+        pr->id_ex.reg_dst = reg_dst;
+        pr->id_ex.alu_src = alu_src;
+        pr->id_ex.mem_to_reg = mem_to_reg;
+        pr->id_ex.reg_write = reg_write;
+        pr->id_ex.mem_read = mem_read;
+        pr->id_ex.mem_write = mem_write;
+        pr->id_ex.branch = branch;
+        pr->id_ex.alu_op = alu_op;
+    } else {
+        // 插入气泡
+        pr->id_ex.instruction = 0;
+        pr->id_ex.reg_write = 0;
+        pr->id_ex.mem_read = 0;
+        pr->id_ex.mem_write = 0;
+        pr->id_ex.branch = 0;
+    }
+}
+
+// 更新EX/MEM寄存器
+void update_ex_mem(PipelineRegisters *pr, uint32_t alu_result,
+                  uint32_t write_data, uint32_t rt, uint8_t reg_dst,
+                  uint8_t mem_to_reg, uint8_t reg_write, uint8_t mem_read,
+                  uint8_t mem_write, uint8_t branch, uint32_t branch_target,
+                  bool zero_flag) {
+    pr->ex_mem.alu_result = alu_result;
+    pr->ex_mem.alu_result_unbuffered = alu_result;
+    pr->ex_mem.write_data = write_data;
+    pr->ex_mem.rt = rt;
+    pr->ex_mem.reg_dst = reg_dst;
+    pr->ex_mem.mem_to_reg = mem_to_reg;
+    pr->ex_mem.reg_write = reg_write;
+    pr->ex_mem.mem_read = mem_read;
+    pr->ex_mem.mem_write = mem_write;
+    pr->ex_mem.branch = branch;
+    pr->ex_mem.branch_target = branch_target;
+    pr->ex_mem.zero_flag = zero_flag;
+}
+
+// 更新MEM/WB寄存器
+void update_mem_wb(PipelineRegisters *pr, uint32_t alu_result,
+                   uint32_t memory_data, uint32_t write_register,
+                   uint8_t reg_dst, uint8_t mem_to_reg, uint8_t reg_write) {
+    pr->mem_wb.alu_result = alu_result;
+    pr->mem_wb.memory_data = memory_data;
+    pr->mem_wb.write_register = write_register;
+    pr->mem_wb.reg_dst = reg_dst;
+    pr->mem_wb.mem_to_reg = mem_to_reg;
+    pr->mem_wb.reg_write = reg_write;
+}
+
+// 流水线寄存器演示
+void pipeline_registers_demo() {
+    printf("流水线寄存器设计\n");
+    printf("==================\n");
+
+    PipelineRegisters pr;
+    pipeline_registers_init(&pr);
+
+    printf("流水线寄存器初始化完成\n");
+    printf("IF/ID: 指令和PC+4\n");
+    printf("ID/EX: 控制信号和寄存器数据\n");
+    printf("EX/MEM: ALU结果和存储器控制信号\n");
+    printf("MEM/WB: 存储器数据和写回控制\n");
+
+    // 模拟数据传输
+    uint32_t instruction = 0x01094020;  // ADD $t0, $t0, $t1
+    uint32_t pc_plus4 = 0x00400004;
+
+    update_if_id(&pr, instruction, pc_plus4);
+    printf("\nIF/ID更新: 指令=0x%08X, PC+4=0x%08X\n",
+           pr.if_id.instruction, pr.if_id.pc_plus4);
+}
+```
+
+## 流水线冒险检测与处理
+
+### 数据冒险
+
+```python
+class DataHazardDetector:
+    """数据冒险检测器"""
+
+    def __init__(self):
+        self.pipeline_state = {
+            'IF': {'instruction': 0, 'rd': 0, 'rt': 0, 'rs': 0},
+            'ID': {'instruction': 0, 'rd': 0, 'rt': 0, 'rs': 0},
+            'EX': {'instruction': 0, 'rd': 0, 'rt': 0, 'rs': 0},
+            'MEM': {'instruction': 0, 'rd': 0, 'rt': 0, 'rs': 0},
+            'WB': {'instruction': 0, 'rd': 0, 'rt': 0, 'rs': 0}
+        }
+
+    def parse_instruction_fields(self, instruction):
+        """解析指令字段"""
+        opcode = (instruction >> 26) & 0x3F
+        rs = (instruction >> 21) & 0x1F
+        rt = (instruction >> 16) & 0x1F
+        rd = (instruction >> 11) & 0x1F
+
+        return {'opcode': opcode, 'rs': rs, 'rt': rt, 'rd': rd}
+
+    def detect_hazards(self, current_instruction):
+        """检测数据冒险"""
+        fields = self.parse_instruction_fields(current_instruction)
+        hazards = []
+
+        # 检查与EX阶段的数据冒险
+        ex_instruction = self.pipeline_state['EX']['instruction']
+        if ex_instruction != 0:
+            ex_fields = self.parse_instruction_fields(ex_instruction)
+            ex_rd = ex_fields['rd']
+
+            # EX阶段的写寄存器与当前指令的读寄存器冲突
+            if ex_rd != 0:  # $0寄存器不能写入
+                if ex_rd == fields['rs'] or ex_rd == fields['rt']:
+                    hazards.append({
+                        'type': 'RAW',
+                        'source_stage': 'EX',
+                        'target_stage': 'ID',
+                        'register': ex_rd,
+                        'stall_cycles': 1
+                    })
+
+        # 检查与MEM阶段的数据冒险
+        mem_instruction = self.pipeline_state['MEM']['instruction']
+        if mem_instruction != 0:
+            mem_fields = self.parse_instruction_fields(mem_instruction)
+            mem_rd = mem_fields['rd']
+
+            if mem_rd != 0:
+                if mem_rd == fields['rs'] or mem_rd == fields['rt']:
+                    hazards.append({
+                        'type': 'RAW',
+                        'source_stage': 'MEM',
+                        'target_stage': 'ID',
+                        'register': mem_rd,
+                        'stall_cycles': 2
+                    })
+
+        return hazards
+
+    def forwarding_needed(self, source_stage, target_register):
+        """检查是否需要前递"""
+        # 如果目标寄存器与源阶段的写寄存器相同，需要前递
+        return target_register != 0  # $0寄存器不需要前递
+
+    def resolve_hazards_with_forwarding(self, hazards):
+        """使用前递解决数据冒险"""
+        forwarding_paths = []
+
+        for hazard in hazards:
+            if hazard['type'] == 'RAW':
+                source_stage = hazard['source_stage']
+                target_register = hazard['register']
+
+                if self.forwarding_needed(source_stage, target_register):
+                    if source_stage == 'EX':
+                        # 从EX阶段前递到ID阶段
+                        forwarding_paths.append({
+                            'from': 'EX_ALU_RESULT',
+                            'to': 'ID_OPERAND1',
+                            'condition': hazard['register']
+                        })
+                    elif source_stage == 'MEM':
+                        # 从MEM阶段前递到ID阶段
+                        forwarding_paths.append({
+                            'from': 'MEM_ALU_RESULT',
+                            'to': 'ID_OPERAND1',
+                            'condition': hazard['register']
+                        })
+
+        return forwarding_paths
+
+# 数据冒险演示
+def data_hazard_demo():
+    """数据冒险检测和处理演示"""
+    print("数据冒险检测与处理")
+    print("====================")
+
+    detector = DataHazardDetector()
+
+    # 设置流水线状态
+    detector.pipeline_state['EX']['instruction'] = 0x01094020  # ADD $t0, $t0, $t1
+    detector.pipeline_state['MEM']['instruction'] = 0x212A0005  # ADDI $t2, $t1, 5
+
+    # 当前指令
+    current_instruction = 0x012A4022  # SUB $t0, $t1, $t2
+
+    print("流水线状态:")
+    print("EX阶段: ADD $t0, $t0, $t1")
+    print("MEM阶段: ADDI $t2, $t1, 5")
+    print("当前指令: SUB $t0, $t1, $t2")
+
+    # 检测冒险
+    hazards = detector.detect_hazards(current_instruction)
+
+    print(f"\n检测到的数据冒险: {len(hazards)}")
+    for i, hazard in enumerate(hazards):
+        print(f"冒险 {i+1}:")
+        print(f"  类型: {hazard['type']}")
+        print(f"  源阶段: {hazard['source_stage']}")
+        print(f"  目标阶段: {hazard['target_stage']}")
+        print(f"  寄存器: ${hazard['register']}")
+        print(f"  停顿周期: {hazard['stall_cycles']}")
+
+    # 使用前递解决
+    forwarding_paths = detector.resolve_hazards_with_forwarding(hazards)
+
+    print(f"\n前递路径: {len(forwarding_paths)}")
+    for i, path in enumerate(forwarding_paths):
+        print(f"前递 {i+1}: {path['from']} -> {path['to']} (寄存器 ${path['condition']})")
+```
+
+### 控制冒险
+
+```python
+class ControlHazardHandler:
+    """控制冒险处理器"""
+
+    def __init__(self):
+        self.branch_predictor = 'always_not_taken'  # 默认预测器
+        self.prediction_accuracy = 0
+        self.total_branches = 0
+        self.correct_predictions = 0
+
+    def branch_prediction_strategies(self):
+        """分支预测策略"""
+        strategies = {
+            'always_not_taken': {
+                'description': '总是预测不跳转',
+                'accuracy': '约50%',
+                'overhead': '低'
+            },
+            'always_taken': {
+                'description': '总是预测跳转',
+                'accuracy': '约50%',
+                'overhead': '低'
+            },
+            'backward_taken': {
+                'description': '向后分支预测跳转',
+                'accuracy': '约60-70%',
+                'overhead': '低'
+            },
+            'bimodal': {
+                'description': '双模预测器',
+                'accuracy': '约80-90%',
+                'overhead': '中等'
+            },
+            'tournament': {
+                'description': '锦标赛预测器',
+                'accuracy': '约90-95%',
+                'overhead': '高'
+            }
+        }
+
+        print("分支预测策略:")
+        print("==============")
+        for name, info in strategies.items():
+            print(f"{name:15s}: {info['description']}")
+            print(f"{'':15s}  准确率: {info['accuracy']}")
+            print(f"{'':15s}  开销: {info['overhead']}")
+            print()
+
+    def handle_branch(self, instruction, pc):
+        """处理分支指令"""
+        fields = self._parse_branch_instruction(instruction)
+        branch_target = self._calculate_branch_target(pc, fields['offset'])
+
+        # 预测分支方向
+        predicted_taken = self._predict_branch(instruction, pc)
+
+        # 更新统计信息
+        self.total_branches += 1
+
+        # 实际分支结果（这里简化处理）
+        actual_taken = fields['rs'] != fields['rt']  # 假设条件为rs != rt
+
+        # 检查预测准确性
+        if predicted_taken == actual_taken:
+            self.correct_predictions += 1
+
+        # 计算分支延迟槽
+        delay_slot_cycles = self._calculate_delay_slots(predicted_taken, actual_taken)
+
+        return {
+            'target': branch_target,
+            'predicted_taken': predicted_taken,
+            'actual_taken': actual_taken,
+            'delay_cycles': delay_slot_cycles,
+            'mispredicted': predicted_taken != actual_taken
+        }
+
+    def _parse_branch_instruction(self, instruction):
+        """解析分支指令"""
+        opcode = (instruction >> 26) & 0x3F
+        rs = (instruction >> 21) & 0x1F
+        rt = (instruction >> 16) & 0x1F
+        offset = instruction & 0xFFFF
+
+        return {'opcode': opcode, 'rs': rs, 'rt': rt, 'offset': offset}
+
+    def _calculate_branch_target(self, pc, offset):
+        """计算分支目标地址"""
+        return pc + ((int16_t)offset << 2)
+
+    def _predict_branch(self, instruction, pc):
+        """分支预测"""
+        if self.branch_predictor == 'always_not_taken':
+            return False
+        elif self.branch_predictor == 'always_taken':
+            return True
+        elif self.branch_predictor == 'backward_taken':
+            offset = instruction & 0xFFFF
+            return (int16_t)offset < 0  # 负偏移表示向后分支
+        else:
+            return False  # 默认不跳转
+
+    def _calculate_delay_slots(self, predicted_taken, actual_taken):
+        """计算分支延迟槽周期"""
+        if predicted_taken == actual_taken:
+            return 1  # 正确预测，1个延迟槽
+        else:
+            return 3  # 预测错误，需要3个周期恢复
+
+    def get_prediction_accuracy(self):
+        """获取预测准确率"""
+        if self.total_branches == 0:
+            return 0.0
+        return self.correct_predictions / self.total_branches
+
+# 控制冒险演示
+def control_hazard_demo():
+    """控制冒险处理演示"""
+    print("控制冒险与分支预测")
+    print("===================")
+
+    handler = ControlHazardHandler()
+    handler.branch_prediction_strategies()
+
+    # 测试不同预测策略
+    strategies = ['always_not_taken', 'always_taken', 'backward_taken']
+    test_instructions = [
+        0x11000001,  # BEQ $0, $0, 1 (向前)
+        0x1100FFFE,  # BEQ $0, $0, -2 (向后)
+        0x11000002,  # BEQ $0, $0, 2 (向前)
+    ]
+
+    for strategy in strategies:
+        print(f"\n测试策略: {strategy}")
+        handler.branch_predictor = strategy
+        handler.total_branches = 0
+        handler.correct_predictions = 0
+
+        for i, instruction in enumerate(test_instructions):
+            pc = 0x00400000 + i * 4
+            result = handler.handle_branch(instruction, pc)
+
+            print(f"  指令 {i+1}: 预测={result['predicted_taken']}, "
+                  f"实际={result['actual_taken']}, "
+                  f"延迟={result['delay_cycles']}周期")
+
+        accuracy = handler.get_prediction_accuracy()
+        print(f"  准确率: {accuracy:.1%}")
+```
+
+### 结构冒险
+
+```c
+#include <stdbool.h>
+#include <stdint.h>
+
+// 资源冲突检测
+typedef struct {
+    bool instruction_memory_busy;
+    bool data_memory_busy;
+    bool alu_busy;
+    bool register_file_write_busy;
+    bool pc_busy;
+} ResourceStatus;
+
+// 结构冒险检测器
+typedef struct {
+    ResourceStatus current_status;
+    ResourceStatus next_status;
+    uint32_t busy_until[5];  // 每个资源何时可用
+} StructuralHazardDetector;
+
+// 初始化资源状态
+void init_resource_status(ResourceStatus *status) {
+    status->instruction_memory_busy = false;
+    status->data_memory_busy = false;
+    status->alu_busy = false;
+    status->register_file_write_busy = false;
+    status->pc_busy = false;
+}
+
+// 检测结构冒险
+bool detect_structural_hazard(StructuralHazardDetector *detector,
+                              const char *stage, uint32_t current_cycle) {
+    bool hazard = false;
+
+    if (strcmp(stage, "IF") == 0) {
+        // IF阶段需要访问指令存储器
+        if (detector->current_status.instruction_memory_busy) {
+            printf("结构冒险: IF阶段指令存储器冲突\n");
+            hazard = true;
+        }
+        if (detector->current_status.pc_busy) {
+            printf("结构冒险: IF阶段PC冲突\n");
+            hazard = true;
+        }
+    } else if (strcmp(stage, "MEM") == 0) {
+        // MEM阶段可能需要访问数据存储器
+        if (detector->current_status.data_memory_busy) {
+            printf("结构冒险: MEM阶段数据存储器冲突\n");
+            hazard = true;
+        }
+    } else if (strcmp(stage, "EX") == 0) {
+        // EX阶段需要ALU
+        if (detector->current_status.alu_busy) {
+            printf("结构冒险: EX阶段ALU冲突\n");
+            hazard = true;
+        }
+    } else if (strcmp(stage, "WB") == 0) {
+        // WB阶段需要写入寄存器
+        if (detector->current_status.register_file_write_busy) {
+            printf("结构冒险: WB阶段寄存器写入冲突\n");
+            hazard = true;
+        }
+    }
+
+    return hazard;
+}
+
+// 资源分配
+void allocate_resources(StructuralHazardDetector *detector,
+                       const char *stage, uint32_t current_cycle) {
+    if (strcmp(stage, "IF") == 0) {
+        detector->next_status.instruction_memory_busy = true;
+        detector->next_status.pc_busy = true;
+        detector->busy_until[0] = current_cycle + 1;  // 1个周期
+    } else if (strcmp(stage, "MEM") == 0) {
+        detector->next_status.data_memory_busy = true;
+        detector->busy_until[1] = current_cycle + 1;
+    } else if (strcmp(stage, "EX") == 0) {
+        detector->next_status.alu_busy = true;
+        detector->busy_until[2] = current_cycle + 1;
+    } else if (strcmp(stage, "WB") == 0) {
+        detector->next_status.register_file_write_busy = true;
+        detector->busy_until[3] = current_cycle + 1;
+    }
+}
+
+// 释放资源
+void release_resources(StructuralHazardDetector *detector, uint32_t current_cycle) {
+    // 检查哪些资源应该释放
+    if (detector->busy_until[0] <= current_cycle) {
+        detector->next_status.instruction_memory_busy = false;
+        detector->next_status.pc_busy = false;
+    }
+    if (detector->busy_until[1] <= current_cycle) {
+        detector->next_status.data_memory_busy = false;
+    }
+    if (detector->busy_until[2] <= current_cycle) {
+        detector->next_status.alu_busy = false;
+    }
+    if (detector->busy_until[3] <= current_cycle) {
+        detector->next_status.register_file_write_busy = false;
+    }
+}
+
+// 结构冒险演示
+void structural_hazard_demo() {
+    printf("结构冒险检测与处理")
+    print("=====================");
+
+    StructuralHazardDetector detector;
+    init_resource_status(&detector.current_status);
+    init_resource_status(&detector.next_status);
+
+    // 模拟多个指令同时需要相同资源
+    uint32_t current_cycle = 0;
+
+    printf("周期 %d:\n", current_cycle);
+    printf("  IF阶段请求指令存储器\n");
+
+    if (detect_structural_hazard(&detector, "IF", current_cycle)) {
+        printf("  -> 需要停顿\n");
+    } else {
+        allocate_resources(&detector, "IF", current_cycle);
+        printf("  -> 资源分配成功\n");
+    }
+
+    current_cycle++;
+    printf("\n周期 %d:\n", current_cycle);
+    release_resources(&detector, current_cycle);
+
+    // 更新当前状态
+    detector.current_status = detector.next_status;
+    printf("  资源释放: IF阶段完成\n");
+
+    printf("  MEM阶段请求数据存储器\n");
+    if (detect_structural_hazard(&detector, "MEM", current_cycle)) {
+        printf("  -> 需要停顿\n");
+    } else {
+        allocate_resources(&detector, "MEM", current_cycle);
+        printf("  -> 资源分配成功\n");
+    }
+}
+```
+
+## 流水线性能优化
+
+### 分支预测优化
+
+```python
+class AdvancedBranchPredictor:
+    """高级分支预测器"""
+
+    def __init__(self, predictor_type='bimodal'):
+        self.predictor_type = predictor_type
+        self.history = {}
+        self.global_history = 0
+        self.local_history = {}
+        self.choice_predictor = {}
+        self.accuracy_stats = {'total': 0, 'correct': 0}
+
+    def bimodal_predictor(self, pc):
+        """双模预测器"""
+        # 使用PC的低位作为索引
+        index = pc & 0x3FF  # 1024个表项
+        if index not in self.history:
+            self.history[index] = 2  # 初始化为弱跳转
+
+        # 2位饱和计数器
+        counter = self.history[index]
+        prediction = counter >= 2  # >=2预测跳转
+
+        return prediction, counter
+
+    def gshare_predictor(self, pc):
+        """GShare预测器"""
+        # 结合PC和全局历史
+        history_bits = 10
+        index = (pc ^ self.global_history) & ((1 << history_bits) - 1)
+
+        if index not in self.history:
+            self.history[index] = 2
+
+        counter = self.history[index]
+        prediction = counter >= 2
+
+        return prediction, counter
+
+    def tournament_predictor(self, pc):
+        """锦标赛预测器"""
+        # 局部预测器
+        local_index = pc & 0xFF
+        if local_index not in self.local_history:
+            self.local_history[local_index] = 2
+
+        # 全局预测器
+        global_index = self.global_history & 0x3FF
+        if global_index not in self.history:
+            self.history[global_index] = 2
+
+        # 选择预测器
+        choice_index = pc & 0x1FF
+        if choice_index not in self.choice_predictor:
+            self.choice_predictor[choice_index] = 2
+
+        choice_counter = self.choice_predictor[choice_index]
+
+        if choice_counter >= 2:
+            # 选择局部预测器
+            prediction = self.local_history[local_index] >= 2
+            selected_predictor = 'local'
+        else:
+            # 选择全局预测器
+            prediction = self.history[global_index] >= 2
+            selected_predictor = 'global'
+
+        return prediction, selected_predictor
+
+    def update_predictor(self, pc, actual_taken):
+        """更新预测器"""
+        self.accuracy_stats['total'] += 1
+
+        if self.predictor_type == 'bimodal':
+            prediction, counter = self.bimodal_predictor(pc)
+            index = pc & 0x3FF
+
+            if prediction == actual_taken:
+                self.accuracy_stats['correct'] += 1
+
+            # 更新计数器
+            if actual_taken:
+                self.history[index] = min(3, self.history[index] + 1)
+            else:
+                self.history[index] = max(0, self.history[index] - 1)
+
+        elif self.predictor_type == 'gshare':
+            prediction, counter = self.gshare_predictor(pc)
+            history_bits = 10
+            index = (pc ^ self.global_history) & ((1 << history_bits) - 1)
+
+            if prediction == actual_taken:
+                self.accuracy_stats['correct'] += 1
+
+            if actual_taken:
+                self.history[index] = min(3, self.history[index] + 1)
+            else:
+                self.history[index] = max(0, self.history[index] - 1)
+
+            # 更新全局历史
+            self.global_history = (self.global_history << 1) | actual_taken
+            self.global_history &= 0x3FF  # 保持10位
+
+        elif self.predictor_type == 'tournament':
+            prediction, selected = self.tournament_predictor(pc)
+
+            if prediction == actual_taken:
+                self.accuracy_stats['correct'] += 1
+
+            # 更新两个预测器
+            local_index = pc & 0xFF
+            global_index = self.global_history & 0x3FF
+            choice_index = pc & 0x1FF
+
+            # 更新局部预测器
+            if actual_taken:
+                self.local_history[local_index] = min(3, self.local_history[local_index] + 1)
+            else:
+                self.local_history[local_index] = max(0, self.local_history[local_index] - 1)
+
+            # 更新全局预测器
+            if actual_taken:
+                self.history[global_index] = min(3, self.history[global_index] + 1)
+            else:
+                self.history[global_index] = max(0, self.history[global_index] - 1)
+
+            # 更新选择预测器
+            local_correct = (self.local_history[local_index] >= 2) == actual_taken
+            global_correct = (self.history[global_index] >= 2) == actual_taken
+
+            if local_correct != global_correct:
+                if local_correct:
+                    # 局部预测器正确，增加选择计数器
+                    self.choice_predictor[choice_index] = min(3, self.choice_predictor[choice_index] + 1)
+                else:
+                    # 全局预测器正确，减少选择计数器
+                    self.choice_predictor[choice_index] = max(0, self.choice_predictor[choice_index] - 1)
+
+            self.global_history = (self.global_history << 1) | actual_taken
+            self.global_history &= 0x3FF
+
+    def get_accuracy(self):
+        """获取预测准确率"""
+        if self.accuracy_stats['total'] == 0:
+            return 0.0
+        return self.accuracy_stats['correct'] / self.accuracy_stats['total']
+
+# 分支预测优化演示
+def branch_prediction_optimization_demo():
+    """分支预测优化演示"""
+    print("高级分支预测技术")
+    print("=================")
+
+    predictors = ['bimodal', 'gshare', 'tournament']
+
+    # 测试分支序列
+    test_branches = [
+        (0x00400000, True),   (0x00400004, False),
+        (0x00400008, True),   (0x0040000C, True),
+        (0x00400010, False),  (0x00400014, True),
+        (0x00400018, False),  (0x0040001C, False),
+    ]
+
+    for predictor_type in predictors:
+        print(f"\n{predictor_type.upper()} 预测器测试:")
+        print("-" * 30)
+
+        predictor = AdvancedBranchPredictor(predictor_type)
+
+        for pc, actual in test_branches:
+            if predictor_type == 'bimodal':
+                prediction, _ = predictor.bimodal_predictor(pc)
+            elif predictor_type == 'gshare':
+                prediction, _ = predictor.gshare_predictor(pc)
+            else:
+                prediction, _ = predictor.tournament_predictor(pc)
+
+            predictor.update_predictor(pc, actual)
+
+            result = "✓" if prediction == actual else "✗"
+            print(f"  PC: 0x{pc:08X}, 预测: {prediction}, 实际: {actual} {result}")
+
+        accuracy = predictor.get_accuracy()
+        print(f"  准确率: {accuracy:.1%}")
+```
+
+### 超标量与乱序执行
+
+```c
+#include <stdint.h>
+#include <stdbool.h>
+
+#define ISSUE_WIDTH 4
+#define ROB_SIZE 16
+#define RESERVATION_STATIONS 8
+
+// 重排序缓冲区表项
+typedef struct {
+    uint32_t instruction;
+    uint32_t pc;
+    bool ready;
+    bool completed;
+    uint32_t result;
+    uint32_t dest_register;
+    uint8_t state;  // 0=发射, 1=执行, 2=完成
+} ROBEntry;
+
+// 保留站表项
+typedef struct {
+    uint32_t instruction;
+    bool busy;
+    uint32_t vj, vk;      // 操作数值
+    bool qj, qk;          // 操作数是否就绪
+    uint32_t dest;
+    uint32_t address;
+    uint8_t op;
+} ReservationStation;
+
+// 寄存器重命名表
+typedef struct {
+    bool valid;
+    uint32_t rob_index;  // 指向ROB表项
+} RegisterRenameEntry;
+
+// 超标量处理器
+typedef struct {
+    // 重排序缓冲区
+    ROBEntry rob[ROB_SIZE];
+    uint32_t rob_head;
+    uint32_t rob_tail;
+
+    // 保留站
+    ReservationStation rs[RESERVATION_STATIONS];
+
+    // 寄存器重命名
+    RegisterRenameEntry rename_table[32];
+    uint32_t physical_registers[64];  // 物理寄存器文件
+    bool physical_ready[64];
+
+    // 发射队列
+    uint32_t issue_queue[ISSUE_WIDTH];
+    uint32_t issue_count;
+
+    // 执行单元
+    bool alu_busy[4];
+    uint32_t alu_finish_cycle[4];
+
+    // 统计信息
+    uint32_t instructions_issued;
+    uint32_t instructions_completed;
+    uint32_t cycles;
+} SuperscalarProcessor;
+
+// 初始化超标量处理器
+void superscalar_init(SuperscalarProcessor *proc) {
+    memset(proc, 0, sizeof(SuperscalarProcessor));
+
+    for (int i = 0; i < 32; i++) {
+        proc->rename_table[i].valid = true;
+        proc->rename_table[i].rob_index = i;  // 初始时逻辑寄存器对应物理寄存器
+    }
+
+    proc->rob_head = 0;
+    proc->rob_tail = 0;
+}
+
+// 指令发射
+bool issue_instruction(SuperscalarProcessor *proc, uint32_t instruction) {
+    if (proc->issue_count >= ISSUE_WIDTH) {
+        return false;  // 发射队列满
+    }
+
+    // 分配ROB表项
+    if ((proc->rob_tail + 1) % ROB_SIZE == proc->rob_head) {
+        return false;  // ROB满
+    }
+
+    uint32_t rob_index = proc->rob_tail;
+    proc->rob_tail = (proc->rob_tail + 1) % ROB_SIZE;
+
+    // 设置ROB表项
+    proc->rob[rob_index].instruction = instruction;
+    proc->rob[rob_index].ready = false;
+    proc->rob[rob_index].completed = false;
+    proc->rob[rob_index].state = 0;
+
+    // 解析指令获取目标寄存器
+    uint32_t rd = (instruction >> 11) & 0x1F;
+    proc->rob[rob_index].dest_register = rd;
+
+    // 寄存器重命名
+    if (rd != 0) {  // $0寄存器不重命名
+        proc->rename_table[rd].valid = false;
+        proc->rename_table[rd].rob_index = rob_index;
+    }
+
+    // 加入发射队列
+    proc->issue_queue[proc->issue_count++] = instruction;
+    proc->instructions_issued++;
+
+    return true;
+}
+
+// 指令执行
+void execute_instructions(SuperscalarProcessor *proc, uint32_t current_cycle) {
+    // 检查发射队列中的指令
+    for (int i = 0; i < proc->issue_count; i++) {
+        uint32_t instruction = proc->issue_queue[i];
+
+        // 检查操作数是否就绪
+        uint32_t rs = (instruction >> 21) & 0x1F;
+        uint32_t rt = (instruction >> 16) & 0x1F;
+        bool operands_ready = true;
+
+        if (rs != 0 && !proc->rename_table[rs].valid) {
+            operands_ready = false;
+        }
+        if (rt != 0 && !proc->rename_table[rt].valid) {
+            operands_ready = false;
+        }
+
+        if (operands_ready) {
+            // 查找空闲的ALU
+            for (int alu = 0; alu < 4; alu++) {
+                if (!proc->alu_busy[alu]) {
+                    proc->alu_busy[alu] = true;
+                    proc->alu_finish_cycle[alu] = current_cycle + 1;
+
+                    // 更新ROB状态
+                    for (int j = proc->rob_head; j != proc->rob_tail; j = (j + 1) % ROB_SIZE) {
+                        if (proc->rob[j].instruction == instruction) {
+                            proc->rob[j].state = 1;  // 执行中
+                            break;
+                        }
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+
+    // 检查ALU是否完成执行
+    for (int alu = 0; alu < 4; alu++) {
+        if (proc->alu_busy[alu] && proc->alu_finish_cycle[alu] <= current_cycle) {
+            proc->alu_busy[alu] = false;
+
+            // 更新ROB状态
+            for (int j = proc->rob_head; j != proc->rob_tail; j = (j + 1) % ROB_SIZE) {
+                if (proc->rob[j].state == 1) {
+                    proc->rob[j].state = 2;  // 完成
+                    proc->rob[j].ready = true;
+                    proc->rob[j].completed = true;
+
+                    // 计算结果（简化）
+                    uint32_t opcode = (proc->rob[j].instruction >> 26) & 0x3F;
+                    if (opcode == 0x08) {  // ADDI
+                        uint32_t immediate = proc->rob[j].instruction & 0xFFFF;
+                        proc->rob[j].result = 10 + immediate;  // 简化计算
+                    }
+
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// 退休指令
+void retire_instructions(SuperscalarProcessor *proc) {
+    while (proc->rob_head != proc->rob_tail && proc->rob[proc->rob_head].completed) {
+        ROBEntry *entry = &proc->rob[proc->rob_head];
+
+        // 写回结果
+        uint32_t rd = entry->dest_register;
+        if (rd != 0) {
+            uint32_t physical_reg = rd;  // 简化处理
+            proc->physical_registers[physical_reg] = entry->result;
+            proc->physical_ready[physical_reg] = true;
+
+            // 更新重命名表
+            proc->rename_table[rd].valid = true;
+        }
+
+        proc->instructions_completed++;
+        proc->rob_head = (proc->rob_head + 1) % ROB_SIZE;
+    }
+}
+
+// 超标量处理器演示
+void superscalar_demo() {
+    printf("超标量处理器演示")
+    printf("==================")
+
+    SuperscalarProcessor proc;
+    superscalar_init(&proc);
+
+    // 测试指令序列
+    uint32_t test_program[] = {
+        0x2008000A,  // ADDI $t0, $zero, 10
+        0x20090014,  // ADDI $t1, $zero, 20
+        0x01094020,  // ADD $t0, $t0, $t1
+        0x212A0005,  // ADDI $t2, $t1, 5
+        0x014A4022,  // SUB $t0, $t2, $t2
+    };
+
+    printf("\n执行超标量程序:")
+    for (uint32_t cycle = 0; cycle < 20; cycle++) {
+        printf("\n周期 %d:", cycle);
+
+        // 发射指令
+        if (proc.issue_count == 0 && cycle < sizeof(test_program) / sizeof(test_program[0])) {
+            for (int i = 0; i < ISSUE_WIDTH && cycle + i < sizeof(test_program) / sizeof(test_program[0]); i++) {
+                if (issue_instruction(&proc, test_program[cycle + i])) {
+                    printf(" 发射指令%d", cycle + i);
+                }
+            }
+        }
+
+        // 执行指令
+        execute_instructions(&proc, cycle);
+
+        // 退休指令
+        retire_instructions(&proc);
+
+        proc.cycles++;
+
+        // 每隔几个周期打印状态
+        if (cycle % 5 == 0) {
+            printf("\n  发射: %d, 完成: %d, CPI: %.2f",
+                   proc.instructions_issued,
+                   proc.instructions_completed,
+                   proc.instructions_completed > 0 ? (double)proc.cycles / proc.instructions_completed : 0.0);
+        }
+    }
+
+    printf("\n\n最终统计:")
+    printf("  发射指令数: %d", proc.instructions_issued);
+    printf("  完成指令数: %d", proc.instructions_completed);
+    printf("  总周期数: %d", proc.cycles);
+    printf("  CPI: %.2f", proc.instructions_completed > 0 ? (double)proc.cycles / proc.instructions_completed : 0.0);
+    printf("  IPC: %.2f", proc.cycles > 0 ? (double)proc.instructions_completed / proc.cycles : 0.0);
+}
+```
+
+## 实验项目：流水线模拟器
+
+### 项目概述
+
+创建一个完整的流水线模拟器，能够：
+1. 模拟5级流水线
+2. 检测和处理各种冒险
+3. 实现分支预测
+4. 提供详细的性能统计
+
+### 完整实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#define PIPELINE_STAGES 5
+#define INSTRUCTION_MEMORY_SIZE 1024
+#define DATA_MEMORY_SIZE 1024
+#define NUM_REGISTERS 32
+
+// 流水线阶段
+typedef enum {
+    IF_STAGE,
+    ID_STAGE,
+    EX_STAGE,
+    MEM_STAGE,
+    WB_STAGE
+} PipelineStage;
+
+// 流水线寄存器内容
+typedef struct {
+    uint32_t instruction;
+    uint32_t pc;
+    uint32_t pc_plus4;
+    uint32_t reg_data1;
+    uint32_t reg_data2;
+    uint32_t sign_extend;
+    uint32_t alu_result;
+    uint32_t memory_data;
+    uint32_t write_data;
+    uint32_t write_register;
+    bool reg_write;
+    bool mem_read;
+    bool mem_write;
+    bool mem_to_reg;
+    bool branch;
+    bool zero_flag;
+    bool valid;
+} PipelineRegister;
+
+// 分支预测器
+typedef struct {
+    int total_branches;
+    int correct_predictions;
+    char predictor_type[20];  // "always_not_taken", "always_taken", "bimodal"
+    int bimodal_table[1024];  // 1024个表项，每项2位
+} BranchPredictor;
+
+// 统计信息
+typedef struct {
+    int total_cycles;
+    int instructions_completed;
+    int branch_instructions;
+    int branch_mispredictions;
+    int data_hazards;
+    int control_hazards;
+    int structural_hazards;
+    int stall_cycles;
+    int bubble_cycles;
+    double cpi;
+    double ipc;
+} PipelineStats;
+
+// 流水线处理器
+typedef struct {
+    // 流水线寄存器
+    PipelineRegister pipeline[PIPELINE_STAGES];
+
+    // 寄存器文件
+    uint32_t registers[NUM_REGISTERS];
+
+    // 存储器
+    uint32_t instruction_memory[INSTRUCTION_MEMORY_SIZE];
+    uint32_t data_memory[DATA_MEMORY_SIZE];
+
+    // 程序计数器
+    uint32_t pc;
+
+    // 控制信号
+    bool pc_write;
+    bool if_id_write;
+    bool if_id_flush;
+    bool id_ex_flush;
+
+    // 分支预测器
+    BranchPredictor predictor;
+
+    // 统计信息
+    PipelineStats stats;
+
+    // 运行状态
+    bool running;
+    bool verbose;
+} PipelineProcessor;
+
+// 初始化处理器
+void pipeline_init(PipelineProcessor *proc, const char *predictor_type) {
+    memset(proc, 0, sizeof(PipelineProcessor));
+
+    // 初始化寄存器
+    for (int i = 0; i < NUM_REGISTERS; i++) {
+        proc->registers[i] = 0;
+    }
+
+    // 初始化存储器
+    for (int i = 0; i < DATA_MEMORY_SIZE; i++) {
+        proc->data_memory[i] = i * 4;
+    }
+
+    // 初始化PC
+    proc->pc = 0x00400000;
+
+    // 初始化控制信号
+    proc->pc_write = true;
+    proc->if_id_write = true;
+    proc->if_id_flush = false;
+    proc->id_ex_flush = false;
+
+    // 初始化分支预测器
+    strcpy(proc->predictor.predictor_type, predictor_type);
+    for (int i = 0; i < 1024; i++) {
+        proc->predictor.bimodal_table[i] = 1;  // 弱不跳转
+    }
+
+    // 初始化流水线寄存器
+    for (int i = 0; i < PIPELINE_STAGES; i++) {
+        proc->pipeline[i].valid = false;
+    }
+
+    proc->running = true;
+    proc->verbose = false;
+}
+
+// 设置详细模式
+void set_verbose(PipelineProcessor *proc, bool verbose) {
+    proc->verbose = verbose;
+}
+
+// 加载程序
+int load_program(PipelineProcessor *proc, uint32_t *program, int size) {
+    if (size > INSTRUCTION_MEMORY_SIZE) {
+        printf("错误：程序太大\n");
+        return -1;
+    }
+
+    memcpy(proc->instruction_memory, program, size * sizeof(uint32_t));
+    return 0;
+}
+
+// 分支预测
+bool predict_branch(PipelineProcessor *proc, uint32_t pc) {
+    if (strcmp(proc->predictor.predictor_type, "always_not_taken") == 0) {
+        return false;
+    } else if (strcmp(proc->predictor.predictor_type, "always_taken") == 0) {
+        return true;
+    } else if (strcmp(proc->predictor.predictor_type, "bimodal") == 0) {
+        int index = (pc >> 2) & 0x3FF;  // 使用PC的低10位
+        int counter = proc->predictor.bimodal_table[index];
+        return counter >= 2;
+    }
+    return false;
+}
+
+// 更新分支预测器
+void update_branch_predictor(PipelineProcessor *proc, uint32_t pc, bool taken) {
+    if (strcmp(proc->predictor.predictor_type, "bimodal") == 0) {
+        int index = (pc >> 2) & 0x3FF;
+        int counter = proc->predictor.bimodal_table[index];
+
+        if (taken) {
+            proc->predictor.bimodal_table[index] = (counter < 3) ? counter + 1 : 3;
+        } else {
+            proc->predictor.bimodal_table[index] = (counter > 0) ? counter - 1 : 0;
+        }
+    }
+}
+
+// 检测数据冒险
+bool detect_data_hazard(PipelineProcessor *proc, uint32_t rs, uint32_t rt) {
+    // 检查EX阶段
+    if (proc->pipeline[EX_STAGE].valid && proc->pipeline[EX_STAGE].reg_write) {
+        uint32_t ex_dest = proc->pipeline[EX_STAGE].write_register;
+        if (ex_dest != 0 && (ex_dest == rs || ex_dest == rt)) {
+            return true;
+        }
+    }
+
+    // 检查MEM阶段
+    if (proc->pipeline[MEM_STAGE].valid && proc->pipeline[MEM_STAGE].reg_write) {
+        uint32_t mem_dest = proc->pipeline[MEM_STAGE].write_register;
+        if (mem_dest != 0 && (mem_dest == rs || mem_dest == rt)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// 处理前递
+bool handle_forwarding(PipelineProcessor *proc, uint32_t reg_num, uint32_t *forwarded_value) {
+    // 检查EX阶段
+    if (proc->pipeline[EX_STAGE].valid && proc->pipeline[EX_STAGE].reg_write) {
+        uint32_t ex_dest = proc->pipeline[EX_STAGE].write_register;
+        if (ex_dest != 0 && ex_dest == reg_num) {
+            *forwarded_value = proc->pipeline[EX_STAGE].alu_result;
+            return true;
+        }
+    }
+
+    // 检查MEM阶段
+    if (proc->pipeline[MEM_STAGE].valid && proc->pipeline[MEM_STAGE].reg_write) {
+        uint32_t mem_dest = proc->pipeline[MEM_STAGE].write_register;
+        if (mem_dest != 0 && mem_dest == reg_num) {
+            *forwarded_value = proc->pipeline[MEM_STAGE].alu_result;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// 流水线阶段函数
+void pipeline_if(PipelineProcessor *proc) {
+    if (!proc->pc_write) return;
+
+    uint32_t pc_word = (proc->pc - 0x00400000) / 4;
+    if (pc_word >= INSTRUCTION_MEMORY_SIZE) {
+        proc->running = false;
+        return;
+    }
+
+    uint32_t instruction = proc->instruction_memory[pc_word];
+    if (instruction == 0xFFFFFFFF) {
+        proc->running = false;
+        return;
+    }
+
+    if (proc->verbose) {
+        printf("IF: PC=0x%08X, 指令=0x%08X\n", proc->pc, instruction);
+    }
+
+    // 设置IF阶段输出
+    proc->pipeline[IF_STAGE].instruction = instruction;
+    proc->pipeline[IF_STAGE].pc = proc->pc;
+    proc->pipeline[IF_STAGE].pc_plus4 = proc->pc + 4;
+    proc->pipeline[IF_STAGE].valid = true;
+
+    // 默认PC递增
+    proc->pc += 4;
+}
+
+void pipeline_id(PipelineProcessor *proc) {
+    PipelineRegister *if_id = &proc->pipeline[IF_STAGE];
+    PipelineRegister *id_ex = &proc->pipeline[ID_STAGE];
+
+    if (!if_id->valid) {
+        id_ex->valid = false;
+        return;
+    }
+
+    uint32_t instruction = if_id->instruction;
+    uint32_t opcode = (instruction >> 26) & 0x3F;
+    uint32_t rs = (instruction >> 21) & 0x1F;
+    uint32_t rt = (instruction >> 16) & 0x1F;
+    uint32_t rd = (instruction >> 11) & 0x1F;
+    uint16_t immediate = instruction & 0xFFFF;
+
+    if (proc->verbose) {
+        printf("ID: 解析指令 0x%08X\n", instruction);
+    }
+
+    // 读取寄存器值
+    uint32_t reg_data1 = proc->registers[rs];
+    uint32_t reg_data2 = proc->registers[rt];
+
+    // 尝试前递
+    uint32_t forwarded_value;
+    if (handle_forwarding(proc, rs, &forwarded_value)) {
+        reg_data1 = forwarded_value;
+        if (proc->verbose) printf("ID: 前递寄存器 $%d 的值\n", rs);
+    }
+    if (handle_forwarding(proc, rt, &forwarded_value)) {
+        reg_data2 = forwarded_value;
+        if (proc->verbose) printf("ID: 前递寄存器 $%d 的值\n", rt);
+    }
+
+    // 检测数据冒险
+    if (detect_data_hazard(proc, rs, rt)) {
+        proc->stats.data_hazards++;
+        if (proc->verbose) printf("ID: 检测到数据冒险，插入气泡\n");
+        id_ex->valid = false;
+        return;
+    }
+
+    // 设置控制信号
+    bool reg_write = false;
+    bool mem_read = false;
+    bool mem_write = false;
+    bool mem_to_reg = false;
+    bool branch = false;
+
+    switch (opcode) {
+        case 0x00:  // R类型
+            reg_write = true;
+            break;
+        case 0x08:  // ADDI
+            reg_write = true;
+            break;
+        case 0x23:  // LW
+            reg_write = true;
+            mem_read = true;
+            mem_to_reg = true;
+            break;
+        case 0x2B:  // SW
+            mem_write = true;
+            break;
+        case 0x04:  // BEQ
+            branch = true;
+            proc->stats.branch_instructions++;
+            break;
+    }
+
+    // 设置ID/EX寄存器
+    id_ex->instruction = instruction;
+    id_ex->pc = if_id->pc;
+    id_ex->pc_plus4 = if_id->pc_plus4;
+    id_ex->reg_data1 = reg_data1;
+    id_ex->reg_data2 = reg_data2;
+    id_ex->sign_extend = (int32_t)(int16_t)immediate;
+    id_ex->reg_write = reg_write;
+    id_ex->mem_read = mem_read;
+    id_ex->mem_write = mem_write;
+    id_ex->mem_to_reg = mem_to_reg;
+    id_ex->branch = branch;
+    id_ex->valid = true;
+
+    // 处理分支指令
+    if (branch) {
+        bool predicted_taken = predict_branch(proc, if_id->pc);
+        bool actual_taken = (reg_data1 == reg_data2);
+
+        if (predicted_taken != actual_taken) {
+            // 分支预测错误
+            proc->stats.branch_mispredictions++;
+            if (actual_taken) {
+                // 需要跳转
+                uint32_t branch_target = if_id->pc + ((int32_t)(int16_t)immediate << 2);
+                proc->pc = branch_target;
+                if (proc->verbose) printf("ID: 分支预测错误，跳转到 0x%08X\n", branch_target);
+            } else {
+                if (proc->verbose) printf("ID: 分支预测错误，顺序执行\n");
+            }
+        } else {
+            proc->predictor.correct_predictions++;
+        }
+
+        update_branch_predictor(proc, if_id->pc, actual_taken);
+    }
+}
+
+void pipeline_ex(PipelineProcessor *proc) {
+    PipelineRegister *id_ex = &proc->pipeline[ID_STAGE];
+    PipelineRegister *ex_mem = &proc->pipeline[EX_STAGE];
+
+    if (!id_ex->valid) {
+        ex_mem->valid = false;
+        return;
+    }
+
+    uint32_t instruction = id_ex->instruction;
+    uint32_t opcode = (instruction >> 26) & 0x3F;
+    uint32_t funct = instruction & 0x3F;
+    uint32_t rt = (instruction >> 16) & 0x1F;
+    uint32_t rd = (instruction >> 11) & 0x1F;
+
+    if (proc->verbose) {
+        printf("EX: 执行指令 0x%08X\n", instruction);
+    }
+
+    uint32_t alu_result = 0;
+    bool zero_flag = false;
+
+    // ALU操作
+    if (opcode == 0x00) {  // R类型
+        switch (funct) {
+            case 0x20: alu_result = id_ex->reg_data1 + id_ex->reg_data2; break;
+            case 0x22: alu_result = id_ex->reg_data1 - id_ex->reg_data2; break;
+            case 0x24: alu_result = id_ex->reg_data1 & id_ex->reg_data2; break;
+            case 0x25: alu_result = id_ex->reg_data1 | id_ex->reg_data2; break;
+        }
+    } else if (opcode == 0x08) {  // ADDI
+        alu_result = id_ex->reg_data1 + id_ex->sign_extend;
+    } else if (opcode == 0x23 || opcode == 0x2B) {  // LW/SW
+        alu_result = id_ex->reg_data1 + id_ex->sign_extend;
+    } else if (opcode == 0x04) {  // BEQ
+        alu_result = id_ex->reg_data1 - id_ex->reg_data2;
+    }
+
+    zero_flag = (alu_result == 0);
+
+    // 设置EX/MEM寄存器
+    ex_mem->instruction = instruction;
+    ex_mem->pc = id_ex->pc;
+    ex_mem->alu_result = alu_result;
+    ex_mem->write_data = id_ex->reg_data2;
+    ex_mem->write_register = (opcode == 0x00) ? rd : rt;
+    ex_mem->reg_write = id_ex->reg_write;
+    ex_mem->mem_read = id_ex->mem_read;
+    ex_mem->mem_write = id_ex->mem_write;
+    ex_mem->mem_to_reg = id_ex->mem_to_reg;
+    ex_mem->branch = id_ex->branch;
+    ex_mem->zero_flag = zero_flag;
+    ex_mem->valid = true;
+}
+
+void pipeline_mem(PipelineProcessor *proc) {
+    PipelineRegister *ex_mem = &proc->pipeline[EX_STAGE];
+    PipelineRegister *mem_wb = &proc->pipeline[MEM_STAGE];
+
+    if (!ex_mem->valid) {
+        mem_wb->valid = false;
+        return;
+    }
+
+    uint32_t instruction = ex_mem->instruction;
+    uint32_t opcode = (instruction >> 26) & 0x3F;
+    uint32_t mem_addr = ex_mem->alu_result / 4;
+
+    if (proc->verbose) {
+        printf("MEM: 访存指令 0x%08X\n", instruction);
+    }
+
+    uint32_t memory_data = 0;
+
+    // 存储器访问
+    if (ex_mem->mem_read && mem_addr < DATA_MEMORY_SIZE) {
+        memory_data = proc->data_memory[mem_addr];
+        if (proc->verbose) printf("MEM: 读取地址 0x%08X, 值=0x%08X\n", ex_mem->alu_result, memory_data);
+    }
+
+    if (ex_mem->mem_write && mem_addr < DATA_MEMORY_SIZE) {
+        proc->data_memory[mem_addr] = ex_mem->write_data;
+        if (proc->verbose) printf("MEM: 写入地址 0x%08X, 值=0x%08X\n", ex_mem->alu_result, ex_mem->write_data);
+    }
+
+    // 设置MEM/WB寄存器
+    mem_wb->instruction = instruction;
+    mem_wb->pc = ex_mem->pc;
+    mem_wb->alu_result = ex_mem->alu_result;
+    mem_wb->memory_data = memory_data;
+    mem_wb->write_register = ex_mem->write_register;
+    mem_wb->reg_write = ex_mem->reg_write;
+    mem_wb->mem_to_reg = ex_mem->mem_to_reg;
+    mem_wb->valid = true;
+}
+
+void pipeline_wb(PipelineProcessor *proc) {
+    PipelineRegister *mem_wb = &proc->pipeline[MEM_STAGE];
+
+    if (!mem_wb->valid) {
+        return;
+    }
+
+    uint32_t instruction = mem_wb->instruction;
+    uint32_t write_reg = mem_wb->write_register;
+
+    if (proc->verbose) {
+        printf("WB: 写回指令 0x%08X\n", instruction);
+    }
+
+    // 写回寄存器
+    if (mem_wb->reg_write && write_reg != 0) {
+        uint32_t write_data = mem_wb->mem_to_reg ? mem_wb->memory_data : mem_wb->alu_result;
+        proc->registers[write_reg] = write_data;
+        if (proc->verbose) printf("WB: 写入寄存器 $%d = 0x%08X\n", write_reg, write_data);
+    }
+
+    proc->stats.instructions_completed++;
+}
+
+// 运行流水线处理器
+void run_pipeline(PipelineProcessor *proc, int max_cycles) {
+    printf("运行流水线处理器 (预测器: %s)\n", proc->predictor.predictor_type);
+    printf("====================================\n");
+
+    while (proc->running && proc->stats.total_cycles < max_cycles) {
+        if (proc->verbose) {
+            printf("\n--- 周期 %d ---\n", proc->stats.total_cycles);
+        }
+
+        // 流水线各阶段
+        pipeline_wb(proc);
+        pipeline_mem(proc);
+        pipeline_ex(proc);
+        pipeline_id(proc);
+        pipeline_if(proc);
+
+        // 更新统计信息
+        proc->stats.total_cycles++;
+        if (proc->stats.instructions_completed > 0) {
+            proc->stats.cpi = (double)proc->stats.total_cycles / proc->stats.instructions_completed;
+            proc->stats.ipc = (double)proc->stats.instructions_completed / proc->stats.total_cycles;
+        }
+
+        // 每隔几个周期打印状态
+        if (proc->stats.total_cycles % 10 == 0 && !proc->verbose) {
+            printf("周期 %d: 完成 %d 条指令, CPI=%.2f\n",
+                   proc->stats.total_cycles,
+                   proc->stats.instructions_completed,
+                   proc->stats.cpi);
+        }
+    }
+}
+
+// 打印统计信息
+void print_stats(PipelineProcessor *proc) {
+    printf("\n=== 流水线统计信息 ===\n");
+    printf("总周期数: %d\n", proc->stats.total_cycles);
+    printf("完成指令数: %d\n", proc->stats.instructions_completed);
+    printf("CPI: %.2f\n", proc->stats.cpi);
+    printf("IPC: %.2f\n", proc->stats.ipc);
+    printf("数据冒险: %d\n", proc->stats.data_hazards);
+    printf("分支指令: %d\n", proc->stats.branch_instructions);
+    printf("分支预测错误: %d\n", proc->stats.branch_mispredictions);
+    if (proc->stats.branch_instructions > 0) {
+        printf("分支预测准确率: %.1f%%\n",
+               (1.0 - (double)proc->stats.branch_mispredictions / proc->stats.branch_instructions) * 100);
+    }
+}
+
+// 打印寄存器状态
+void print_registers(PipelineProcessor *proc) {
+    printf("\n寄存器状态:\n");
+    printf("============\n");
+    for (int i = 0; i < NUM_REGISTERS; i += 4) {
+        printf("$%2d: 0x%08X  $%2d: 0x%08X  $%2d: 0x%08X  $%2d: 0x%08X\n",
+               i, proc->registers[i], i+1, proc->registers[i+1],
+               i+2, proc->registers[i+2], i+3, proc->registers[i+3]);
+    }
+}
+
+// 主函数
+int main() {
+    PipelineProcessor proc;
+
+    // 测试程序
+    uint32_t test_program[] = {
+        0x2008000A,  // ADDI $t0, $zero, 10
+        0x20090014,  // ADDI $t1, $zero, 20
+        0x01094020,  // ADD $t0, $t0, $t1
+        0x212A0005,  // ADDI $t2, $t1, 5
+        0x014A4022,  // SUB $t0, $t2, $t2
+        0x11000001,  // BEQ $zero, $zero, 1
+        0x08000008,  // J loop
+        0xFFFFFFFF   // 停机
+    };
+
+    printf("5级流水线模拟器\n");
+    printf("===============\n\n");
+
+    // 测试不同的分支预测器
+    char *predictors[] = {"always_not_taken", "always_taken", "bimodal"};
+
+    for (int i = 0; i < 3; i++) {
+        printf("测试 %s 预测器:\n", predictors[i]);
+        pipeline_init(&proc, predictors[i]);
+        set_verbose(&proc, false);
+        load_program(&proc, test_program, sizeof(test_program) / sizeof(test_program[0]));
+        run_pipeline(&proc, 100);
+        print_stats(&proc);
+        printf("\n" + "=".repeat(50) + "\n");
+    }
+
+    return 0;
+}
+```
+
+## 课后练习
+
+### 理论问题
+
+1. **流水线原理**：
+   - 为什么流水线能提高处理器性能？
+   - 流水线的理想加速比是多少？为什么实际达不到？
+
+2. **数据冒险**：
+   - 解释RAW、WAR、WAW三种数据冒险
+   - 前递技术如何解决数据冒险？
+
+3. **控制冒险**：
+   - 分支延迟槽的作用是什么？
+   - 比较不同分支预测策略的优劣
+
+4. **结构冒险**：
+   - 什么是结构冒险？如何避免？
+   - 资源冲突对流水线性能的影响
+
+### 编程练习
+
+1. **冒险检测器**：实现完整的冒险检测系统
+
+2. **预测器优化**：实现更复杂的分支预测算法
+
+3. **动态调度**：实现 Tomasulo 算法
+
+4. **多线程流水线**：实现同时多线程流水线
+
+### 实验挑战
+
+1. **乱序执行**：实现完整的乱序执行流水线
+
+2. **超标量流水线**：设计4路超标量处理器
+
+3. **推测执行**：实现带错误恢复的推测执行
+
+## 扩展阅读
+
+- **教材章节**：*Computer Architecture: A Quantitative Approach* 第3章
+- **在线资源**：
+  - [Branch Prediction](https://www.cs.cmu.edu/afs/cs/academic/class/15740-f97/public/doc/branch-prediction.ps)
+  - [Pipelining Basics](https://www.cs.umd.edu/class/spring2003/cmsc411/Notes/pipeline.html)
+- **推荐视频**：
+  - [Pipelining (YouTube)](https://www.youtube.com/watch?v=eQn9k6eJNgQ)
+  - [Branch Prediction (YouTube)](https://www.youtube.com/watch?v=TQsLSYxoWuM)
+
+---
+
+*下一讲将深入探讨内存层次结构，包括Cache设计、存储器层次和性能优化。*

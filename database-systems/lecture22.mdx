@@ -1,0 +1,1674 @@
+---
+title: Distributed Databases II - Transactions
+desc: This lecture covers distributed transactions, including two-phase commit protocol, three-phase commit, timestamp ordering, and distributed deadlock detection.
+---
+
+# 第22讲：分布式数据库 II - 分布式事务
+
+## 课程概述
+
+本节课我们将深入探讨分布式事务的核心概念和实现技术。分布式事务是保证跨多个节点数据一致性的关键机制，我们将学习两阶段提交协议、三阶段提交、时间戳排序以及分布式死锁检测等重要技术。
+
+## 学习目标
+
+- 理解分布式事务的ACID特性挑战
+- 掌握两阶段提交(2PC)协议的原理和实现
+- 了解三阶段提交(3PC)协议的优势
+- 学习分布式事务的并发控制机制
+- 掌握分布式死锁检测和处理技术
+
+## 1. 分布式事务基础
+
+### 1.1 分布式事务的特点
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+namespace distributed_db {
+
+/**
+ * 分布式事务状态枚举
+ */
+enum class TransactionState {
+    ACTIVE,        // 活动状态
+    PREPARING,     // 准备阶段
+    PREPARED,      // 已准备
+    COMMITTING,    // 提交中
+    COMMITTED,     // 已提交
+    ABORTING,      // 中止中
+    ABORTED,       // 已中止
+    DOUBTED        // 怀疑状态（仅3PC）
+};
+
+/**
+ * 参与者状态枚举（用于2PC）
+ */
+enum class ParticipantState {
+    INITIAL,       // 初始状态
+    PREPARED,      // 已准备
+    COMMITTED,     // 已提交
+    ABORTED        // 已中止
+};
+
+/**
+ * 事务操作类型
+ */
+enum class TransactionOperation {
+    READ,          // 读操作
+    WRITE,         // 写操作
+    COMMIT,        // 提交操作
+    ABORT,         // 中止操作
+    PREPARE        // 准备操作
+};
+
+/**
+ * 分布式事务ID
+ */
+struct DistributedTransactionId {
+    uint64_t coordinator_id;    // 协调器ID
+    uint64_t timestamp;         // 时间戳
+    uint32_t sequence;          // 序列号
+
+    DistributedTransactionId(uint64_t coord_id, uint64_t ts, uint32_t seq)
+        : coordinator_id(coord_id), timestamp(ts), sequence(seq) {}
+
+    std::string toString() const {
+        return std::to_string(coordinator_id) + "-" +
+               std::to_string(timestamp) + "-" +
+               std::to_string(sequence);
+    }
+
+    bool operator==(const DistributedTransactionId& other) const {
+        return coordinator_id == other.coordinator_id &&
+               timestamp == other.timestamp &&
+               sequence == other.sequence;
+    }
+};
+
+/**
+ * 分布式事务日志记录
+ */
+struct TransactionLogRecord {
+    DistributedTransactionId transaction_id;
+    TransactionState state;
+    std::string operation;
+    std::vector<std::string> participants;
+    std::chrono::system_clock::time_point timestamp;
+    std::unordered_map<std::string, std::string> metadata;
+
+    TransactionLogRecord(const DistributedTransactionId& tid, TransactionState s,
+                        const std::string& op)
+        : transaction_id(tid), state(s), operation(op),
+          timestamp(std::chrono::system_clock::now()) {}
+
+    void addParticipant(const std::string& participant) {
+        participants.push_back(participant);
+    }
+
+    void setMetadata(const std::string& key, const std::string& value) {
+        metadata[key] = value;
+    }
+};
+
+/**
+ * 事务参与者信息
+ */
+struct ParticipantInfo {
+    std::string participant_id;
+    std::string endpoint;
+    bool is_available;
+    std::chrono::system_clock::time_point last_heartbeat;
+    ParticipantState state;
+    int retry_count;
+
+    ParticipantInfo(const std::string& id, const std::string& ep)
+        : participant_id(id), endpoint(ep), is_available(true),
+          last_heartbeat(std::chrono::system_clock::now()),
+          state(ParticipantState::INITIAL), retry_count(0) {}
+
+    void updateHeartbeat() {
+        last_heartbeat = std::chrono::system_clock::now();
+        is_available = true;
+    }
+
+    void markUnavailable() {
+        is_available = false;
+    }
+
+    bool isAlive(int timeout_seconds = 30) const {
+        auto now = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - last_heartbeat);
+        return elapsed.count() <= timeout_seconds;
+    }
+};
+
+/**
+ * 分布式事务接口
+ */
+class DistributedTransaction {
+public:
+    virtual ~DistributedTransaction() = default;
+
+    /**
+     * 获取事务ID
+     * @return 事务ID
+     */
+    virtual DistributedTransactionId getTransactionId() const = 0;
+
+    /**
+     * 添加参与者
+     * @param participant 参与者信息
+     * @return 是否成功添加
+     */
+    virtual bool addParticipant(const ParticipantInfo& participant) = 0;
+
+    /**
+     * 执行读操作
+     * @param participant_id 参与者ID
+     * @param key 数据键
+     * @return 读取的值
+     */
+    virtual std::string read(const std::string& participant_id, const std::string& key) = 0;
+
+    /**
+     * 执行写操作
+     * @param participant_id 参与者ID
+     * @param key 数据键
+     * @param value 写入的值
+     * @return 是否成功写入
+     */
+    virtual bool write(const std::string& participant_id, const std::string& key,
+                      const std::string& value) = 0;
+
+    /**
+     * 提交事务
+     * @return 是否成功提交
+     */
+    virtual bool commit() = 0;
+
+    /**
+     * 中止事务
+     * @return 是否成功中止
+     */
+    virtual bool abort() = 0;
+
+    /**
+     * 获取事务状态
+     * @return 事务状态
+     */
+    virtual TransactionState getState() const = 0;
+};
+
+}
+
+// 命名空间继续
+namespace distributed_db {
+
+/**
+ * 两阶段提交协调器
+ */
+class TwoPhaseCommitCoordinator {
+private:
+    std::unordered_map<DistributedTransactionId, std::shared_ptr<DistributedTransaction>> active_transactions;
+    std::unordered_map<std::string, ParticipantInfo> participants;
+    std::mutex coordinator_mutex;
+    std::vector<TransactionLogRecord> transaction_log;
+
+public:
+    /**
+     * 注册参与者
+     * @param participant 参与者信息
+     * @return 是否成功注册
+     */
+    bool registerParticipant(const ParticipantInfo& participant) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+        participants[participant.participant_id] = participant;
+        return true;
+    }
+
+    /**
+     * 开始新事务
+     * @param transaction_id 事务ID
+     * @return 创建的事务对象
+     */
+    std::shared_ptr<DistributedTransaction> beginTransaction(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto transaction = std::make_shared<TwoPhaseCommitTransaction>(transaction_id, this);
+        active_transactions[transaction_id] = transaction;
+
+        // 记录事务开始日志
+        TransactionLogRecord log_record(transaction_id, TransactionState::ACTIVE, "BEGIN");
+        transaction_log.push_back(log_record);
+
+        return transaction;
+    }
+
+    /**
+     * 两阶段提交：准备阶段
+     * @param transaction_id 事务ID
+     * @return 所有参与者是否都准备好
+     */
+    bool preparePhase(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto it = active_transactions.find(transaction_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        auto transaction = std::dynamic_pointer_cast<TwoPhaseCommitTransaction>(it->second);
+        if (!transaction) {
+            return false;
+        }
+
+        // 记录准备阶段开始
+        TransactionLogRecord prepare_log(transaction_id, TransactionState::PREPARING, "PREPARE");
+        transaction_log.push_back(prepare_log);
+
+        // 向所有参与者发送准备请求
+        std::vector<std::string> prepared_participants;
+        std::vector<std::string> failed_participants;
+
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (!participant.isAlive()) {
+                failed_participants.push_back(participant.participant_id);
+                continue;
+            }
+
+            // 模拟向参与者发送准备请求
+            bool prepared = sendPrepareRequest(participant, transaction_id);
+
+            if (prepared) {
+                prepared_participants.push_back(participant.participant_id);
+                participant.state = ParticipantState::PREPARED;
+            } else {
+                failed_participants.push_back(participant.participant_id);
+            }
+        }
+
+        // 如果有参与者失败，中止事务
+        if (!failed_participants.empty()) {
+            std::cout << "Prepare phase failed for participants: ";
+            for (const auto& pid : failed_participants) {
+                std::cout << pid << " ";
+            }
+            std::cout << std::endl;
+
+            // 记录中止决策
+            TransactionLogRecord abort_log(transaction_id, TransactionState::ABORTING, "ABORT");
+            transaction_log.push_back(abort_log);
+
+            // 向所有已准备的参与者发送中止请求
+            for (const auto& pid : prepared_participants) {
+                sendAbortRequest(participants[pid], transaction_id);
+            }
+
+            return false;
+        }
+
+        // 所有参与者都准备好了
+        std::cout << "Prepare phase succeeded for all participants" << std::endl;
+
+        // 记录准备完成
+        TransactionLogRecord prepared_log(transaction_id, TransactionState::PREPARED, "PREPARED");
+        prepared_log.participants = prepared_participants;
+        transaction_log.push_back(prepared_log);
+
+        return true;
+    }
+
+    /**
+     * 两阶段提交：提交阶段
+     * @param transaction_id 事务ID
+     * @return 是否成功提交
+     */
+    bool commitPhase(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto it = active_transactions.find(transaction_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        auto transaction = std::dynamic_pointer_cast<TwoPhaseCommitTransaction>(it->second);
+        if (!transaction) {
+            return false;
+        }
+
+        // 记录提交阶段开始
+        TransactionLogRecord commit_log(transaction_id, TransactionState::COMMITTING, "COMMIT");
+        transaction_log.push_back(commit_log);
+
+        // 向所有参与者发送提交请求
+        std::vector<std::string> committed_participants;
+        std::vector<std::string> failed_participants;
+
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (participant.state != ParticipantState::PREPARED) {
+                continue;  // 跳过未准备的参与者
+            }
+
+            // 模拟向参与者发送提交请求
+            bool committed = sendCommitRequest(participant, transaction_id);
+
+            if (committed) {
+                committed_participants.push_back(participant.participant_id);
+                participant.state = ParticipantState::COMMITTED;
+            } else {
+                failed_participants.push_back(participant.participant_id);
+            }
+        }
+
+        // 记录最终结果
+        if (failed_participants.empty()) {
+            TransactionLogRecord success_log(transaction_id, TransactionState::COMMITTED, "COMMIT_SUCCESS");
+            success_log.participants = committed_participants;
+            transaction_log.push_back(success_log);
+
+            // 从活动事务中移除
+            active_transactions.erase(it);
+
+            std::cout << "Commit phase succeeded for all participants" << std::endl;
+            return true;
+        } else {
+            std::cout << "Commit phase failed for participants: ";
+            for (const auto& pid : failed_participants) {
+                std::cout << pid << " ";
+            }
+            std::cout << std::endl;
+
+            // 记录部分提交失败
+            TransactionLogRecord failure_log(transaction_id, TransactionState::ABORTING, "COMMIT_FAILURE");
+            failure_log.participants = failed_participants;
+            transaction_log.push_back(failure_log);
+
+            return false;
+        }
+    }
+
+    /**
+     * 中止事务
+     * @param transaction_id 事务ID
+     * @return 是否成功中止
+     */
+    bool abortTransaction(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto it = active_transactions.find(transaction_id);
+        if (it == active_transactions.end()) {
+            return false;
+        }
+
+        // 记录中止
+        TransactionLogRecord abort_log(transaction_id, TransactionState::ABORTING, "ABORT");
+        transaction_log.push_back(abort_log);
+
+        // 向所有参与者发送中止请求
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (participant.state == ParticipantState::PREPARED) {
+                sendAbortRequest(participant, transaction_id);
+                participant.state = ParticipantState::ABORTED;
+            }
+        }
+
+        // 记录中止完成
+        TransactionLogRecord aborted_log(transaction_id, TransactionState::ABORTED, "ABORTED");
+        transaction_log.push_back(aborted_log);
+
+        // 从活动事务中移除
+        active_transactions.erase(it);
+
+        std::cout << "Transaction aborted successfully" << std::endl;
+        return true;
+    }
+
+    /**
+     * 获取事务状态
+     * @param transaction_id 事务ID
+     * @return 事务状态
+     */
+    TransactionState getTransactionState(const DistributedTransactionId& transaction_id) const {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        // 从日志中查找最新的状态
+        for (auto it = transaction_log.rbegin(); it != transaction_log.rend(); ++it) {
+            if (it->transaction_id == transaction_id) {
+                return it->state;
+            }
+        }
+
+        return TransactionState::ACTIVE;
+    }
+
+    /**
+     * 获取所有参与者状态
+     * @return 参与者状态映射
+     */
+    std::unordered_map<std::string, ParticipantState> getParticipantStates() const {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        std::unordered_map<std::string, ParticipantState> states;
+        for (const auto& participant_pair : participants) {
+            states[participant_pair.first] = participant_pair.second.state;
+        }
+        return states;
+    }
+
+private:
+    /**
+     * 发送准备请求到参与者
+     */
+    bool sendPrepareRequest(const ParticipantInfo& participant,
+                           const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending PREPARE request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟和可能的失败
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 50));
+
+        // 90%的成功率
+        if (rand() % 100 < 90) {
+            std::cout << "Participant " << participant.participant_id << " PREPARED"
+                      << std::endl;
+            return true;
+        } else {
+            std::cout << "Participant " << participant.participant_id << " PREPARE failed"
+                      << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 发送提交请求到参与者
+     */
+    bool sendCommitRequest(const ParticipantInfo& participant,
+                          const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending COMMIT request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 50));
+
+        // 95%的成功率
+        if (rand() % 100 < 95) {
+            std::cout << "Participant " << participant.participant_id << " COMMITTED"
+                      << std::endl;
+            return true;
+        } else {
+            std::cout << "Participant " << participant.participant_id << " COMMIT failed"
+                      << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 发送中止请求到参与者
+     */
+    bool sendAbortRequest(const ParticipantInfo& participant,
+                         const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending ABORT request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 30));
+
+        std::cout << "Participant " << participant.participant_id << " ABORTED"
+                  << std::endl;
+        return true;
+    }
+};
+
+/**
+ * 两阶段提交事务实现
+ */
+class TwoPhaseCommitTransaction : public DistributedTransaction {
+private:
+    DistributedTransactionId transaction_id;
+    TwoPhaseCommitCoordinator* coordinator;
+    TransactionState state;
+    std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> operations;
+
+public:
+    TwoPhaseCommitTransaction(const DistributedTransactionId& tid,
+                             TwoPhaseCommitCoordinator* coord)
+        : transaction_id(tid), coordinator(coord), state(TransactionState::ACTIVE) {}
+
+    DistributedTransactionId getTransactionId() const override {
+        return transaction_id;
+    }
+
+    bool addParticipant(const ParticipantInfo& participant) override {
+        return coordinator->registerParticipant(participant);
+    }
+
+    std::string read(const std::string& participant_id, const std::string& key) override {
+        if (state != TransactionState::ACTIVE) {
+            throw std::runtime_error("Transaction is not active");
+        }
+
+        // 记录读操作
+        operations[participant_id].emplace_back("READ:" + key, "");
+
+        // 模拟从参与者读取数据
+        std::cout << "Reading key '" << key << "' from participant " << participant_id
+                  << " in transaction " << transaction_id.toString() << std::endl;
+
+        return "value_for_" + key;
+    }
+
+    bool write(const std::string& participant_id, const std::string& key,
+               const std::string& value) override {
+        if (state != TransactionState::ACTIVE) {
+            throw std::runtime_error("Transaction is not active");
+        }
+
+        // 记录写操作
+        operations[participant_id].emplace_back("WRITE:" + key, value);
+
+        // 模拟向参与者写入数据
+        std::cout << "Writing key '" << key << "' = '" << value
+                  << "' to participant " << participant_id
+                  << " in transaction " << transaction_id.toString() << std::endl;
+
+        return true;
+    }
+
+    bool commit() override {
+        if (state != TransactionState::ACTIVE) {
+            throw std::runtime_error("Transaction is not active");
+        }
+
+        state = TransactionState::PREPARING;
+
+        // 执行两阶段提交
+        bool prepare_success = coordinator->preparePhase(transaction_id);
+
+        if (!prepare_success) {
+            state = TransactionState::ABORTED;
+            return false;
+        }
+
+        state = TransactionState::COMMITTING;
+        bool commit_success = coordinator->commitPhase(transaction_id);
+
+        if (commit_success) {
+            state = TransactionState::COMMITTED;
+        } else {
+            state = TransactionState::ABORTING;
+        }
+
+        return commit_success;
+    }
+
+    bool abort() override {
+        if (state == TransactionState::COMMITTED || state == TransactionState::ABORTED) {
+            throw std::runtime_error("Transaction already completed");
+        }
+
+        state = TransactionState::ABORTING;
+        return coordinator->abortTransaction(transaction_id);
+    }
+
+    TransactionState getState() const override {
+        return state;
+    }
+
+    /**
+     * 获取事务操作记录
+     * @return 操作记录
+     */
+    std::unordered_map<std::string, std::vector<std::pair<std::string, std::string>>> getOperations() const {
+        return operations;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建两阶段提交协调器
+    TwoPhaseCommitCoordinator coordinator;
+
+    // 注册参与者
+    coordinator.registerParticipant(ParticipantInfo("node1", "node1.example.com:5432"));
+    coordinator.registerParticipant(ParticipantInfo("node2", "node2.example.com:5432"));
+    coordinator.registerParticipant(ParticipantInfo("node3", "node3.example.com:5432"));
+
+    // 开始新事务
+    DistributedTransactionId tid(1, 1234567890, 1);
+    auto transaction = coordinator.beginTransaction(tid);
+
+    // 执行事务操作
+    transaction->write("node1", "account:1001", "1000");
+    transaction->write("node2", "account:1002", "2000");
+    transaction->read("node1", "account:1001");
+    transaction->read("node2", "account:1002");
+
+    // 提交事务
+    std::cout << "\n=== Committing Transaction ===" << std::endl;
+    bool commit_result = transaction->commit();
+
+    std::cout << "\n=== Transaction Result ===" << std::endl;
+    std::cout << "Transaction " << tid.toString() << " commit result: "
+              << (commit_result ? "SUCCESS" : "FAILED") << std::endl;
+    std::cout << "Final state: " << static_cast<int>(transaction->getState()) << std::endl;
+
+    // 测试中止事务
+    std::cout << "\n=== Testing Abort Transaction ===" << std::endl;
+    DistributedTransactionId tid2(1, 1234567891, 2);
+    auto transaction2 = coordinator.beginTransaction(tid2);
+
+    transaction2->write("node1", "account:1003", "500");
+    transaction2->write("node3", "account:1004", "1500");
+
+    bool abort_result = transaction2->abort();
+    std::cout << "Transaction " << tid2.toString() << " abort result: "
+              << (abort_result ? "SUCCESS" : "FAILED") << std::endl;
+
+    return 0;
+}
+```
+
+## 2. 三阶段提交协议
+
+### 2.1 3PC的基本原理
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <thread>
+#include <chrono>
+#include <atomic>
+
+namespace distributed_db {
+
+/**
+ * 三阶段提交状态枚举
+ */
+enum class ThreePCState {
+    ACTIVE,        // 活动状态
+    CAN_COMMIT,    // 可以提交
+    PRE_COMMIT,    // 预提交
+    COMMITTED,     // 已提交
+    ABORTED        // 已中止
+};
+
+/**
+ * 三阶段提交协调器
+ */
+class ThreePhaseCommitCoordinator {
+private:
+    std::unordered_map<DistributedTransactionId, ThreePCState> transaction_states;
+    std::unordered_map<std::string, ParticipantInfo> participants;
+    std::mutex coordinator_mutex;
+    std::vector<TransactionLogRecord> transaction_log;
+    std::atomic<bool> running{true};
+
+public:
+    ThreePhaseCommitCoordinator() = default;
+
+    ~ThreePhaseCommitCoordinator() {
+        running = false;
+    }
+
+    /**
+     * 注册参与者
+     * @param participant 参与者信息
+     * @return 是否成功注册
+     */
+    bool registerParticipant(const ParticipantInfo& participant) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+        participants[participant.participant_id] = participant;
+        return true;
+    }
+
+    /**
+     * 开始三阶段提交事务
+     * @param transaction_id 事务ID
+     * @return 是否成功开始
+     */
+    bool beginThreePhaseCommit(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        // 检查事务是否已存在
+        if (transaction_states.find(transaction_id) != transaction_states.end()) {
+            return false;
+        }
+
+        transaction_states[transaction_id] = ThreePCState::ACTIVE;
+
+        // 记录事务开始
+        TransactionLogRecord log_record(transaction_id, TransactionState::ACTIVE, "3PC_BEGIN");
+        transaction_log.push_back(log_record);
+
+        std::cout << "Started 3PC transaction " << transaction_id.toString() << std::endl;
+
+        // 启动心跳监控线程
+        std::thread heartbeat_thread(&ThreePhaseCommitCoordinator::monitorHeartbeats, this);
+        heartbeat_thread.detach();
+
+        return true;
+    }
+
+    /**
+     * 第一阶段：CanCommit
+     * 询问所有参与者是否可以提交
+     * @param transaction_id 事务ID
+     * @return 参与者响应结果
+     */
+    std::unordered_map<std::string, bool> canCommitPhase(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto state_it = transaction_states.find(transaction_id);
+        if (state_it == transaction_states.end() || state_it->second != ThreePCState::ACTIVE) {
+            return {};
+        }
+
+        state_it->second = ThreePCState::CAN_COMMIT;
+
+        // 记录CanCommit阶段
+        TransactionLogRecord log_record(transaction_id, TransactionState::PREPARING, "CAN_COMMIT");
+        transaction_log.push_back(log_record);
+
+        std::unordered_map<std::string, bool> responses;
+
+        // 向所有参与者发送CanCommit请求
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (!participant.isAlive()) {
+                responses[participant.participant_id] = false;
+                continue;
+            }
+
+            bool response = sendCanCommitRequest(participant, transaction_id);
+            responses[participant.participant_id] = response;
+
+            if (!response) {
+                // 如果有参与者响应No，立即中止事务
+                std::cout << "Participant " << participant.participant_id
+                          << " responded NO to CanCommit" << std::endl;
+                break;
+            }
+        }
+
+        // 检查是否所有参与者都响应Yes
+        bool all_yes = true;
+        for (const auto& response : responses) {
+            if (!response.second) {
+                all_yes = false;
+                break;
+            }
+        }
+
+        if (all_yes) {
+            std::cout << "All participants responded YES to CanCommit" << std::endl;
+            state_it->second = ThreePCState::PRE_COMMIT;
+        } else {
+            // 中止事务
+            abortThreePhaseTransaction(transaction_id);
+        }
+
+        return responses;
+    }
+
+    /**
+     * 第二阶段：PreCommit
+     通知所有参与者进入预提交状态
+     * @param transaction_id 事务ID
+     * @return 是否成功
+     */
+    bool preCommitPhase(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto state_it = transaction_states.find(transaction_id);
+        if (state_it == transaction_states.end() || state_it->second != ThreePCState::PRE_COMMIT) {
+            return false;
+        }
+
+        // 记录PreCommit阶段
+        TransactionLogRecord log_record(transaction_id, TransactionState::PREPARED, "PRE_COMMIT");
+        transaction_log.push_back(log_record);
+
+        std::vector<std::string> ack_participants;
+
+        // 向所有参与者发送PreCommit请求
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (!participant.isAlive()) {
+                continue;
+            }
+
+            bool ack = sendPreCommitRequest(participant, transaction_id);
+
+            if (ack) {
+                ack_participants.push_back(participant.participant_id);
+            } else {
+                std::cout << "Participant " << participant.participant_id
+                          << " failed to PreCommit" << std::endl;
+                // 某个参与者失败，需要中止事务
+                abortThreePhaseTransaction(transaction_id);
+                return false;
+            }
+        }
+
+        std::cout << "All participants acknowledged PreCommit" << std::endl;
+        return true;
+    }
+
+    /**
+     * 第三阶段：DoCommit
+     * 最终提交事务
+     * @param transaction_id 事务ID
+     * @return 是否成功提交
+     */
+    bool doCommitPhase(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto state_it = transaction_states.find(transaction_id);
+        if (state_it == transaction_states.end() || state_it->second != ThreePCState::PRE_COMMIT) {
+            return false;
+        }
+
+        state_it->second = ThreePCState::COMMITTED;
+
+        // 记录提交阶段
+        TransactionLogRecord log_record(transaction_id, TransactionState::COMMITTED, "DO_COMMIT");
+        transaction_log.push_back(log_record);
+
+        std::vector<std::string> committed_participants;
+
+        // 向所有参与者发送DoCommit请求
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (!participant.isAlive()) {
+                continue;
+            }
+
+            bool committed = sendDoCommitRequest(participant, transaction_id);
+
+            if (committed) {
+                committed_participants.push_back(participant.participant_id);
+            } else {
+                std::cout << "Warning: Participant " << participant.participant_id
+                          << " failed to commit, but transaction is already committed" << std::endl;
+            }
+        }
+
+        // 从活动事务中移除
+        transaction_states.erase(state_it);
+
+        std::cout << "3PC transaction " << transaction_id.toString()
+                  << " committed successfully" << std::endl;
+        return true;
+    }
+
+    /**
+     * 中止三阶段提交事务
+     * @param transaction_id 事务ID
+     * @return 是否成功中止
+     */
+    bool abortThreePhaseTransaction(const DistributedTransactionId& transaction_id) {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto state_it = transaction_states.find(transaction_id);
+        if (state_it == transaction_states.end()) {
+            return false;
+        }
+
+        state_it->second = ThreePCState::ABORTED;
+
+        // 记录中止
+        TransactionLogRecord log_record(transaction_id, TransactionState::ABORTED, "3PC_ABORT");
+        transaction_log.push_back(log_record);
+
+        // 向所有参与者发送中止请求
+        for (const auto& participant_pair : participants) {
+            const auto& participant = participant_pair.second;
+
+            if (participant.isAlive()) {
+                sendThreePCAbortRequest(participant, transaction_id);
+            }
+        }
+
+        // 从活动事务中移除
+        transaction_states.erase(state_it);
+
+        std::cout << "3PC transaction " << transaction_id.toString()
+                  << " aborted" << std::endl;
+        return true;
+    }
+
+    /**
+     * 获取事务状态
+     * @param transaction_id 事务ID
+     * @return 事务状态
+     */
+    ThreePCState getThreePCState(const DistributedTransactionId& transaction_id) const {
+        std::lock_guard<std::mutex> lock(coordinator_mutex);
+
+        auto it = transaction_states.find(transaction_id);
+        if (it != transaction_states.end()) {
+            return it->second;
+        }
+
+        // 从日志中查找状态
+        for (auto log_it = transaction_log.rbegin(); log_it != transaction_log.rend(); ++log_it) {
+            if (log_it->transaction_id == transaction_id) {
+                switch (log_it->state) {
+                    case TransactionState::COMMITTED:
+                        return ThreePCState::COMMITTED;
+                    case TransactionState::ABORTED:
+                        return ThreePCState::ABORTED;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        return ThreePCState::ABORTED;  // 默认状态
+    }
+
+private:
+    /**
+     * 发送CanCommit请求
+     */
+    bool sendCanCommitRequest(const ParticipantInfo& participant,
+                             const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending CanCommit request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 50));
+
+        // 95%的成功率
+        if (rand() % 100 < 95) {
+            std::cout << "Participant " << participant.participant_id
+                      << " responded YES to CanCommit" << std::endl;
+            return true;
+        } else {
+            std::cout << "Participant " << participant.participant_id
+                      << " responded NO to CanCommit" << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 发送PreCommit请求
+     */
+    bool sendPreCommitRequest(const ParticipantInfo& participant,
+                             const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending PreCommit request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 40));
+
+        // 98%的成功率
+        if (rand() % 100 < 98) {
+            std::cout << "Participant " << participant.participant_id
+                      << " acknowledged PreCommit" << std::endl;
+            return true;
+        } else {
+            std::cout << "Participant " << participant.participant_id
+                      << " failed to acknowledge PreCommit" << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 发送DoCommit请求
+     */
+    bool sendDoCommitRequest(const ParticipantInfo& participant,
+                            const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending DoCommit request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 30));
+
+        // 99%的成功率
+        if (rand() % 100 < 99) {
+            std::cout << "Participant " << participant.participant_id
+                      << " committed successfully" << std::endl;
+            return true;
+        } else {
+            std::cout << "Participant " << participant.participant_id
+                      << " failed to commit" << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 发送三阶段提交中止请求
+     */
+    bool sendThreePCAbortRequest(const ParticipantInfo& participant,
+                               const DistributedTransactionId& transaction_id) {
+        std::cout << "Sending 3PC Abort request to participant " << participant.participant_id
+                  << " for transaction " << transaction_id.toString() << std::endl;
+
+        // 模拟网络延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(5 + rand() % 20));
+
+        std::cout << "Participant " << participant.participant_id
+                  << " aborted transaction" << std::endl;
+        return true;
+    }
+
+    /**
+     * 监控参与者心跳
+     */
+    void monitorHeartbeats() {
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            std::lock_guard<std::mutex> lock(coordinator_mutex);
+            for (auto& participant_pair : participants) {
+                auto& participant = participant_pair.second;
+
+                if (!participant.isAlive(10)) {  // 10秒超时
+                    participant.markUnavailable();
+                    std::cout << "Participant " << participant.participant_id
+                              << " is unreachable" << std::endl;
+                }
+            }
+        }
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建三阶段提交协调器
+    ThreePhaseCommitCoordinator coordinator;
+
+    // 注册参与者
+    coordinator.registerParticipant(ParticipantInfo("node1", "node1.example.com:5432"));
+    coordinator.registerParticipant(ParticipantInfo("node2", "node2.example.com:5432"));
+    coordinator.registerParticipant(ParticipantInfo("node3", "node3.example.com:5432"));
+
+    // 开始三阶段提交事务
+    DistributedTransactionId tid(1, 1234567890, 1);
+    bool begin_result = coordinator.beginThreePhaseCommit(tid);
+
+    if (begin_result) {
+        std::cout << "\n=== Phase 1: CanCommit ===" << std::endl;
+        auto responses = coordinator.canCommitPhase(tid);
+
+        // 检查是否所有参与者都响应Yes
+        bool all_yes = true;
+        for (const auto& response : responses) {
+            if (!response.second) {
+                all_yes = false;
+                break;
+            }
+        }
+
+        if (all_yes) {
+            std::cout << "\n=== Phase 2: PreCommit ===" << std::endl;
+            bool precommit_result = coordinator.preCommitPhase(tid);
+
+            if (precommit_result) {
+                std::cout << "\n=== Phase 3: DoCommit ===" << std::endl;
+                bool commit_result = coordinator.doCommitPhase(tid);
+
+                std::cout << "\n=== 3PC Transaction Result ===" << std::endl;
+                std::cout << "3PC transaction " << tid.toString() << " "
+                          << (commit_result ? "COMMITTED" : "FAILED") << std::endl;
+            }
+        } else {
+            std::cout << "\n=== 3PC Transaction Result ===" << std::endl;
+            std::cout << "3PC transaction " << tid.toString() << " ABORTED (CanCommit failed)" << std::endl;
+        }
+    }
+
+    // 获取最终状态
+    ThreePCState final_state = coordinator.getThreePCState(tid);
+    std::cout << "Final 3PC state: " << static_cast<int>(final_state) << std::endl;
+
+    return 0;
+}
+```
+
+## 3. 分布式死锁检测
+
+### 3.1 等待图算法
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <queue>
+#include <stack>
+#include <algorithm>
+
+namespace distributed_db {
+
+/**
+ * 锁请求信息
+ */
+struct LockRequest {
+    std::string transaction_id;
+    std::string resource_id;
+    std::string lock_mode;  // "SHARED" or "EXCLUSIVE"
+    std::chrono::system_clock::time_point request_time;
+
+    LockRequest(const std::string& tid, const std::string& rid, const std::string& mode)
+        : transaction_id(tid), resource_id(rid), lock_mode(mode),
+          request_time(std::chrono::system_clock::now()) {}
+
+    bool isCompatible(const LockRequest& other) const {
+        if (resource_id != other.resource_id) {
+            return true;  // 不同资源，兼容
+        }
+
+        // 共享锁与共享锁兼容
+        if (lock_mode == "SHARED" && other.lock_mode == "SHARED") {
+            return true;
+        }
+
+        // 其他情况不兼容
+        return false;
+    }
+};
+
+/**
+ * 等待图节点
+ */
+struct WaitGraphNode {
+    std::string transaction_id;
+    std::unordered_set<std::string> waiting_for;  // 等待的事务ID
+    std::unordered_set<std::string> blocked_by;   // 被阻塞的事务ID
+    std::vector<LockRequest> lock_requests;       // 锁请求列表
+    std::chrono::system_clock::time_point start_time;
+
+    WaitGraphNode(const std::string& tid)
+        : transaction_id(tid), start_time(std::chrono::system_clock::now()) {}
+
+    void addWaitFor(const std::string& other_tid) {
+        waiting_for.insert(other_tid);
+    }
+
+    void removeWaitFor(const std::string& other_tid) {
+        waiting_for.erase(other_tid);
+    }
+
+    void addBlockedBy(const std::string& other_tid) {
+        blocked_by.insert(other_tid);
+    }
+
+    void removeBlockedBy(const std::string& other_tid) {
+        blocked_by.erase(other_tid);
+    }
+
+    bool isWaiting() const {
+        return !waiting_for.empty();
+    }
+
+    bool isBlocked() const {
+        return !blocked_by.empty();
+    }
+};
+
+/**
+ * 分布式死锁检测器
+ */
+class DistributedDeadlockDetector {
+private:
+    std::unordered_map<std::string, std::shared_ptr<WaitGraphNode>> wait_graph;
+    std::unordered_map<std::string, std::vector<LockRequest>> resource_locks;
+    std::mutex detector_mutex;
+    std::atomic<bool> detection_running{false};
+    std::thread detection_thread;
+
+public:
+    DistributedDeadlockDetector() = default;
+
+    ~DistributedDeadlockDetector() {
+        stopDeadlockDetection();
+    }
+
+    /**
+     * 添加锁请求
+     * @param request 锁请求
+     * @return 是否成功添加
+     */
+    bool addLockRequest(const LockRequest& request) {
+        std::lock_guard<std::mutex> lock(detector_mutex);
+
+        // 获取或创建事务节点
+        auto& node = wait_graph[request.transaction_id];
+        if (!node) {
+            node = std::make_shared<WaitGraphNode>(request.transaction_id);
+        }
+
+        // 检查资源是否已被锁定
+        auto& locks_on_resource = resource_locks[request.resource_id];
+        bool can_grant = true;
+
+        for (const auto& existing_lock : locks_on_resource) {
+            if (!request.isCompatible(existing_lock)) {
+                can_grant = false;
+                // 添加等待关系
+                node->addWaitFor(existing_lock.transaction_id);
+
+                // 在被等待的事务节点中添加阻塞关系
+                auto& blocking_node = wait_graph[existing_lock.transaction_id];
+                if (!blocking_node) {
+                    blocking_node = std::make_shared<WaitGraphNode>(existing_lock.transaction_id);
+                }
+                blocking_node->addBlockedBy(request.transaction_id);
+                break;
+            }
+        }
+
+        if (can_grant) {
+            // 可以授予锁
+            locks_on_resource.push_back(request);
+            node->lock_requests.push_back(request);
+            return true;
+        } else {
+            // 不能授予锁，需要等待
+            node->lock_requests.push_back(request);
+            return false;
+        }
+    }
+
+    /**
+     * 释放锁
+     * @param transaction_id 事务ID
+     * @param resource_id 资源ID
+     * @return 是否成功释放
+     */
+    bool releaseLock(const std::string& transaction_id, const std::string& resource_id) {
+        std::lock_guard<std::mutex> lock(detector_mutex);
+
+        auto node_it = wait_graph.find(transaction_id);
+        if (node_it == wait_graph.end()) {
+            return false;
+        }
+
+        auto& node = node_it->second;
+
+        // 从资源锁列表中移除
+        auto& locks_on_resource = resource_locks[resource_id];
+        auto lock_it = std::find_if(locks_on_resource.begin(), locks_on_resource.end(),
+                                   [transaction_id](const LockRequest& req) {
+                                       return req.transaction_id == transaction_id;
+                                   });
+
+        if (lock_it != locks_on_resource.end()) {
+            locks_on_resource.erase(lock_it);
+        }
+
+        // 从事务节点的锁请求中移除
+        auto req_it = std::find_if(node->lock_requests.begin(), node->lock_requests.end(),
+                                  [resource_id](const LockRequest& req) {
+                                      return req.resource_id == resource_id;
+                                  });
+
+        if (req_it != node->lock_requests.end()) {
+            node->lock_requests.erase(req_it);
+        }
+
+        // 重新检查等待该资源的事务
+        checkWaitingTransactions(resource_id);
+
+        return true;
+    }
+
+    /**
+     * 终止事务（清理相关资源）
+     * @param transaction_id 事务ID
+     * @return 是否成功终止
+     */
+    bool abortTransaction(const std::string& transaction_id) {
+        std::lock_guard<std::mutex> lock(detector_mutex);
+
+        auto node_it = wait_graph.find(transaction_id);
+        if (node_it == wait_graph.end()) {
+            return false;
+        }
+
+        auto& node = node_it->second;
+
+        // 释放该事务持有的所有锁
+        for (const auto& lock_request : node->lock_requests) {
+            releaseLock(transaction_id, lock_request.resource_id);
+        }
+
+        // 清理等待关系
+        for (const auto& waiting_tid : node->waiting_for) {
+            auto waiting_node = wait_graph.find(waiting_tid);
+            if (waiting_node != wait_graph.end()) {
+                waiting_node->second->removeBlockedBy(transaction_id);
+            }
+        }
+
+        // 清理阻塞关系
+        for (const auto& blocking_tid : node->blocked_by) {
+            auto blocking_node = wait_graph.find(blocking_tid);
+            if (blocking_node != wait_graph.end()) {
+                blocking_node->second->removeWaitFor(transaction_id);
+            }
+        }
+
+        // 移除事务节点
+        wait_graph.erase(node_it);
+
+        std::cout << "Transaction " << transaction_id << " aborted and cleaned up" << std::endl;
+        return true;
+    }
+
+    /**
+     * 检测死锁
+     * @return 检测到的死锁环
+     */
+    std::vector<std::vector<std::string>> detectDeadlocks() {
+        std::lock_guard<std::mutex> lock(detector_mutex);
+
+        std::vector<std::vector<std::string>> deadlocks;
+        std::unordered_set<std::string> visited;
+
+        // 对每个事务进行DFS检测
+        for (const auto& node_pair : wait_graph) {
+            const auto& node = node_pair.second;
+
+            if (visited.find(node->transaction_id) != visited.end()) {
+                continue;  // 已访问
+            }
+
+            std::vector<std::string> path;
+            std::unordered_set<std::string> recursion_stack;
+
+            if (detectDeadlockDFS(node->transaction_id, visited, recursion_stack, path, deadlocks)) {
+                // 找到死锁，继续检测其他可能的死锁
+            }
+        }
+
+        return deadlocks;
+    }
+
+    /**
+     * 启动死锁检测线程
+     * @param interval_seconds 检测间隔（秒）
+     */
+    void startDeadlockDetection(int interval_seconds = 5) {
+        if (detection_running) {
+            return;
+        }
+
+        detection_running = true;
+        detection_thread = std::thread([this, interval_seconds]() {
+            while (detection_running) {
+                auto deadlocks = detectDeadlocks();
+
+                if (!deadlocks.empty()) {
+                    std::cout << "Detected " << deadlocks.size() << " deadlock(s):" << std::endl;
+                    for (size_t i = 0; i < deadlocks.size(); ++i) {
+                        std::cout << "Deadlock " << (i + 1) << ": ";
+                        for (const auto& tid : deadlocks[i]) {
+                            std::cout << tid << " -> ";
+                        }
+                        std::cout << deadlocks[i][0] << std::endl;
+                    }
+
+                    // 自动解决死锁：选择一个事务中止
+                    resolveDeadlocks(deadlocks);
+                }
+
+                std::this_thread::sleep_for(std::chrono::seconds(interval_seconds));
+            }
+        });
+
+        std::cout << "Deadlock detection started with " << interval_seconds << "s interval" << std::endl;
+    }
+
+    /**
+     * 停止死锁检测
+     */
+    void stopDeadlockDetection() {
+        if (detection_running) {
+            detection_running = false;
+            if (detection_thread.joinable()) {
+                detection_thread.join();
+            }
+            std::cout << "Deadlock detection stopped" << std::endl;
+        }
+    }
+
+    /**
+     * 获取等待图信息
+     * @return 等待图的字符串表示
+     */
+    std::string getWaitGraphInfo() const {
+        std::lock_guard<std::mutex> lock(detector_mutex);
+
+        std::string result = "Wait Graph:\n";
+        for (const auto& node_pair : wait_graph) {
+            const auto& node = node_pair.second;
+            result += "  Transaction " + node->transaction_id + ":\n";
+            result += "    Waiting for: ";
+            for (const auto& waiting_tid : node->waiting_for) {
+                result += waiting_tid + " ";
+            }
+            result += "\n    Blocked by: ";
+            for (const auto& blocking_tid : node->blocked_by) {
+                result += blocking_tid + " ";
+            }
+            result += "\n    Locks: ";
+            for (const auto& lock_req : node->lock_requests) {
+                result += lock_req.resource_id + "(" + lock_req.lock_mode + ") ";
+            }
+            result += "\n";
+        }
+
+        return result;
+    }
+
+private:
+    /**
+     * 深度优先搜索检测死锁
+     */
+    bool detectDeadlockDFS(const std::string& current_tid,
+                          std::unordered_set<std::string>& visited,
+                          std::unordered_set<std::string>& recursion_stack,
+                          std::vector<std::string>& path,
+                          std::vector<std::vector<std::string>>& deadlocks) {
+        visited.insert(current_tid);
+        recursion_stack.insert(current_tid);
+        path.push_back(current_tid);
+
+        auto node_it = wait_graph.find(current_tid);
+        if (node_it != wait_graph.end()) {
+            const auto& node = node_it->second;
+
+            for (const auto& waiting_tid : node->waiting_for) {
+                if (visited.find(waiting_tid) == visited.end()) {
+                    if (detectDeadlockDFS(waiting_tid, visited, recursion_stack, path, deadlocks)) {
+                        return true;
+                    }
+                } else if (recursion_stack.find(waiting_tid) != recursion_stack.end()) {
+                    // 找到环
+                    auto cycle_start = std::find(path.begin(), path.end(), waiting_tid);
+                    std::vector<std::string> cycle(cycle_start, path.end());
+                    deadlocks.push_back(cycle);
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.erase(current_tid);
+        path.pop_back();
+        return false;
+    }
+
+    /**
+     * 检查等待该资源的事务
+     */
+    void checkWaitingTransactions(const std::string& resource_id) {
+        auto& locks_on_resource = resource_locks[resource_id];
+
+        // 检查是否有事务在等待该资源
+        for (const auto& node_pair : wait_graph) {
+            auto& node = node_pair.second;
+
+            for (const auto& lock_request : node->lock_requests) {
+                if (lock_request.resource_id == resource_id) {
+                    // 检查是否可以授予锁
+                    bool can_grant = true;
+                    for (const auto& existing_lock : locks_on_resource) {
+                        if (!lock_request.isCompatible(existing_lock)) {
+                            can_grant = false;
+                            break;
+                        }
+                    }
+
+                    if (can_grant) {
+                        // 可以授予锁，从等待中移除
+                        node->removeWaitFor("");  // 简化处理
+                        locks_on_resource.push_back(lock_request);
+                        std::cout << "Lock granted to transaction " << node->transaction_id
+                                  << " for resource " << resource_id << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 解决死锁
+     */
+    void resolveDeadlocks(const std::vector<std::vector<std::string>>& deadlocks) {
+        for (const auto& deadlock : deadlocks) {
+            if (deadlock.empty()) {
+                continue;
+            }
+
+            // 选择要中止的事务（简单的策略：选择等待时间最短的事务）
+            std::string victim_tid = deadlock[0];
+            auto victim_node = wait_graph.find(victim_tid);
+            if (victim_node != wait_graph.end()) {
+                auto min_time = victim_node->second->start_time;
+
+                for (const auto& tid : deadlock) {
+                    auto node = wait_graph.find(tid);
+                    if (node != wait_graph.end() && node->second->start_time < min_time) {
+                        min_time = node->second->start_time;
+                        victim_tid = tid;
+                    }
+                }
+            }
+
+            // 中止选择的受害者事务
+            std::cout << "Resolving deadlock by aborting transaction " << victim_tid << std::endl;
+            abortTransaction(victim_tid);
+        }
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建分布式死锁检测器
+    DistributedDeadlockDetector detector;
+
+    // 启动死锁检测
+    detector.startDeadlockDetection(3);  // 每3秒检测一次
+
+    // 模拟并发事务的锁请求
+    std::cout << "\n=== Simulating Concurrent Transactions ===" << std::endl;
+
+    // 事务1请求资源A
+    LockRequest req1("T1", "resource_A", "EXCLUSIVE");
+    bool granted1 = detector.addLockRequest(req1);
+    std::cout << "T1 request resource_A (exclusive): " << (granted1 ? "GRANTED" : "WAITING") << std::endl;
+
+    // 事务2请求资源B
+    LockRequest req2("T2", "resource_B", "EXCLUSIVE");
+    bool granted2 = detector.addLockRequest(req2);
+    std::cout << "T2 request resource_B (exclusive): " << (granted2 ? "GRANTED" : "WAITING") << std::endl;
+
+    // 事务1请求资源B（可能导致死锁）
+    LockRequest req3("T1", "resource_B", "EXCLUSIVE");
+    bool granted3 = detector.addLockRequest(req3);
+    std::cout << "T1 request resource_B (exclusive): " << (granted3 ? "GRANTED" : "WAITING") << std::endl;
+
+    // 事务2请求资源A（完成死锁环）
+    LockRequest req4("T2", "resource_A", "EXCLUSIVE");
+    bool granted4 = detector.addLockRequest(req4);
+    std::cout << "T2 request resource_A (exclusive): " << (granted4 ? "GRANTED" : "WAITING") << std::endl;
+
+    // 显示等待图
+    std::cout << "\n" << detector.getWaitGraphInfo() << std::endl;
+
+    // 等待死锁检测
+    std::cout << "Waiting for deadlock detection..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    // 显示死锁检测后的等待图
+    std::cout << "\nAfter deadlock detection:\n" << detector.getWaitGraphInfo() << std::endl;
+
+    // 停止死锁检测
+    detector.stopDeadlockDetection();
+
+    return 0;
+}
+```
+
+## 4. 实践练习
+
+### 练习1：实现Paxos共识算法
+
+基于两阶段提交的思想，实现Paxos共识算法，包括提议者、接受者和学习者角色。
+
+### 练习2：分布式事务的性能优化
+
+实现一个分布式事务管理系统，支持事务批处理、异步提交和读写分离等优化策略。
+
+### 练习3：实现分布式锁服务
+
+基于ZooKeeper或etcd的思想，实现一个分布式锁服务，支持公平锁、非公平锁和读写锁。
+
+### 练习4：分布式事务的最终一致性
+
+实现基于消息队列的最终一致性方案，包括补偿事务和幂等性处理。
+
+## 总结
+
+本节课我们深入学习了分布式数据库的事务管理技术，包括：
+
+1. **两阶段提交协议**：经典的原子提交协议，保证了分布式事务的原子性
+2. **三阶段提交协议**：解决了2PC的阻塞问题，提高了系统的可用性
+3. **分布式死锁检测**：基于等待图的死锁检测和自动解决机制
+4. **事务协调机制**：协调器、参与者之间的协作和故障处理
+
+这些技术是构建高可用、强一致性分布式数据库系统的核心组件。在实际应用中，需要根据业务需求选择合适的事务协议和一致性级别，在性能、可用性和一致性之间取得平衡。下一节课我们将学习分布式数据库的更高级主题，包括分布式查询优化和负载均衡等技术。

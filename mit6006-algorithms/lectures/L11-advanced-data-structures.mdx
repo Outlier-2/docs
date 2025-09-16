@@ -1,0 +1,2890 @@
+---
+title: "L11 - 高级数据结构详解"
+description: "MIT 6.006 算法导论第十一讲：高级数据结构的设计与实现"
+---
+
+# L11 - 高级数据结构详解
+
+## 概述
+
+高级数据结构是解决复杂问题的关键工具，它们能够在特定场景下提供更优的时间和空间复杂度。本讲将深入探讨各种高级数据结构的设计原理、实现技巧和实际应用。
+
+## 学习目标
+
+- **掌握**高级数据结构的设计思想和实现方法
+- **理解**各种数据结构的性能特点和适用场景
+- **能够**根据问题需求选择合适的数据结构
+- **学会**优化数据结构以应对特定约束
+
+## 数据结构设计原则
+
+### 核心设计考虑
+
+| 设计维度 | 优化目标 | 典型技术 |
+|---------|----------|----------|
+| 时间复杂度 | 降低操作复杂度 | 预计算、缓存、并行化 |
+| 空间复杂度 | 减少内存占用 | 压缩、内存池、惰性加载 |
+| 数据局部性 | 提高缓存命中率 | 数据布局优化、预取 |
+| 并发性 | 支持多线程访问 | 锁无关、CAS操作 |
+| 可扩展性 | 处理大规模数据 | 分片、分布式 |
+
+### 性能权衡矩阵
+
+```
+数据结构选择决策矩阵：
+
+┌─────────────────┬─────────────┬─────────────┬─────────────┐
+│ 应用场景        │ 时间优先    │ 空间优先    │ 平衡方案     │
+├─────────────────┼─────────────┼─────────────┼─────────────┤
+│ 频繁查找        │ 哈希表       │ 平衡二叉树    │ 跳表         │
+│ 范围查询        │ 线段树       │ 树状数组     │ B+树         │
+│ 动态更新        │ 伸展树       │ 红黑树       │ AVL树        │
+│ 大规模数据      │ 布隆过滤器   │ 压缩结构     │ 分片哈希     │
+│ 并发访问        │ 无锁结构     │ 读写锁       │ 乐观并发     │
+└─────────────────┴─────────────┴─────────────┴─────────────┘
+```
+
+## 核心数据结构实现
+
+### 1. 并查集 (Union-Find)
+
+并查集是处理等价关系和连通性的高效数据结构，在图算法中有着广泛应用。
+
+```python
+class UnionFind:
+    """
+    并查集数据结构（路径压缩 + 按秩合并）
+
+    设计思路：
+    1. 路径压缩：在查找时压缩路径，使树的高度保持很小
+    2. 按秩合并：总是将较小的树合并到较大的树中
+    3. 时间复杂度：O(α(n))，其中α是反阿克曼函数，近似常数
+
+    应用场景：
+    - 连通性检测
+    - 最小生成树（Kruskal算法）
+    - 等价类维护
+    - 图的连通分量
+
+    Args:
+        elements: 初始元素集合
+    """
+
+    def __init__(self, elements=None):
+        """
+        初始化并查集
+
+        Args:
+            elements: 可选，初始元素列表
+        """
+        self.parent = {}      # 父节点映射
+        self.rank = {}        # 秩（树的高度）
+        self.size = {}        # 集合大小
+        self.count = 0        # 集合数量
+
+        if elements:
+            for element in elements:
+                self.add_element(element)
+
+    def add_element(self, element):
+        """
+        添加新元素
+
+        Args:
+            element: 要添加的元素
+        """
+        if element not in self.parent:
+            self.parent[element] = element
+            self.rank[element] = 0
+            self.size[element] = 1
+            self.count += 1
+
+    def find(self, element):
+        """
+        查找元素的根节点（带路径压缩）
+
+        算法步骤：
+        1. 如果元素不是根节点，递归查找父节点
+        2. 将查找路径上的所有节点直接连接到根节点
+        3. 返回根节点
+
+        Args:
+            element: 要查找的元素
+
+        Returns:
+            根节点元素
+        """
+        if self.parent[element] != element:
+            # 路径压缩：直接将元素连接到根节点
+            self.parent[element] = self.find(self.parent[element])
+        return self.parent[element]
+
+    def union(self, element1, element2):
+        """
+        合并两个元素所在的集合（按秩合并）
+
+        算法步骤：
+        1. 找到两个元素的根节点
+        2. 如果根节点相同，已经在同一集合
+        3. 否则，将秩较小的树合并到秩较大的树中
+        4. 如果秩相同，任意合并并增加秩
+
+        Args:
+            element1: 第一个元素
+            element2: 第二个元素
+
+        Returns:
+            bool: 是否成功合并（如果本来就在同一集合，返回False）
+        """
+        root1 = self.find(element1)
+        root2 = self.find(element2)
+
+        if root1 == root2:
+            return False
+
+        # 按秩合并
+        if self.rank[root1] < self.rank[root2]:
+            # 将root1合并到root2
+            self.parent[root1] = root2
+            self.size[root2] += self.size[root1]
+        elif self.rank[root1] > self.rank[root2]:
+            # 将root2合并到root1
+            self.parent[root2] = root1
+            self.size[root1] += self.size[root2]
+        else:
+            # 秩相同，任意合并并增加秩
+            self.parent[root2] = root1
+            self.rank[root1] += 1
+            self.size[root1] += self.size[root2]
+
+        self.count -= 1
+        return True
+
+    def connected(self, element1, element2):
+        """
+        检查两个元素是否连通
+
+        Args:
+            element1: 第一个元素
+            element2: 第二个元素
+
+        Returns:
+            bool: 是否在同一集合中
+        """
+        return self.find(element1) == self.find(element2)
+
+    def get_size(self, element):
+        """
+        获取元素所在集合的大小
+
+        Args:
+            element: 元素
+
+        Returns:
+            int: 集合大小
+        """
+        root = self.find(element)
+        return self.size[root]
+
+    def get_components(self):
+        """
+        获取所有连通分量
+
+        Returns:
+            dict: {根节点: [元素列表]}
+        """
+        components = {}
+        for element in self.parent:
+            root = self.find(element)
+            if root not in components:
+                components[root] = []
+            components[root].append(element)
+        return components
+
+    def get_count(self):
+        """
+        获取连通分量数量
+
+        Returns:
+            int: 连通分量数量
+        """
+        return self.count
+
+    def __str__(self):
+        """字符串表示"""
+        components = self.get_components()
+        lines = [f"UnionFind with {self.count} components:"]
+        for root, elements in components.items():
+            lines.append(f"  {root}: {elements}")
+        return "\n".join(lines)
+
+    def validate(self):
+        """
+        验证并查集的完整性
+
+        Returns:
+            bool: 是否有效
+        """
+        # 验证每个元素的父节点关系
+        for element in self.parent:
+            if self.parent[element] not in self.parent:
+                return False
+
+        # 验证根节点
+        roots = set()
+        for element in self.parent:
+            root = self.find(element)
+            roots.add(root)
+            if self.parent[root] != root:
+                return False
+
+        # 验证连通分量数量
+        if len(roots) != self.count:
+            return False
+
+        return True
+```
+
+### 2. 线段树 (Segment Tree)
+
+线段树是处理区间查询和更新的高效数据结构。
+
+```python
+class SegmentTree:
+    """
+    线段树数据结构
+
+    设计思路：
+    1. 将区间递归二分，构建二叉树结构
+    2. 每个节点存储对应区间的聚合值
+    3. 支持快速区间查询和单点更新
+
+    时间复杂度：
+    - 构建: O(n)
+    - 查询: O(log n)
+    - 更新: O(log n)
+
+    空间复杂度: O(n)
+
+    Args:
+        data: 初始数据数组
+        func: 区间合并函数（如min, max, sum等）
+        default: 默认值
+    """
+
+    def __init__(self, data, func=min, default=float('inf')):
+        """
+        初始化线段树
+
+        Args:
+            data: 初始数据列表
+            func: 区间合并函数
+            default: 默认值
+        """
+        self.n = len(data)
+        self.func = func
+        self.default = default
+
+        # 计算树的大小（最接近的2的幂）
+        self.size = 1
+        while self.size < self.n:
+            self.size *= 2
+
+        # 初始化树数组
+        self.tree = [self.default] * (2 * self.size)
+
+        # 构建线段树
+        self._build(data)
+
+    def _build(self, data):
+        """
+        构建线段树
+
+        算法步骤：
+        1. 将叶子节点设置为数据值
+        2. 从叶子节点向上，递归计算父节点的值
+        """
+        # 填充叶子节点
+        for i in range(self.n):
+            self.tree[self.size + i] = data[i]
+
+        # 构建内部节点
+        for i in range(self.size - 1, 0, -1):
+            self.tree[i] = self.func(self.tree[2*i], self.tree[2*i+1])
+
+    def update(self, index, value):
+        """
+        更新单个元素的值
+
+        算法步骤：
+        1. 更新对应的叶子节点
+        2. 向上更新所有受影响的父节点
+
+        Args:
+            index: 要更新的元素索引
+            value: 新值
+        """
+        if index < 0 or index >= self.n:
+            raise IndexError(f"Index {index} out of range")
+
+        # 更新叶子节点
+        pos = self.size + index
+        self.tree[pos] = value
+
+        # 向上更新父节点
+        while pos > 1:
+            pos //= 2
+            self.tree[pos] = self.func(self.tree[2*pos], self.tree[2*pos+1])
+
+    def query(self, left, right):
+        """
+        查询区间[left, right]的聚合值
+
+        算法步骤：
+        1. 将区间转换为树中的节点范围
+        2. 从叶子节点向上，逐步合并区间
+        3. 处理不完全匹配的节点
+
+        Args:
+            left: 左边界（包含）
+            right: 右边界（包含）
+
+        Returns:
+            区间聚合值
+        """
+        if left < 0 or right >= self.n or left > right:
+            raise ValueError(f"Invalid range [{left}, {right}]")
+
+        left += self.size
+        right += self.size
+
+        result = self.default
+
+        while left <= right:
+            if left % 2 == 1:
+                # 左边界是右子节点，单独处理
+                result = self.func(result, self.tree[left])
+                left += 1
+            if right % 2 == 0:
+                # 右边界是左子节点，单独处理
+                result = self.func(result, self.tree[right])
+                right -= 1
+
+            left //= 2
+            right //= 2
+
+        return result
+
+    def range_update(self, left, right, value):
+        """
+        区间更新（需要Lazy Propagation）
+
+        Args:
+            left: 更新区间左边界
+            right: 更新区间右边界
+            value: 更新值
+        """
+        self._range_update_recursive(1, 0, self.size - 1, left, right, value)
+
+    def _range_update_recursive(self, node, node_left, node_right,
+                               update_left, update_right, value):
+        """
+        递归进行区间更新
+
+        Args:
+            node: 当前节点
+            node_left: 节点对应的区间左边界
+            node_right: 节点对应的区间右边界
+            update_left: 更新区间左边界
+            update_right: 更新区间右边界
+            value: 更新值
+        """
+        # 更新区间与当前节点区间无交集
+        if update_right < node_left or node_right < update_left:
+            return
+
+        # 当前节点区间完全包含在更新区间内
+        if update_left <= node_left and node_right <= update_right:
+            self.tree[node] = value
+            return
+
+        # 部分重叠，递归更新子节点
+        mid = (node_left + node_right) // 2
+        self._range_update_recursive(2*node, node_left, mid,
+                                    update_left, update_right, value)
+        self._range_update_recursive(2*node+1, mid+1, node_right,
+                                    update_left, update_right, value)
+
+        # 更新当前节点的值
+        self.tree[node] = self.func(self.tree[2*node], self.tree[2*node+1])
+
+    def __str__(self):
+        """打印线段树结构"""
+        lines = []
+        level = 0
+        start = 1
+        while start < 2 * self.size:
+            end = min(2 * start, 2 * self.size)
+            level_nodes = self.tree[start:end]
+            lines.append(f"Level {level}: {level_nodes}")
+            start *= 2
+            level += 1
+        return "\n".join(lines)
+
+class LazySegmentTree:
+    """
+    带延迟标记的线段树
+
+    优化点：
+    1. 使用lazy数组延迟更新
+    2. 支持高效的区间更新
+    3. 查询时才进行实际的更新操作
+    """
+
+    def __init__(self, data, func=sum, lazy_func=lambda x, y: x + y, default=0):
+        self.n = len(data)
+        self.func = func
+        self.lazy_func = lazy_func
+        self.default = default
+
+        # 计算树的大小
+        self.size = 1
+        while self.size < self.n:
+            self.size *= 2
+
+        # 初始化树和lazy数组
+        self.tree = [default] * (2 * self.size)
+        self.lazy = [0] * (2 * self.size)
+
+        # 构建线段树
+        self._build(data)
+
+    def _build(self, data):
+        """构建线段树"""
+        for i in range(self.n):
+            self.tree[self.size + i] = data[i]
+
+        for i in range(self.size - 1, 0, -1):
+            self.tree[i] = self.func(self.tree[2*i], self.tree[2*i+1])
+
+    def _push(self, node, node_left, node_right):
+        """
+        下推延迟标记
+
+        Args:
+            node: 当前节点
+            node_left: 节点对应的区间左边界
+            node_right: 节点对应的区间右边界
+        """
+        if self.lazy[node] != 0:
+            # 应用延迟标记到当前节点
+            self.tree[node] = self.lazy_func(self.tree[node], self.lazy[node])
+
+            if node_left != node_right:
+                # 将延迟标记传递给子节点
+                self.lazy[2*node] = self.lazy_func(self.lazy[2*node], self.lazy[node])
+                self.lazy[2*node+1] = self.lazy_func(self.lazy[2*node+1], self.lazy[node])
+
+            # 清除当前节点的延迟标记
+            self.lazy[node] = 0
+
+    def _update_range(self, node, node_left, node_right,
+                     update_left, update_right, value):
+        """
+        递归进行区间更新
+
+        Args:
+            node: 当前节点
+            node_left: 节点对应的区间左边界
+            node_right: 节点对应的区间右边界
+            update_left: 更新区间左边界
+            update_right: 更新区间右边界
+            value: 更新值
+        """
+        # 下推延迟标记
+        self._push(node, node_left, node_right)
+
+        # 无交集，直接返回
+        if update_right < node_left or node_right < update_left:
+            return
+
+        # 完全包含，设置延迟标记
+        if update_left <= node_left and node_right <= update_right:
+            self.lazy[node] = value
+            self._push(node, node_left, node_right)
+            return
+
+        # 部分重叠，递归更新
+        mid = (node_left + node_right) // 2
+        self._update_range(2*node, node_left, mid, update_left, update_right, value)
+        self._update_range(2*node+1, mid+1, node_right, update_left, update_right, value)
+
+        # 更新当前节点的值
+        self.tree[node] = self.func(self.tree[2*node], self.tree[2*node+1])
+
+    def _query_range(self, node, node_left, node_right, query_left, query_right):
+        """
+        递归进行区间查询
+
+        Args:
+            node: 当前节点
+            node_left: 节点对应的区间左边界
+            node_right: 节点对应的区间右边界
+            query_left: 查询区间左边界
+            query_right: 查询区间右边界
+
+        Returns:
+            查询结果
+        """
+        # 下推延迟标记
+        self._push(node, node_left, node_right)
+
+        # 无交集，返回默认值
+        if query_right < node_left or node_right < query_left:
+            return self.default
+
+        # 完全包含，返回节点值
+        if query_left <= node_left and node_right <= query_right:
+            return self.tree[node]
+
+        # 部分重叠，递归查询
+        mid = (node_left + node_right) // 2
+        left_result = self._query_range(2*node, node_left, mid, query_left, query_right)
+        right_result = self._query_range(2*node+1, mid+1, node_right, query_left, query_right)
+
+        return self.func(left_result, right_result)
+
+    def range_update(self, left, right, value):
+        """
+        区间更新
+
+        Args:
+            left: 更新区间左边界
+            right: 更新区间右边界
+            value: 更新值
+        """
+        self._update_range(1, 0, self.size - 1, left, right, value)
+
+    def range_query(self, left, right):
+        """
+        区间查询
+
+        Args:
+            left: 查询区间左边界
+            right: 查询区间右边界
+
+        Returns:
+            查询结果
+        """
+        return self._query_range(1, 0, self.size - 1, left, right)
+```
+
+### 3. 跳表 (Skip List)
+
+跳表是一种基于概率的平衡数据结构，提供了高效的查找、插入和删除操作。
+
+```python
+import random
+
+class SkipListNode:
+    """
+    跳表节点
+
+    设计思路：
+    1. 每个节点包含值和指向不同层级的指针
+    2. 通过多层索引实现快速查找
+    3. 空间换时间的时间复杂度优化
+    """
+
+    def __init__(self, value, level):
+        """
+        初始化跳表节点
+
+        Args:
+            value: 节点值
+            level: 节点层级
+        """
+        self.value = value
+        self.forward = [None] * (level + 1)  # 前向指针数组
+
+class SkipList:
+    """
+    跳表数据结构
+
+    特点：
+    - 时间复杂度：平均O(log n)，最坏O(n)
+    - 空间复杂度：O(n log n)
+    - 实现简单，性能接近平衡树
+    - 支持高效的并发操作
+
+    应用场景：
+    - 数据库索引
+    - 内存数据结构
+    - 并发字典
+    - 范围查询
+
+    Args:
+        max_level: 最大层级
+        p: 节点晋升概率
+    """
+
+    def __init__(self, max_level=16, p=0.5):
+        """
+        初始化跳表
+
+        Args:
+            max_level: 最大层级
+            p: 节点晋升概率
+        """
+        self.max_level = max_level
+        self.p = p
+        self.level = 0  # 当前最高层级
+        self.head = SkipListNode(None, max_level)  # 头节点
+        self.length = 0  # 元素数量
+
+    def _random_level(self):
+        """
+        随机生成节点层级
+
+        算法步骤：
+        1. 从第0层开始
+        2. 以概率p决定是否晋升到下一层
+        3. 达到max_level或失败时停止
+
+        Returns:
+            节点层级
+        """
+        level = 0
+        while random.random() < self.p and level < self.max_level:
+            level += 1
+        return level
+
+    def search(self, value):
+        """
+        搜索值
+
+        算法步骤：
+        1. 从头节点的最高层开始
+        2. 在当前层向右查找，直到找到大于等于目标值的节点
+        3. 下降到下一层，继续查找
+        4. 重复直到最底层，检查是否找到目标值
+
+        Args:
+            value: 要搜索的值
+
+        Returns:
+            bool: 是否找到
+        """
+        current = self.head
+
+        # 从最高层开始搜索
+        for i in range(self.level, -1, -1):
+            # 在当前层向右查找
+            while current.forward[i] and current.forward[i].value < value:
+                current = current.forward[i]
+
+        # 到达最底层，检查前驱节点的下一个节点
+        current = current.forward[0]
+        return current and current.value == value
+
+    def insert(self, value):
+        """
+        插入值
+
+        算法步骤：
+        1. 搜索插入位置，记录每层的路径
+        2. 随机生成新节点的层级
+        3. 更新跳表的最高层级（如果需要）
+        4. 在各层插入新节点
+
+        Args:
+            value: 要插入的值
+        """
+        # 记录每层的插入位置
+        update = [None] * (self.max_level + 1)
+        current = self.head
+
+        # 搜索插入位置
+        for i in range(self.level, -1, -1):
+            while current.forward[i] and current.forward[i].value < value:
+                current = current.forward[i]
+            update[i] = current
+
+        current = current.forward[0]
+
+        # 如果值已存在，不插入
+        if current and current.value == value:
+            return
+
+        # 创建新节点
+        new_level = self._random_level()
+
+        # 更新跳表的最高层级
+        if new_level > self.level:
+            for i in range(self.level + 1, new_level + 1):
+                update[i] = self.head
+            self.level = new_level
+
+        # 创建新节点
+        new_node = SkipListNode(value, new_level)
+
+        # 在各层插入新节点
+        for i in range(new_level + 1):
+            new_node.forward[i] = update[i].forward[i]
+            update[i].forward[i] = new_node
+
+        self.length += 1
+
+    def delete(self, value):
+        """
+        删除值
+
+        算法步骤：
+        1. 搜索要删除的节点，记录每层的路径
+        2. 如果找到，在各层删除该节点
+        3. 更新跳表的最高层级
+
+        Args:
+            value: 要删除的值
+        """
+        update = [None] * (self.max_level + 1)
+        current = self.head
+
+        # 搜索要删除的节点
+        for i in range(self.level, -1, -1):
+            while current.forward[i] and current.forward[i].value < value:
+                current = current.forward[i]
+            update[i] = current
+
+        current = current.forward[0]
+
+        # 如果找到要删除的节点
+        if current and current.value == value:
+            # 在各层删除节点
+            for i in range(self.level + 1):
+                if update[i].forward[i] != current:
+                    break
+                update[i].forward[i] = current.forward[i]
+
+            # 更新跳表的最高层级
+            while self.level > 0 and self.head.forward[self.level] is None:
+                self.level -= 1
+
+            self.length -= 1
+
+    def get_range(self, start_value, end_value):
+        """
+        获取范围内的所有值
+
+        Args:
+            start_value: 起始值
+            end_value: 结束值
+
+        Returns:
+            范围内的值列表
+        """
+        result = []
+
+        # 找到起始位置
+        current = self.head
+        for i in range(self.level, -1, -1):
+            while current.forward[i] and current.forward[i].value < start_value:
+                current = current.forward[i]
+
+        # 遍历范围内的所有值
+        current = current.forward[0]
+        while current and current.value <= end_value:
+            result.append(current.value)
+            current = current.forward[0]
+
+        return result
+
+    def __contains__(self, value):
+        """
+        检查值是否存在
+
+        Args:
+            value: 要检查的值
+
+        Returns:
+            bool: 是否存在
+        """
+        return self.search(value)
+
+    def __len__(self):
+        """
+        获取跳表长度
+
+        Returns:
+            int: 跳表中元素的数量
+        """
+        return self.length
+
+    def __str__(self):
+        """
+        打印跳表结构
+
+        Returns:
+            str: 跳表的字符串表示
+        """
+        lines = []
+        for i in range(self.level, -1, -1):
+            level_nodes = []
+            current = self.head.forward[i]
+            while current:
+                level_nodes.append(str(current.value))
+                current = current.forward[0]
+            lines.append(f"Level {i}: {' -> '.join(level_nodes)}")
+        return "\n".join(lines)
+
+    def visualize(self):
+        """
+        可视化跳表结构
+        """
+        print("Skip List Structure:")
+        print("=" * 50)
+
+        for i in range(self.level, -1, -1):
+            print(f"Level {i:2d}: ", end="")
+            current = self.head.forward[i]
+            while current:
+                print(f"{current.value:^6}", end=" -> ")
+                current = current.forward[i]
+            print("None")
+
+        print("=" * 50)
+        print(f"Total elements: {self.length}")
+        print(f"Max level: {self.level}")
+```
+
+### 4. 布隆过滤器 (Bloom Filter)
+
+布隆过滤器是一种空间效率很高的概率数据结构，用于判断一个元素是否在集合中。
+
+```python
+import mmh3
+import math
+from bitarray import bitarray
+
+class BloomFilter:
+    """
+    布隆过滤器
+
+    设计思路：
+    1. 使用位数组和多个哈希函数
+    2. 插入时将元素的多个哈希值对应的位设为1
+    3. 查询时检查所有对应位是否为1
+    4. 允许一定的误判率，但不会产生假阴性
+
+    时间复杂度：
+    - 插入: O(k) - k为哈希函数数量
+    - 查询: O(k)
+    - 删除: 不支持（需要计数布隆过滤器）
+
+    空间复杂度: O(m) - m为位数组大小
+
+    Args:
+        capacity: 预期元素数量
+        error_rate: 期望的误判率
+    """
+
+    def __init__(self, capacity, error_rate=0.01):
+        """
+        初始化布隆过滤器
+
+        Args:
+            capacity: 预期元素数量
+            error_rate: 期望的误判率
+        """
+        self.capacity = capacity
+        self.error_rate = error_rate
+        self.count = 0
+
+        # 计算最优参数
+        self.size = self._calculate_size(capacity, error_rate)
+        self.hash_count = self._calculate_hash_count(self.size, capacity)
+
+        # 初始化位数组
+        self.bit_array = bitarray(self.size)
+        self.bit_array.setall(False)
+
+    def _calculate_size(self, capacity, error_rate):
+        """
+        计算位数组大小
+
+        公式：m = -n * ln(p) / (ln(2))^2
+        其中：
+        - m: 位数组大小
+        - n: 预期元素数量
+        - p: 误判率
+
+        Args:
+            capacity: 预期元素数量
+            error_rate: 误判率
+
+        Returns:
+            int: 位数组大小
+        """
+        return int(- (capacity * math.log(error_rate)) / (math.log(2) ** 2))
+
+    def _calculate_hash_count(self, size, capacity):
+        """
+        计算哈希函数数量
+
+        公式：k = (m/n) * ln(2)
+        其中：
+        - k: 哈希函数数量
+        - m: 位数组大小
+        - n: 预期元素数量
+
+        Args:
+            size: 位数组大小
+            capacity: 预期元素数量
+
+        Returns:
+            int: 哈希函数数量
+        """
+        return int((size / capacity) * math.log(2))
+
+    def _get_hashes(self, item):
+        """
+        获取元素的多个哈希值
+
+        使用不同的种子值生成多个哈希值
+
+        Args:
+            item: 要哈希的元素
+
+        Returns:
+            list: 哈希值列表
+        """
+        hashes = []
+        for i in range(self.hash_count):
+            # 使用MurmurHash3哈希算法
+            hash_val = mmh3.hash(str(item), i) % self.size
+            hashes.append(hash_val)
+        return hashes
+
+    def add(self, item):
+        """
+        添加元素到布隆过滤器
+
+        Args:
+            item: 要添加的元素
+        """
+        if self.count >= self.capacity:
+            raise Exception("Bloom filter is full")
+
+        # 计算哈希值并设置对应位
+        for hash_val in self._get_hashes(item):
+            self.bit_array[hash_val] = True
+
+        self.count += 1
+
+    def contains(self, item):
+        """
+        检查元素是否可能在布隆过滤器中
+
+        Args:
+            item: 要检查的元素
+
+        Returns:
+            bool: True表示可能存在，False表示肯定不存在
+        """
+        for hash_val in self._get_hashes(item):
+            if not self.bit_array[hash_val]:
+                return False
+        return True
+
+    def __contains__(self, item):
+        """
+        支持in操作符
+
+        Args:
+            item: 要检查的元素
+
+        Returns:
+            bool: 是否可能存在
+        """
+        return self.contains(item)
+
+    def __len__(self):
+        """
+        获取当前元素数量
+
+        Returns:
+            int: 元素数量
+        """
+        return self.count
+
+    def fill_ratio(self):
+        """
+        计算位数组的填充比例
+
+        Returns:
+            float: 填充比例
+        """
+        return self.bit_array.count() / self.size
+
+    def expected_error_rate(self):
+        """
+        计算期望的误判率
+
+        公式：p = (1 - e^(-k*n/m))^k
+        其中：
+        - p: 误判率
+        - k: 哈希函数数量
+        - n: 元素数量
+        - m: 位数组大小
+
+        Returns:
+            float: 期望误判率
+        """
+        n = self.count
+        m = self.size
+        k = self.hash_count
+        return (1 - math.exp(-k * n / m)) ** k
+
+    def union(self, other):
+        """
+        计算两个布隆过滤器的并集
+
+        Args:
+            other: 另一个布隆过滤器
+
+        Returns:
+            BloomFilter: 并集结果
+        """
+        if self.size != other.size or self.hash_count != other.hash_count:
+            raise ValueError("Bloom filters must have same size and hash count")
+
+        result = BloomFilter(self.capacity + other.capacity, self.error_rate)
+        result.bit_array = self.bit_array | other.bit_array
+        result.count = self.count + other.count
+
+        return result
+
+    def intersection(self, other):
+        """
+        计算两个布隆过滤器的交集
+
+        Args:
+            other: 另一个布隆过滤器
+
+        Returns:
+            BloomFilter: 交集结果
+        """
+        if self.size != other.size or self.hash_count != other.hash_count:
+            raise ValueError("Bloom filters must have same size and hash count")
+
+        result = BloomFilter(min(self.capacity, other.capacity), self.error_rate)
+        result.bit_array = self.bit_array & other.bit_array
+        result.count = min(self.count, other.count)
+
+        return result
+
+    def __str__(self):
+        """
+        字符串表示
+
+        Returns:
+            str: 布隆过滤器的信息
+        """
+        return (f"BloomFilter(capacity={self.capacity}, "
+                f"error_rate={self.error_rate:.4f}, "
+                f"size={self.size}, "
+                f"hash_count={self.hash_count}, "
+                f"count={self.count}, "
+                f"fill_ratio={self.fill_ratio():.4f})")
+
+class CountingBloomFilter:
+    """
+    计数布隆过滤器
+
+    扩展布隆过滤器，支持删除操作
+
+    设计思路：
+    1. 使用计数器数组代替位数组
+    2. 插入时增加计数器的值
+    3. 删除时减少计数器的值
+    4. 查询时检查所有计数器是否大于0
+
+    空间复杂度更高，但支持删除操作
+    """
+
+    def __init__(self, capacity, error_rate=0.01):
+        """
+        初始化计数布隆过滤器
+
+        Args:
+            capacity: 预期元素数量
+            error_rate: 误判率
+        """
+        self.capacity = capacity
+        self.error_rate = error_rate
+
+        # 计算参数
+        self.size = self._calculate_size(capacity, error_rate)
+        self.hash_count = self._calculate_hash_count(self.size, capacity)
+
+        # 使用计数器数组
+        self.counters = [0] * self.size
+
+    def _calculate_size(self, capacity, error_rate):
+        """计算位数组大小"""
+        return int(- (capacity * math.log(error_rate)) / (math.log(2) ** 2))
+
+    def _calculate_hash_count(self, size, capacity):
+        """计算哈希函数数量"""
+        return int((size / capacity) * math.log(2))
+
+    def _get_hashes(self, item):
+        """获取哈希值"""
+        hashes = []
+        for i in range(self.hash_count):
+            hash_val = mmh3.hash(str(item), i) % self.size
+            hashes.append(hash_val)
+        return hashes
+
+    def add(self, item):
+        """
+        添加元素
+
+        Args:
+            item: 要添加的元素
+        """
+        for hash_val in self._get_hashes(item):
+            self.counters[hash_val] += 1
+
+    def contains(self, item):
+        """
+        检查元素是否存在
+
+        Args:
+            item: 要检查的元素
+
+        Returns:
+            bool: 是否可能存在
+        """
+        for hash_val in self._get_hashes(item):
+            if self.counters[hash_val] == 0:
+                return False
+        return True
+
+    def remove(self, item):
+        """
+        删除元素
+
+        Args:
+            item: 要删除的元素
+
+        Returns:
+            bool: 是否成功删除
+        """
+        if not self.contains(item):
+            return False
+
+        for hash_val in self._get_hashes(item):
+            self.counters[hash_val] -= 1
+
+        return True
+
+    def __contains__(self, item):
+        """支持in操作符"""
+        return self.contains(item)
+```
+
+### 5. LRU缓存
+
+LRU（Least Recently Used）缓存是一种常用的缓存淘汰策略。
+
+```python
+from collections import OrderedDict, defaultdict
+import time
+
+class LRUCache:
+    """
+    LRU (Least Recently Used) 缓存
+
+    设计思路：
+    1. 使用哈希表提供O(1)的查找
+    2. 使用双向链表维护访问顺序
+    3. 最近访问的元素移动到链表头部
+    4. 淘汰时从链表尾部移除元素
+
+    时间复杂度：
+    - get: O(1)
+    - put: O(1)
+
+    空间复杂度: O(capacity)
+
+    Args:
+        capacity: 缓存容量
+    """
+
+    def __init__(self, capacity):
+        """
+        初始化LRU缓存
+
+        Args:
+            capacity: 缓存容量
+        """
+        if capacity <= 0:
+            raise ValueError("Capacity must be positive")
+
+        self.capacity = capacity
+        self.cache = OrderedDict()  # 键值对
+        self.access_times = {}      # 访问时间记录
+        self.hits = 0               # 缓存命中次数
+        self.misses = 0             # 缓存未命中次数
+
+    def get(self, key):
+        """
+        获取缓存值
+
+        算法步骤：
+        1. 如果键存在，移动到 OrderedDict 的末尾（最近使用）
+        2. 更新访问时间
+        3. 记录缓存命中
+
+        Args:
+            key: 键
+
+        Returns:
+            值，如果不存在返回None
+        """
+        if key in self.cache:
+            # 移动到末尾（最近使用）
+            value = self.cache.pop(key)
+            self.cache[key] = value
+
+            # 更新访问时间
+            self.access_times[key] = time.time()
+
+            # 记录命中
+            self.hits += 1
+
+            return value
+        else:
+            # 记录未命中
+            self.misses += 1
+            return None
+
+    def put(self, key, value):
+        """
+        设置缓存值
+
+        算法步骤：
+        1. 如果键已存在，更新值并移动到末尾
+        2. 如果不存在，检查容量
+        3. 如果已满，移除最久未使用的元素
+        4. 插入新元素到末尾
+
+        Args:
+            key: 键
+            value: 值
+        """
+        if key in self.cache:
+            # 更新现有值
+            self.cache.pop(key)
+            self.cache[key] = value
+        else:
+            # 检查容量
+            if len(self.cache) >= self.capacity:
+                # 移除最久未使用的元素（第一个元素）
+                oldest_key = next(iter(self.cache))
+                del self.cache[oldest_key]
+                del self.access_times[oldest_key]
+
+            # 插入新元素
+            self.cache[key] = value
+
+        # 更新访问时间
+        self.access_times[key] = time.time()
+
+    def delete(self, key):
+        """
+        删除缓存项
+
+        Args:
+            key: 要删除的键
+
+        Returns:
+            bool: 是否成功删除
+        """
+        if key in self.cache:
+            del self.cache[key]
+            del self.access_times[key]
+            return True
+        return False
+
+    def clear(self):
+        """
+        清空缓存
+        """
+        self.cache.clear()
+        self.access_times.clear()
+        self.hits = 0
+        self.misses = 0
+
+    def size(self):
+        """
+        获取当前缓存大小
+
+        Returns:
+            int: 当前缓存的元素数量
+        """
+        return len(self.cache)
+
+    def get_hit_rate(self):
+        """
+        获取缓存命中率
+
+        Returns:
+            float: 命中率 (0-1)
+        """
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
+
+    def get_stats(self):
+        """
+        获取缓存统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        return {
+            'capacity': self.capacity,
+            'size': len(self.cache),
+            'hits': self.hits,
+            'misses': self.misses,
+            'hit_rate': self.get_hit_rate()
+        }
+
+    def __contains__(self, key):
+        """
+        支持in操作符
+
+        Args:
+            key: 键
+
+        Returns:
+            bool: 键是否存在
+        """
+        return key in self.cache
+
+    def __str__(self):
+        """
+        字符串表示
+
+        Returns:
+            str: 缓存信息
+        """
+        stats = self.get_stats()
+        return (f"LRUCache(capacity={stats['capacity']}, "
+                f"size={stats['size']}, "
+                f"hit_rate={stats['hit_rate']:.4f})")
+
+class LFUCache:
+    """
+    LFU (Least Frequently Used) 缓存
+
+    设计思路：
+    1. 使用频率字典记录每个键的访问频率
+    2. 使用双向链表维护相同频率的键
+    3. 淘汰频率最低且最久未使用的元素
+
+    时间复杂度：O(1) 平均
+    空间复杂度：O(capacity)
+
+    Args:
+        capacity: 缓存容量
+    """
+
+    def __init__(self, capacity):
+        """
+        初始化LFU缓存
+
+        Args:
+            capacity: 缓存容量
+        """
+        self.capacity = capacity
+        self.cache = {}              # key -> (value, frequency)
+        self.freq_map = defaultdict(OrderedDict)  # frequency -> OrderedDict
+        self.min_frequency = 0      # 最小频率
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key):
+        """
+        获取缓存值
+
+        Args:
+            key: 键
+
+        Returns:
+            值，如果不存在返回None
+        """
+        if key not in self.cache:
+            self.misses += 1
+            return None
+
+        value, freq = self.cache[key]
+        self._update_frequency(key, value, freq + 1)
+        self.hits += 1
+
+        return value
+
+    def put(self, key, value):
+        """
+        设置缓存值
+
+        Args:
+            key: 键
+            value: 值
+        """
+        if key in self.cache:
+            # 更新现有值
+            _, freq = self.cache[key]
+            self._update_frequency(key, value, freq + 1)
+        else:
+            # 检查容量
+            if len(self.cache) >= self.capacity:
+                # 淘汰频率最低的项
+                if self.min_frequency in self.freq_map:
+                    # 获取最久未使用的键
+                    oldest_key = next(iter(self.freq_map[self.min_frequency]))
+                    del self.freq_map[self.min_frequency][oldest_key]
+                    del self.cache[oldest_key]
+
+                    # 如果该频率没有键了，删除频率记录
+                    if not self.freq_map[self.min_frequency]:
+                        del self.freq_map[self.min_frequency]
+
+            # 插入新元素
+            self.cache[key] = (value, 1)
+            self.freq_map[1][key] = None  # OrderedDict 只需要键
+            self.min_frequency = 1
+
+    def _update_frequency(self, key, value, new_freq):
+        """
+        更新键的访问频率
+
+        Args:
+            key: 键
+            value: 值
+            new_freq: 新频率
+        """
+        old_freq = self.cache[key][1]
+
+        # 从旧频率中移除
+        if old_freq in self.freq_map:
+            del self.freq_map[old_freq][key]
+
+            # 如果该频率没有键了，删除频率记录
+            if not self.freq_map[old_freq]:
+                del self.freq_map[old_freq]
+
+                # 如果这是最小频率，需要更新
+                if old_freq == self.min_frequency:
+                    self.min_frequency += 1
+
+        # 更新缓存
+        self.cache[key] = (value, new_freq)
+
+        # 添加到新频率
+        self.freq_map[new_freq][key] = None
+
+    def clear(self):
+        """
+        清空缓存
+        """
+        self.cache.clear()
+        self.freq_map.clear()
+        self.min_frequency = 0
+        self.hits = 0
+        self.misses = 0
+
+    def get_stats(self):
+        """
+        获取统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        return {
+            'capacity': self.capacity,
+            'size': len(self.cache),
+            'hits': self.hits,
+            'misses': self.misses,
+            'hit_rate': self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0.0,
+            'min_frequency': self.min_frequency
+        }
+
+    def __str__(self):
+        """
+        字符串表示
+
+        Returns:
+            str: 缓存信息
+        """
+        stats = self.get_stats()
+        return (f"LFUCache(capacity={stats['capacity']}, "
+                f"size={stats['size']}, "
+                f"hit_rate={stats['hit_rate']:.4f})")
+```
+
+## 实际应用案例
+
+### 1. 数据库索引系统
+
+```python
+class DatabaseIndex:
+    """
+    数据库索引实现
+
+    功能：
+    - 主键索引（跳表）
+    - 次级索引（哈希表）
+    - 查询缓存（LRU）
+    - 范围查询（线段树）
+
+    设计思路：
+    1. 使用跳表作为主键索引，支持范围查询
+    2. 使用哈希表作为次级索引，支持快速查找
+    3. 使用LRU缓存缓存常用查询结果
+    4. 使用线段树优化数值型范围查询
+    """
+
+    def __init__(self, capacity=1000):
+        """
+        初始化数据库索引
+
+        Args:
+            capacity: 缓存容量
+        """
+        # 主键索引（跳表）
+        self.primary_index = SkipList()
+
+        # 次级索引
+        self.secondary_indexes = {}
+
+        # 查询缓存
+        self.query_cache = LRUCache(capacity)
+
+        # 数值型字段索引（线段树）
+        self.numeric_indexes = {}
+
+        # 统计信息
+        self.stats = {
+            'total_records': 0,
+            'index_hits': 0,
+            'cache_hits': 0,
+            'query_count': 0
+        }
+
+    def add_record(self, record_id, record_data):
+        """
+        添加记录
+
+        Args:
+            record_id: 记录ID
+            record_data: 记录数据
+        """
+        # 更新主索引
+        self.primary_index.insert(record_id, record_data)
+
+        # 更新次级索引
+        for field_name, field_value in record_data.items():
+            if field_name not in self.secondary_indexes:
+                self.secondary_indexes[field_name] = {}
+
+            if field_value not in self.secondary_indexes[field_name]:
+                self.secondary_indexes[field_name][field_value] = []
+
+            self.secondary_indexes[field_name][field_value].append(record_id)
+
+        # 更新数值型索引
+        for field_name, field_value in record_data.items():
+            if isinstance(field_value, (int, float)):
+                if field_name not in self.numeric_indexes:
+                    # 简化实现，实际需要更复杂的数值索引
+                    self.numeric_indexes[field_name] = []
+
+                self.numeric_indexes[field_name].append((record_id, field_value))
+
+        self.stats['total_records'] += 1
+
+    def query_by_primary(self, record_id):
+        """
+        根据主键查询
+
+        Args:
+            record_id: 记录ID
+
+        Returns:
+            记录数据
+        """
+        self.stats['query_count'] += 1
+
+        # 检查缓存
+        cache_key = f"primary_{record_id}"
+        cached_result = self.query_cache.get(cache_key)
+        if cached_result is not None:
+            self.stats['cache_hits'] += 1
+            return cached_result
+
+        # 查询主索引
+        result = self.primary_index.search(record_id)
+        if result:
+            self.stats['index_hits'] += 1
+            self.query_cache.put(cache_key, result)
+
+        return result
+
+    def query_by_field(self, field_name, field_value):
+        """
+        根据字段查询
+
+        Args:
+            field_name: 字段名
+            field_value: 字段值
+
+        Returns:
+            匹配的记录列表
+        """
+        self.stats['query_count'] += 1
+
+        # 检查缓存
+        cache_key = f"field_{field_name}_{field_value}"
+        cached_result = self.query_cache.get(cache_key)
+        if cached_result is not None:
+            self.stats['cache_hits'] += 1
+            return cached_result
+
+        # 查询次级索引
+        if field_name not in self.secondary_indexes:
+            return []
+
+        record_ids = self.secondary_indexes[field_name].get(field_value, [])
+        results = []
+
+        for record_id in record_ids:
+            record = self.query_by_primary(record_id)
+            if record:
+                results.append(record)
+
+        self.stats['index_hits'] += 1
+        self.query_cache.put(cache_key, results)
+
+        return results
+
+    def query_range(self, field_name, min_value, max_value):
+        """
+        范围查询
+
+        Args:
+            field_name: 字段名
+            min_value: 最小值
+            max_value: 最大值
+
+        Returns:
+            范围内的记录列表
+        """
+        self.stats['query_count'] += 1
+
+        # 检查缓存
+        cache_key = f"range_{field_name}_{min_value}_{max_value}"
+        cached_result = self.query_cache.get(cache_key)
+        if cached_result is not None:
+            self.stats['cache_hits'] += 1
+            return cached_result
+
+        results = []
+
+        # 简化实现：遍历所有记录
+        for record_id in range(self.stats['total_records']):
+            record = self.query_by_primary(record_id)
+            if record and field_name in record:
+                field_value = record[field_name]
+                if min_value <= field_value <= max_value:
+                    results.append(record)
+
+        self.query_cache.put(cache_key, results)
+
+        return results
+
+    def get_stats(self):
+        """
+        获取统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        cache_stats = self.query_cache.get_stats()
+        return {
+            **self.stats,
+            'cache_capacity': cache_stats['capacity'],
+            'cache_size': cache_stats['size'],
+            'cache_hit_rate': cache_stats['hit_rate'],
+            'index_hit_rate': (self.stats['index_hits'] / self.stats['query_count']
+                              if self.stats['query_count'] > 0 else 0.0)
+        }
+
+    def clear_cache(self):
+        """
+        清空缓存
+        """
+        self.query_cache.clear()
+```
+
+### 2. 网络路由系统
+
+```python
+import hashlib
+import bisect
+
+class NetworkRouter:
+    """
+    网络路由器实现
+
+    功能：
+    - IP路由表（压缩Trie）
+    - 连接缓存（LRU）
+    - 负载均衡（一致性哈希）
+    - 路由统计
+
+    设计思路：
+    1. 使用压缩Trie存储IP路由规则
+    2. 使用LRU缓存活跃连接
+    3. 使用一致性哈希实现负载均衡
+    4. 统计路由性能指标
+    """
+
+    def __init__(self, cache_capacity=10000):
+        """
+        初始化网络路由器
+
+        Args:
+            cache_capacity: 连接缓存容量
+        """
+        # IP路由表（压缩Trie）
+        self.routing_table = CompressedTrie()
+
+        # 连接缓存
+        self.connection_cache = LRUCache(cache_capacity)
+
+        # 负载均衡器
+        self.load_balancer = ConsistentHashRing()
+
+        # 路由统计
+        self.stats = {
+            'total_packets': 0,
+            'cache_hits': 0,
+            'routes_found': 0,
+            'load_balance_distributions': {}
+        }
+
+    def add_route(self, ip_prefix, next_hop, metric=1):
+        """
+        添加路由规则
+
+        Args:
+            ip_prefix: IP前缀（如 "192.168.1.0/24"）
+            next_hop: 下一跳地址
+            metric: 路由度量值
+        """
+        route_info = {
+            'next_hop': next_hop,
+            'metric': metric,
+            'prefix': ip_prefix
+        }
+
+        # 将IP前缀转换为路由键
+        route_key = self._ip_prefix_to_key(ip_prefix)
+        self.routing_table.insert(route_key, route_info)
+
+    def route_packet(self, destination_ip, source_ip=None):
+        """
+        路由数据包
+
+        Args:
+            destination_ip: 目标IP地址
+            source_ip: 源IP地址（可选）
+
+        Returns:
+            下一跳地址，如果找不到返回None
+        """
+        self.stats['total_packets'] += 1
+
+        # 检查连接缓存
+        cache_key = f"{source_ip}_{destination_ip}" if source_ip else destination_ip
+        cached_route = self.connection_cache.get(cache_key)
+        if cached_route:
+            self.stats['cache_hits'] += 1
+            return cached_route
+
+        # 查找路由
+        next_hop = self._find_route(destination_ip)
+        if next_hop:
+            self.stats['routes_found'] += 1
+
+            # 更新缓存
+            self.connection_cache.put(cache_key, next_hop)
+
+            return next_hop
+
+        return None
+
+    def _find_route(self, destination_ip):
+        """
+        查找路由
+
+        Args:
+            destination_ip: 目标IP地址
+
+        Returns:
+            下一跳地址
+        """
+        # 将IP地址转换为路由键
+        ip_key = self._ip_to_key(destination_ip)
+
+        # 查找最长匹配的前缀
+        best_match = None
+        best_metric = float('inf')
+
+        # 简化实现：搜索所有可能的前缀
+        for prefix_length in range(32, -1, -1):
+            search_key = ip_key[:prefix_length]
+            route_info = self.routing_table.search(search_key)
+
+            if route_info and route_info['metric'] < best_metric:
+                best_match = route_info['next_hop']
+                best_metric = route_info['metric']
+
+        return best_match
+
+    def add_server(self, server_id, server_address):
+        """
+        添加服务器到负载均衡池
+
+        Args:
+            server_id: 服务器ID
+            server_address: 服务器地址
+        """
+        self.load_balancer.add_node(server_id, server_address)
+
+    def remove_server(self, server_id):
+        """
+        从负载均衡池移除服务器
+
+        Args:
+            server_id: 服务器ID
+        """
+        self.load_balancer.remove_node(server_id)
+
+    def load_balance(self, request_key):
+        """
+        负载均衡请求
+
+        Args:
+            request_key: 请求键
+
+        Returns:
+            服务器地址
+        """
+        server_id = self.load_balancer.get_node(request_key)
+        if server_id:
+            # 更新统计
+            if server_id not in self.stats['load_balance_distributions']:
+                self.stats['load_balance_distributions'][server_id] = 0
+            self.stats['load_balance_distributions'][server_id] += 1
+
+            return self.load_balancer.get_server_address(server_id)
+
+        return None
+
+    def _ip_to_key(self, ip_address):
+        """
+        将IP地址转换为路由键
+
+        Args:
+            ip_address: IP地址字符串
+
+        Returns:
+            路由键
+        """
+        # 简化实现：将IP地址转换为二进制字符串
+        parts = ip_address.split('.')
+        binary_str = ''.join(f'{int(part):08b}' for part in parts)
+        return binary_str
+
+    def _ip_prefix_to_key(self, ip_prefix):
+        """
+        将IP前缀转换为路由键
+
+        Args:
+            ip_prefix: IP前缀字符串
+
+        Returns:
+            路由键
+        """
+        if '/' in ip_prefix:
+            ip_part, prefix_length = ip_prefix.split('/')
+            prefix_length = int(prefix_length)
+            binary_str = self._ip_to_key(ip_part)
+            return binary_str[:prefix_length]
+        else:
+            return self._ip_to_key(ip_prefix)
+
+    def get_stats(self):
+        """
+        获取路由统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        cache_stats = self.connection_cache.get_stats()
+        return {
+            **self.stats,
+            'cache_capacity': cache_stats['capacity'],
+            'cache_size': cache_stats['size'],
+            'cache_hit_rate': cache_stats['hit_rate'],
+            'route_success_rate': (self.stats['routes_found'] / self.stats['total_packets']
+                                  if self.stats['total_packets'] > 0 else 0.0)
+        }
+
+class ConsistentHashRing:
+    """
+    一致性哈希环
+
+    实现一致性哈希算法，用于负载均衡
+    """
+
+    def __init__(self, virtual_nodes=100):
+        """
+        初始化一致性哈希环
+
+        Args:
+            virtual_nodes: 每个物理节点的虚拟节点数量
+        """
+        self.virtual_nodes = virtual_nodes
+        self.ring = {}           # 哈希值到服务器ID的映射
+        self.sorted_keys = []     # 排序的哈希值列表
+        self.servers = {}         # 服务器ID到地址的映射
+
+    def add_node(self, server_id, server_address):
+        """
+        添加服务器节点
+
+        Args:
+            server_id: 服务器ID
+            server_address: 服务器地址
+        """
+        self.servers[server_id] = server_address
+
+        # 添加虚拟节点
+        for i in range(self.virtual_nodes):
+            virtual_node_id = f"{server_id}#{i}"
+            hash_val = self._hash(virtual_node_id)
+            self.ring[hash_val] = server_id
+            self.sorted_keys.append(hash_val)
+
+        # 重新排序
+        self.sorted_keys.sort()
+
+    def remove_node(self, server_id):
+        """
+        移除服务器节点
+
+        Args:
+            server_id: 服务器ID
+        """
+        if server_id not in self.servers:
+            return
+
+        del self.servers[server_id]
+
+        # 移除虚拟节点
+        for i in range(self.virtual_nodes):
+            virtual_node_id = f"{server_id}#{i}"
+            hash_val = self._hash(virtual_node_id)
+
+            if hash_val in self.ring:
+                del self.ring[hash_val]
+
+                # 从排序列表中移除
+                index = bisect.bisect_left(self.sorted_keys, hash_val)
+                if index < len(self.sorted_keys) and self.sorted_keys[index] == hash_val:
+                    self.sorted_keys.pop(index)
+
+    def get_node(self, key):
+        """
+        获取处理键的服务器
+
+        Args:
+            key: 键
+
+        Returns:
+            服务器ID
+        """
+        if not self.ring:
+            return None
+
+        # 计算键的哈希值
+        hash_val = self._hash(key)
+
+        # 查找第一个大于等于哈希值的节点
+        index = bisect.bisect_right(self.sorted_keys, hash_val)
+        if index == len(self.sorted_keys):
+            index = 0
+
+        return self.ring[self.sorted_keys[index]]
+
+    def get_server_address(self, server_id):
+        """
+        获取服务器地址
+
+        Args:
+            server_id: 服务器ID
+
+        Returns:
+            服务器地址
+        """
+        return self.servers.get(server_id)
+
+    def _hash(self, key):
+        """
+        计算哈希值
+
+        Args:
+            key: 键
+
+        Returns:
+            哈希值
+        """
+        return int(hashlib.md5(str(key).encode()).hexdigest(), 16)
+```
+
+### 3. 游戏开发中的空间索引
+
+```python
+class QuadTree:
+    """
+    四叉树空间索引
+
+    功能：
+    - 2D空间对象管理
+    - 快速范围查询
+    - 碰撞检测
+    - 视锥裁剪
+
+    应用场景：
+    - 游戏中的碰撞检测
+    - 物理引擎
+    - 空间查询
+    - 可见性计算
+
+    Args:
+        bounds: 空间边界 (x, y, width, height)
+        max_objects: 节点最大对象数量
+        max_levels: 最大层级深度
+    """
+
+    def __init__(self, bounds, max_objects=10, max_levels=5, level=0):
+        """
+        初始化四叉树
+
+        Args:
+            bounds: 边界 (x, y, width, height)
+            max_objects: 最大对象数量
+            max_levels: 最大层级
+            level: 当前层级
+        """
+        self.bounds = bounds          # (x, y, width, height)
+        self.max_objects = max_objects
+        self.max_levels = max_levels
+        self.level = level
+
+        self.objects = []             # 当前节点中的对象
+        self.nodes = []               # 子节点
+
+    def insert(self, obj, obj_bounds):
+        """
+        插入对象
+
+        Args:
+            obj: 对象
+            obj_bounds: 对象边界 (x, y, width, height)
+
+        Returns:
+            bool: 是否成功插入
+        """
+        # 检查对象是否在当前节点范围内
+        if not self._contains(obj_bounds):
+            return False
+
+        # 如果当前节点可以容纳对象
+        if len(self.objects) < self.max_objects and self.level == self.max_levels:
+            self.objects.append((obj, obj_bounds))
+            return True
+
+        # 如果需要分裂
+        if len(self.nodes) == 0:
+            self._split()
+
+        # 尝试插入到子节点
+        for node in self.nodes:
+            if node.insert(obj, obj_bounds):
+                return True
+
+        # 如果子节点都无法容纳，添加到当前节点
+        self.objects.append((obj, obj_bounds))
+        return True
+
+    def retrieve(self, search_bounds):
+        """
+        检索范围内的对象
+
+        Args:
+            search_bounds: 搜索边界 (x, y, width, height)
+
+        Returns:
+            list: 范围内的对象列表
+        """
+        result = []
+
+        # 检查搜索范围是否与当前节点相交
+        if not self._intersects(search_bounds):
+            return result
+
+        # 添加当前节点中在搜索范围内的对象
+        for obj, obj_bounds in self.objects:
+            if self._intersects_bounds(obj_bounds, search_bounds):
+                result.append(obj)
+
+        # 递归搜索子节点
+        for node in self.nodes:
+            result.extend(node.retrieve(search_bounds))
+
+        return result
+
+    def remove(self, obj, obj_bounds):
+        """
+        移除对象
+
+        Args:
+            obj: 对象
+            obj_bounds: 对象边界
+
+        Returns:
+            bool: 是否成功移除
+        """
+        # 检查对象是否在当前节点范围内
+        if not self._contains(obj_bounds):
+            return False
+
+        # 尝试从当前节点移除
+        for i, (current_obj, current_bounds) in enumerate(self.objects):
+            if current_obj == obj:
+                self.objects.pop(i)
+                return True
+
+        # 尝试从子节点移除
+        for node in self.nodes:
+            if node.remove(obj, obj_bounds):
+                return True
+
+        return False
+
+    def clear(self):
+        """
+        清空四叉树
+        """
+        self.objects.clear()
+        self.nodes.clear()
+
+    def _split(self):
+        """
+        分裂当前节点为四个子节点
+        """
+        x, y, width, height = self.bounds
+        sub_width = width / 2
+        sub_height = height / 2
+
+        # 创建四个子节点
+        self.nodes = [
+            QuadTree((x, y, sub_width, sub_height), self.max_objects,
+                    self.max_levels, self.level + 1),
+            QuadTree((x + sub_width, y, sub_width, sub_height), self.max_objects,
+                    self.max_levels, self.level + 1),
+            QuadTree((x, y + sub_height, sub_width, sub_height), self.max_objects,
+                    self.max_levels, self.level + 1),
+            QuadTree((x + sub_width, y + sub_height, sub_width, sub_height),
+                    self.max_objects, self.max_levels, self.level + 1)
+        ]
+
+    def _contains(self, bounds):
+        """
+        检查边界是否完全包含在当前节点内
+
+        Args:
+            bounds: 边界 (x, y, width, height)
+
+        Returns:
+            bool: 是否完全包含
+        """
+        x, y, w, h = bounds
+        node_x, node_y, node_w, node_h = self.bounds
+
+        return (x >= node_x and x + w <= node_x + node_w and
+                y >= node_y and y + h <= node_y + node_h)
+
+    def _intersects(self, bounds):
+        """
+        检查边界是否与当前节点相交
+
+        Args:
+            bounds: 边界 (x, y, width, height)
+
+        Returns:
+            bool: 是否相交
+        """
+        x, y, w, h = bounds
+        node_x, node_y, node_w, node_h = self.bounds
+
+        return not (x > node_x + node_w or x + w < node_x or
+                    y > node_y + node_h or y + h < node_y)
+
+    def _intersects_bounds(self, bounds1, bounds2):
+        """
+        检查两个边界是否相交
+
+        Args:
+            bounds1: 边界1 (x, y, width, height)
+            bounds2: 边界2 (x, y, width, height)
+
+        Returns:
+            bool: 是否相交
+        """
+        x1, y1, w1, h1 = bounds1
+        x2, y2, w2, h2 = bounds2
+
+        return not (x1 > x2 + w2 or x1 + w1 < x2 or
+                    y1 > y2 + h2 or y1 + h1 < y2)
+
+    def get_stats(self):
+        """
+        获取四叉树统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        stats = {
+            'level': self.level,
+            'objects_count': len(self.objects),
+            'nodes_count': len(self.nodes),
+            'total_objects': len(self.objects)
+        }
+
+        for node in self.nodes:
+            child_stats = node.get_stats()
+            stats['total_objects'] += child_stats['total_objects']
+
+        return stats
+
+    def visualize(self, indent=0):
+        """
+        可视化四叉树结构
+
+        Args:
+            indent: 缩进级别
+        """
+        prefix = "  " * indent
+        print(f"{prefix}Level {self.level}: {len(self.objects)} objects")
+
+        for obj, bounds in self.objects:
+            print(f"{prefix}  Object at {bounds}")
+
+        for node in self.nodes:
+            node.visualize(indent + 1)
+```
+
+## 性能优化与测试
+
+### 1. 内存池管理
+
+```python
+class MemoryPool:
+    """
+    内存池管理器
+
+    功能：
+    - 预分配内存块
+    - 减少内存分配开销
+    - 提高内存访问效率
+    - 防止内存碎片
+
+    应用场景：
+    - 游戏引擎
+    - 高频交易系统
+    - 实时应用
+    - 嵌入式系统
+    """
+
+    def __init__(self, block_size, pool_size):
+        """
+        初始化内存池
+
+        Args:
+            block_size: 每个块的大小（字节）
+            pool_size: 池中块的数量
+        """
+        self.block_size = block_size
+        self.pool_size = pool_size
+        self.free_blocks = []
+        self.allocated_blocks = set()
+        self.memory = bytearray(block_size * pool_size)
+
+        # 初始化空闲块列表
+        for i in range(pool_size):
+            block_address = i * block_size
+            block = self.memory[block_address:block_address + block_size]
+            self.free_blocks.append(block)
+
+    def allocate(self):
+        """
+        分配内存块
+
+        Returns:
+            memoryview: 内存块视图
+        """
+        if not self.free_blocks:
+            raise MemoryError("Memory pool exhausted")
+
+        block = self.free_blocks.pop()
+        block_id = id(block)
+        self.allocated_blocks.add(block_id)
+
+        return memoryview(block)
+
+    def deallocate(self, block):
+        """
+        释放内存块
+
+        Args:
+            block: 要释放的内存块
+        """
+        block_id = id(block)
+        if block_id not in self.allocated_blocks:
+            raise ValueError("Block not allocated from this pool")
+
+        self.allocated_blocks.remove(block_id)
+        self.free_blocks.append(block)
+
+    def get_stats(self):
+        """
+        获取内存池统计信息
+
+        Returns:
+            dict: 统计信息
+        """
+        return {
+            'block_size': self.block_size,
+            'pool_size': self.pool_size,
+            'free_blocks': len(self.free_blocks),
+            'allocated_blocks': len(self.allocated_blocks),
+            'utilization': len(self.allocated_blocks) / self.pool_size
+        }
+
+    def clear(self):
+        """
+        清空内存池
+        """
+        self.free_blocks.clear()
+        self.allocated_blocks.clear()
+
+        # 重新初始化
+        for i in range(self.pool_size):
+            block_address = i * self.block_size
+            block = self.memory[block_address:block_address + self.block_size]
+            self.free_blocks.append(block)
+```
+
+### 2. 缓存友好的设计
+
+```python
+class CacheFriendlyArray:
+    """
+    缓存友好的数组设计
+
+    功能：
+    - 优化数据布局
+    - 提高缓存命中率
+    - 减少缓存失效
+    - 支持批量操作
+
+    设计原则：
+    1. 数据局部性原则
+    2. 批量操作原则
+    3. 预取原则
+    4. 对齐原则
+    """
+
+    def __init__(self, size, element_size):
+        """
+        初始化缓存友好数组
+
+        Args:
+            size: 数组大小
+            element_size: 元素大小
+        """
+        self.size = size
+        self.element_size = element_size
+        self.data = bytearray(size * element_size)
+
+        # 缓存行大小（通常64字节）
+        self.cache_line_size = 64
+
+        # 计算每个缓存行可以容纳的元素数量
+        self.elements_per_cache_line = self.cache_line_size // element_size
+
+    def get_element(self, index):
+        """
+        获取元素
+
+        Args:
+            index: 元素索引
+
+        Returns:
+            bytes: 元素数据
+        """
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+
+        start = index * self.element_size
+        end = start + self.element_size
+        return bytes(self.data[start:end])
+
+    def set_element(self, index, value):
+        """
+        设置元素
+
+        Args:
+            index: 元素索引
+            value: 元素值
+        """
+        if index < 0 or index >= self.size:
+            raise IndexError("Index out of range")
+
+        start = index * self.element_size
+        end = start + self.element_size
+        self.data[start:end] = value
+
+    def batch_process(self, start_index, count, process_func):
+        """
+        批量处理元素
+
+        Args:
+            start_index: 起始索引
+            count: 处理数量
+            process_func: 处理函数
+
+        Returns:
+            list: 处理结果
+        """
+        if start_index < 0 or start_index + count > self.size:
+            raise ValueError("Invalid range")
+
+        results = []
+
+        # 按缓存行对齐的批量处理
+        for i in range(start_index, start_index + count):
+            # 预取下一个缓存行
+            if i + self.elements_per_cache_line < start_index + count:
+                prefetch_index = i + self.elements_per_cache_line
+                self._prefetch_cache_line(prefetch_index)
+
+            # 处理当前元素
+            element = self.get_element(i)
+            result = process_func(element)
+            results.append(result)
+
+        return results
+
+    def _prefetch_cache_line(self, index):
+        """
+        预取缓存行
+
+        Args:
+            index: 元素索引
+        """
+        # 简化的预取实现
+        # 实际硬件预取需要特定指令
+        if 0 <= index < self.size:
+            _ = self.get_element(index)
+
+    def optimized_search(self, target):
+        """
+        优化的搜索算法
+
+        Args:
+            target: 目标值
+
+        Returns:
+            int: 找到的索引，-1表示未找到
+        """
+        # 按缓存行批量搜索
+        for i in range(0, self.size, self.elements_per_cache_line):
+            # 在当前缓存行内搜索
+            for j in range(i, min(i + self.elements_per_cache_line, self.size)):
+                if self.get_element(j) == target:
+                    return j
+
+        return -1
+
+    def get_memory_layout_info(self):
+        """
+        获取内存布局信息
+
+        Returns:
+            dict: 内存布局信息
+        """
+        return {
+            'total_size': len(self.data),
+            'element_size': self.element_size,
+            'cache_line_size': self.cache_line_size,
+            'elements_per_cache_line': self.elements_per_cache_line,
+            'total_cache_lines': (self.size * self.element_size + self.cache_line_size - 1) // self.cache_line_size
+        }
+```
+
+## 实验与性能分析
+
+### 1. 性能基准测试
+
+```python
+import time
+import random
+import matplotlib.pyplot as plt
+import numpy as np
+
+def benchmark_data_structures():
+    """
+    数据结构性能基准测试
+
+    测试场景：
+    - 不同规模的数据
+    - 不同操作类型
+    - 内存使用情况
+    - 并发性能
+    """
+
+    # 测试数据生成
+    def generate_test_data(sizes):
+        test_data = {}
+        for size in sizes:
+            test_data[size] = {
+                'random': list(range(size)),
+                'sorted': list(range(size)),
+                'reverse': list(range(size, 0, -1)),
+                'nearly_sorted': list(range(size))
+            }
+            # 使 nearly_sorted 数组接近有序
+            for i in range(0, size - 1, 100):
+                if i + 10 < size:
+                    test_data[size]['nearly_sorted'][i], test_data[size]['nearly_sorted'][i + 10] = \
+                        test_data[size]['nearly_sorted'][i + 10], test_data[size]['nearly_sorted'][i]
+        return test_data
+
+    # 测试数据结构
+    structures = {
+        'SkipList': lambda data: _test_skip_list(data),
+        'UnionFind': lambda data: _test_union_find(data),
+        'SegmentTree': lambda data: _test_segment_tree(data),
+        'BloomFilter': lambda data: _test_bloom_filter(data),
+        'LRUCache': lambda data: _test_lru_cache(data)
+    }
+
+    sizes = [1000, 10000, 100000, 1000000]
+    test_data = generate_test_data(sizes)
+
+    results = {}
+
+    for struct_name, test_func in structures.items():
+        print(f"\n=== 测试 {struct_name} ===")
+        results[struct_name] = {}
+
+        for size in sizes:
+            print(f"\n规模: {size}")
+            results[struct_name][size] = test_func(test_data[size]['random'])
+
+    return results
+
+def _test_skip_list(data):
+    """测试跳表性能"""
+    sl = SkipList()
+
+    # 插入测试
+    start_time = time.time()
+    for item in data:
+        sl.insert(item)
+    insert_time = time.time() - start_time
+
+    # 查找测试
+    start_time = time.time()
+    for item in data[::10]:  # 查找10%的元素
+        sl.search(item)
+    search_time = time.time() - start_time
+
+    # 范围查询测试
+    start_time = time.time()
+    for i in range(0, len(data), 1000):
+        sl.get_range(i, i + 100)
+    range_time = time.time() - start_time
+
+    return {
+        'insert_time': insert_time,
+        'search_time': search_time,
+        'range_time': range_time,
+        'memory_usage': len(sl) * 8  # 估算内存使用
+    }
+
+def _test_union_find(data):
+    """测试并查集性能"""
+    uf = UnionFind()
+
+    # 添加元素
+    start_time = time.time()
+    for item in data:
+        uf.add_element(item)
+    add_time = time.time() - start_time
+
+    # 随机合并操作
+    start_time = time.time()
+    for _ in range(len(data) // 10):
+        i, j = random.sample(data, 2)
+        uf.union(i, j)
+    union_time = time.time() - start_time
+
+    # 连通性检查
+    start_time = time.time()
+    for _ in range(len(data) // 10):
+        i, j = random.sample(data, 2)
+        uf.connected(i, j)
+    find_time = time.time() - start_time
+
+    return {
+        'add_time': add_time,
+        'union_time': union_time,
+        'find_time': find_time,
+        'components': uf.get_count()
+    }
+
+def _test_segment_tree(data):
+    """测试线段树性能"""
+    st = SegmentTree(data, func=sum)
+
+    # 单点更新测试
+    start_time = time.time()
+    for i in range(0, len(data), 100):
+        st.update(i, data[i] + 1)
+    update_time = time.time() - start_time
+
+    # 区间查询测试
+    start_time = time.time()
+    for i in range(0, len(data) - 1000, 100):
+        st.query(i, i + 1000)
+    query_time = time.time() - start_time
+
+    return {
+        'update_time': update_time,
+        'query_time': query_time,
+        'build_time': 0  # 构建时间在初始化中
+    }
+
+def _test_bloom_filter(data):
+    """测试布隆过滤器性能"""
+    bf = BloomFilter(len(data), error_rate=0.01)
+
+    # 插入测试
+    start_time = time.time()
+    for item in data:
+        bf.add(item)
+    insert_time = time.time() - start_time
+
+    # 查询测试（存在的元素）
+    start_time = time.time()
+    for item in data[::10]:
+        bf.contains(item)
+    query_time = time.time() - start_time
+
+    # 误报率测试
+    false_positives = 0
+    test_items = [f"nonexistent_{i}" for i in range(len(data) // 10)]
+    for item in test_items:
+        if bf.contains(item):
+            false_positives += 1
+
+    false_positive_rate = false_positives / len(test_items)
+
+    return {
+        'insert_time': insert_time,
+        'query_time': query_time,
+        'false_positive_rate': false_positive_rate,
+        'expected_error_rate': bf.expected_error_rate()
+    }
+
+def _test_lru_cache(data):
+    """测试LRU缓存性能"""
+    cache_size = len(data) // 10
+    cache = LRUCache(cache_size)
+
+    # 缓存填充
+    start_time = time.time()
+    for item in data[:cache_size]:
+        cache.put(item, item)
+    fill_time = time.time() - start_time
+
+    # 缓存命中测试
+    start_time = time.time()
+    hits = 0
+    for item in data[:cache_size * 2]:
+        result = cache.get(item)
+        if result is not None:
+            hits += 1
+    hit_test_time = time.time() - start_time
+
+    hit_rate = hits / (cache_size * 2)
+
+    return {
+        'fill_time': fill_time,
+        'hit_test_time': hit_test_time,
+        'hit_rate': hit_rate,
+        'cache_size': cache_size
+    }
+
+def plot_performance_results(results):
+    """
+    绘制性能结果图表
+
+    Args:
+        results: 性能测试结果
+    """
+    sizes = list(results.keys())
+    struct_names = list(results[sizes[0]].keys())
+
+    # 创建子图
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    fig.suptitle('数据结构性能对比', fontsize=16)
+
+    # 绘制不同操作的性能对比
+    operations = ['insert_time', 'search_time', 'query_time', 'hit_rate']
+    titles = ['插入时间', '查找时间', '查询时间', '命中率']
+
+    for i, (op, title) in enumerate(zip(operations, titles)):
+        row, col = i // 2, i % 2
+        ax = axes[row, col]
+
+        for struct_name in struct_names:
+            if struct_name in ['SkipList', 'SegmentTree', 'BloomFilter', 'LRUCache']:
+                times = []
+                for size in sizes:
+                    if op in results[size][struct_name]:
+                        times.append(results[size][struct_name][op])
+                    else:
+                        times.append(0)
+
+                if times and any(t > 0 for t in times):
+                    ax.plot(sizes, times, marker='o', label=struct_name)
+
+        ax.set_xlabel('数据规模')
+        ax.set_ylabel('时间 (秒)' if 'time' in op else '比率')
+        ax.set_title(title)
+        ax.legend()
+        ax.grid(True)
+        ax.set_xscale('log')
+        if 'time' in op:
+            ax.set_yscale('log')
+
+    plt.tight_layout()
+    plt.show()
+```
+
+## 练习与项目
+
+### 练习题
+
+1. **实现一个并发安全的跳表**
+   - 使用读写锁或无锁编程
+   - 处理并发插入和删除
+   - 保证数据一致性
+
+2. **设计一个自适应的LRU缓存**
+   - 根据访问模式动态调整策略
+   - 支持多种淘汰算法
+   - 性能监控和自动调优
+
+3. **实现一个多维线段树**
+   - 支持2D或3D空间查询
+   - 优化存储和查询效率
+   - 处理动态更新
+
+4. **创建一个分布式的布隆过滤器**
+   - 支持跨节点的一致性
+   - 处理节点故障
+   - 优化通信开销
+
+### 项目建议
+
+1. **内存数据库系统**
+   - 使用跳表作为索引结构
+   - 实现ACID事务
+   - 支持持久化存储
+   - 并发控制
+
+2. **实时游戏服务器**
+   - 四叉树空间索引
+   - 碰撞检测系统
+   - 网络同步机制
+   - 性能监控
+
+3. **分布式缓存系统**
+   - 一致性哈希分片
+   - 数据复制和一致性
+   - 故障转移
+   - 性能优化
+
+4. **搜索引擎索引**
+   - 倒排索引实现
+   - 压缩算法优化
+   - 查询优化器
+   - 分布式架构
+
+## 总结
+
+高级数据结构是解决复杂问题的强大工具。通过本讲的学习，你应该能够：
+
+1. **理解**各种高级数据结构的设计原理和性能特点
+2. **实现**复杂的数据结构，包括并查集、线段树、跳表等
+3. **优化**数据结构以适应特定的应用场景
+4. **应用**这些数据结构解决实际的工程问题
+
+掌握这些高级数据结构将大大提升你解决复杂问题的能力，为你在算法设计、系统开发等方面提供坚实的基础。
+
+## 扩展阅读
+
+1. **经典著作**
+   - 《算法导论》- 第12-21章
+   - 《数据结构与算法分析》- Mark Allen Weiss
+   - 《高级数据结构》- John Morris
+
+2. **研究论文**
+   - "Skip Lists: A Probabilistic Alternative to Balanced Trees" - William Pugh
+   - "Bloom Filters in Probabilistic Verification" - Philippe Flajolet
+   - "Union-Find with deletions" - Alstrup et al.
+
+3. **在线资源**
+   - MIT OpenCourseWare: Advanced Data Structures
+   - Stanford CS166: Advanced Data Structures
+   - Coursera: Algorithms on Strings, Trees and Sequences

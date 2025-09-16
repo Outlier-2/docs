@@ -1,0 +1,2173 @@
+---
+title: "Week 8 - Web前端"
+description: "CS50第8周（2025版本）：学习HTML、CSS、JavaScript基础和Web开发"
+---
+
+# Week 8 - Web前端
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/weeks/8" title="CS50 2025 - Week 8" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **HTML基础**：标签、属性、文档结构
+- **CSS样式**：选择器、盒模型、布局
+- **JavaScript编程**：DOM操作、事件处理、异步编程
+- **响应式设计**：媒体查询、弹性布局
+- **Web开发工具**：浏览器开发工具、版本控制
+- **前端框架**：React、Vue基础概念
+
+## 核心概念
+
+### HTML基础
+
+#### HTML文档结构
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的第一个网页</title>
+</head>
+<body>
+    <header>
+        <h1>欢迎来到我的网站</h1>
+        <nav>
+            <ul>
+                <li><a href="#home">首页</a></li>
+                <li><a href="#about">关于</a></li>
+                <li><a href="#contact">联系</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section id="home">
+            <h2>首页内容</h2>
+            <p>这是一个段落，包含一些文本内容。</p>
+            <img src="image.jpg" alt="示例图片" width="300">
+        </section>
+
+        <section id="about">
+            <h2>关于我们</h2>
+            <p>更多关于我们的信息...</p>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 我的网站. 保留所有权利.</p>
+    </footer>
+</body>
+</html>
+```
+
+#### 常用HTML标签
+
+```html
+<!-- 文本内容 -->
+<h1>主标题</h1>
+<h2>副标题</h2>
+<p>段落文本</p>
+<strong>粗体文本</strong>
+<em>斜体文本</em>
+<a href="https://example.com">链接</a>
+
+<!-- 列表 -->
+<ul>
+    <li>无序列表项1</li>
+    <li>无序列表项2</li>
+</ul>
+
+<ol>
+    <li>有序列表项1</li>
+    <li>有序列表项2</li>
+</ol>
+
+<!-- 表单 -->
+<form action="/submit" method="post">
+    <label for="name">姓名:</label>
+    <input type="text" id="name" name="name" required>
+
+    <label for="email">邮箱:</label>
+    <input type="email" id="email" name="email" required>
+
+    <label for="message">消息:</label>
+    <textarea id="message" name="message" rows="4" cols="50"></textarea>
+
+    <button type="submit">提交</button>
+</form>
+
+<!-- 表格 -->
+<table border="1">
+    <thead>
+        <tr>
+            <th>姓名</th>
+            <th>年龄</th>
+            <th>城市</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>张三</td>
+            <td>25</td>
+            <td>北京</td>
+        </tr>
+        <tr>
+            <td>李四</td>
+            <td>30</td>
+            <td>上海</td>
+        </tr>
+    </tbody>
+</table>
+```
+
+### CSS样式
+
+#### CSS基础语法
+
+```css
+/* CSS选择器和声明 */
+selector {
+    property: value;
+    property: value;
+}
+
+/* 元素选择器 */
+h1 {
+    color: #333;
+    font-size: 2em;
+    text-align: center;
+}
+
+/* 类选择器 */
+.highlight {
+    background-color: yellow;
+    font-weight: bold;
+}
+
+/* ID选择器 */
+#main-header {
+    background-color: #f0f0f0;
+    padding: 20px;
+}
+
+/* 后代选择器 */
+nav ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+}
+
+/* 伪类选择器 */
+a:hover {
+    color: #ff6600;
+    text-decoration: underline;
+}
+```
+
+#### 盒模型和布局
+
+```css
+/* 盒模型属性 */
+.box {
+    width: 300px;
+    height: 200px;
+    padding: 20px;        /* 内边距 */
+    border: 2px solid #333;  /* 边框 */
+    margin: 10px;         /* 外边距 */
+    background-color: #f9f9f9;
+}
+
+/* Flexbox布局 */
+.container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+}
+
+.item {
+    flex: 1;
+    padding: 15px;
+    background-color: #e0e0e0;
+}
+
+/* Grid布局 */
+.grid-container {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    padding: 20px;
+}
+
+.grid-item {
+    background-color: #ddd;
+    padding: 20px;
+    text-align: center;
+}
+```
+
+#### 响应式设计
+
+```css
+/* 媒体查询 */
+@media (max-width: 768px) {
+    .container {
+        flex-direction: column;
+    }
+
+    .grid-container {
+        grid-template-columns: 1fr;
+    }
+
+    nav ul {
+        flex-direction: column;
+    }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+    .grid-container {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+```
+
+### JavaScript编程
+
+#### JavaScript基础语法
+
+```javascript
+// 变量声明
+let message = "Hello, World!";
+const PI = 3.14159;
+var count = 0;
+
+// 数据类型
+let number = 42;
+let text = "JavaScript";
+let isTrue = true;
+let array = [1, 2, 3, 4, 5];
+let object = {
+    name: "张三",
+    age: 25,
+    city: "北京"
+};
+
+// 函数
+function greet(name) {
+    return `你好, ${name}!`;
+}
+
+// 箭头函数
+const add = (a, b) => a + b;
+
+// 条件语句
+if (number > 0) {
+    console.log("正数");
+} else if (number < 0) {
+    console.log("负数");
+} else {
+    console.log("零");
+}
+
+// 循环
+for (let i = 0; i < 5; i++) {
+    console.log(`循环次数: ${i}`);
+}
+
+array.forEach(item => {
+    console.log(item);
+});
+```
+
+#### DOM操作
+
+```javascript
+// 获取元素
+const header = document.getElementById('main-header');
+const paragraphs = document.getElementsByTagName('p');
+const highlighted = document.getElementsByClassName('highlight');
+const button = document.querySelector('#submit-btn');
+const allLinks = document.querySelectorAll('a');
+
+// 修改内容
+header.textContent = '新的标题';
+header.innerHTML = '<em>斜体标题</em>';
+
+// 修改样式
+header.style.color = '#ff6600';
+header.style.backgroundColor = '#f0f0f0';
+
+// 添加和删除类
+header.classList.add('highlight');
+header.classList.remove('old-class');
+header.classList.toggle('active');
+
+// 创建和插入元素
+const newParagraph = document.createElement('p');
+newParagraph.textContent = '这是一个新段落';
+document.body.appendChild(newParagraph);
+
+// 事件处理
+button.addEventListener('click', function() {
+    alert('按钮被点击了!');
+});
+
+// 表单验证
+const form = document.querySelector('form');
+form.addEventListener('submit', function(event) {
+    const nameInput = document.getElementById('name');
+    if (nameInput.value.trim() === '') {
+        event.preventDefault();
+        alert('请输入姓名');
+    }
+});
+```
+
+#### 异步编程
+
+```javascript
+// Promise示例
+function fetchData(url) {
+    return new Promise((resolve, reject) => {
+        fetch(url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('网络响应错误');
+                }
+                return response.json();
+            })
+            .then(data => resolve(data))
+            .catch(error => reject(error));
+    });
+}
+
+// 使用Promise
+fetchData('https://api.example.com/data')
+    .then(data => {
+        console.log('获取的数据:', data);
+    })
+    .catch(error => {
+        console.error('错误:', error);
+    });
+
+// Async/Await
+async function getData() {
+    try {
+        const response = await fetch('https://api.example.com/data');
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('获取数据失败:', error);
+        throw error;
+    }
+}
+
+// 使用async函数
+getData().then(data => {
+    console.log('数据:', data);
+});
+```
+
+### 实用项目示例
+
+#### 待办事项列表
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>待办事项列表</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        .input-group {
+            display: flex;
+            margin-bottom: 20px;
+        }
+
+        #taskInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        #addBtn {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+
+        #addBtn:hover {
+            background-color: #0056b3;
+        }
+
+        .task-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border: 1px solid #ddd;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            background-color: #fff;
+        }
+
+        .task-item.completed {
+            background-color: #f8f9fa;
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .task-text {
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        .delete-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .delete-btn:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>待办事项列表</h1>
+
+        <div class="input-group">
+            <input type="text" id="taskInput" placeholder="输入新的待办事项...">
+            <button id="addBtn">添加</button>
+        </div>
+
+        <ul id="taskList" class="task-list"></ul>
+    </div>
+
+    <script>
+        class TodoApp {
+            constructor() {
+                this.tasks = JSON.parse(localStorage.getItem('tasks')) || [];
+                this.taskInput = document.getElementById('taskInput');
+                this.addBtn = document.getElementById('addBtn');
+                this.taskList = document.getElementById('taskList');
+
+                this.init();
+            }
+
+            init() {
+                this.addBtn.addEventListener('click', () => this.addTask());
+                this.taskInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.addTask();
+                    }
+                });
+
+                this.render();
+            }
+
+            addTask() {
+                const taskText = this.taskInput.value.trim();
+                if (taskText === '') {
+                    alert('请输入待办事项');
+                    return;
+                }
+
+                const task = {
+                    id: Date.now(),
+                    text: taskText,
+                    completed: false
+                };
+
+                this.tasks.push(task);
+                this.taskInput.value = '';
+                this.save();
+                this.render();
+            }
+
+            toggleTask(id) {
+                const task = this.tasks.find(t => t.id === id);
+                if (task) {
+                    task.completed = !task.completed;
+                    this.save();
+                    this.render();
+                }
+            }
+
+            deleteTask(id) {
+                this.tasks = this.tasks.filter(t => t.id !== id);
+                this.save();
+                this.render();
+            }
+
+            save() {
+                localStorage.setItem('tasks', JSON.stringify(this.tasks));
+            }
+
+            render() {
+                this.taskList.innerHTML = '';
+
+                this.tasks.forEach(task => {
+                    const li = document.createElement('li');
+                    li.className = `task-item ${task.completed ? 'completed' : ''}`;
+
+                    li.innerHTML = `
+                        <input type="checkbox" ${task.completed ? 'checked' : ''}>
+                        <span class="task-text">${task.text}</span>
+                        <button class="delete-btn">删除</button>
+                    `;
+
+                    const checkbox = li.querySelector('input[type="checkbox"]');
+                    const deleteBtn = li.querySelector('.delete-btn');
+
+                    checkbox.addEventListener('change', () => this.toggleTask(task.id));
+                    deleteBtn.addEventListener('click', () => this.deleteTask(task.id));
+
+                    this.taskList.appendChild(li);
+                });
+            }
+        }
+
+        // 启动应用
+        document.addEventListener('DOMContentLoaded', () => {
+            new TodoApp();
+        });
+    </script>
+</body>
+</html>
+```
+
+#### 天气查询应用
+
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>天气查询</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #74b9ff, #0984e3);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .weather-container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #2d3436;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        .search-container {
+            margin-bottom: 30px;
+        }
+
+        #cityInput {
+            width: 70%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 25px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        #cityInput:focus {
+            border-color: #74b9ff;
+        }
+
+        #searchBtn {
+            width: 25%;
+            padding: 12px;
+            background-color: #74b9ff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #searchBtn:hover {
+            background-color: #0984e3;
+        }
+
+        .weather-info {
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .weather-info.show {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .city-name {
+            font-size: 2em;
+            color: #2d3436;
+            margin-bottom: 10px;
+        }
+
+        .temperature {
+            font-size: 4em;
+            color: #74b9ff;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+
+        .description {
+            font-size: 1.2em;
+            color: #636e72;
+            margin-bottom: 20px;
+            text-transform: capitalize;
+        }
+
+        .details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .detail-item {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+        }
+
+        .detail-label {
+            font-weight: bold;
+            color: #495057;
+            margin-bottom: 5px;
+        }
+
+        .detail-value {
+            color: #74b9ff;
+            font-size: 1.1em;
+        }
+
+        .error-message {
+            color: #e74c3c;
+            background-color: #ffeaa7;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .loading {
+            display: none;
+            color: #74b9ff;
+            font-size: 1.2em;
+            margin: 20px 0;
+        }
+
+        .loading.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="weather-container">
+        <h1>天气查询</h1>
+
+        <div class="search-container">
+            <input type="text" id="cityInput" placeholder="输入城市名称...">
+            <button id="searchBtn">查询</button>
+        </div>
+
+        <div class="loading" id="loading">正在查询天气...</div>
+        <div class="error-message" id="errorMessage"></div>
+
+        <div class="weather-info" id="weatherInfo">
+            <div class="city-name" id="cityName"></div>
+            <div class="temperature" id="temperature"></div>
+            <div class="description" id="description"></div>
+
+            <div class="details">
+                <div class="detail-item">
+                    <div class="detail-label">体感温度</div>
+                    <div class="detail-value" id="feelsLike"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">湿度</div>
+                    <div class="detail-value" id="humidity"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">风速</div>
+                    <div class="detail-value" id="windSpeed"></div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">气压</div>
+                    <div class="detail-value" id="pressure"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class WeatherApp {
+            constructor() {
+                this.apiKey = 'YOUR_API_KEY'; // 需要替换为实际的API密钥
+                this.baseUrl = 'https://api.openweathermap.org/data/2.5/weather';
+
+                this.cityInput = document.getElementById('cityInput');
+                this.searchBtn = document.getElementById('searchBtn');
+                this.loading = document.getElementById('loading');
+                this.errorMessage = document.getElementById('errorMessage');
+                this.weatherInfo = document.getElementById('weatherInfo');
+
+                this.init();
+            }
+
+            init() {
+                this.searchBtn.addEventListener('click', () => this.searchWeather());
+                this.cityInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.searchWeather();
+                    }
+                });
+
+                // 模拟数据（实际使用时需要真实的API密钥）
+                this.mockData = {
+                    '北京': {
+                        name: '北京',
+                        main: { temp: 25, feels_like: 27, humidity: 60 },
+                        weather: [{ description: '晴天' }],
+                        wind: { speed: 3.5 },
+                        main: { pressure: 1013 }
+                    },
+                    '上海': {
+                        name: '上海',
+                        main: { temp: 28, feels_like: 30, humidity: 70 },
+                        weather: [{ description: '多云' }],
+                        wind: { speed: 2.1 },
+                        main: { pressure: 1015 }
+                    },
+                    '广州': {
+                        name: '广州',
+                        main: { temp: 32, feels_like: 35, humidity: 80 },
+                        weather: [{ description: '雷阵雨' }],
+                        wind: { speed: 1.8 },
+                        main: { pressure: 1008 }
+                    }
+                };
+            }
+
+            async searchWeather() {
+                const city = this.cityInput.value.trim();
+                if (!city) {
+                    this.showError('请输入城市名称');
+                    return;
+                }
+
+                this.showLoading(true);
+                this.hideError();
+
+                try {
+                    // 使用模拟数据（实际项目中应该调用真实API）
+                    const data = await this.getMockWeatherData(city);
+                    this.displayWeather(data);
+                } catch (error) {
+                    this.showError('获取天气数据失败，请检查城市名称');
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+
+            async getMockWeatherData(city) {
+                // 模拟API延迟
+                return new Promise((resolve, reject) => {
+                    setTimeout(() => {
+                        const data = this.mockData[city];
+                        if (data) {
+                            resolve(data);
+                        } else {
+                            reject(new Error('城市不存在'));
+                        }
+                    }, 1000);
+                });
+            }
+
+            displayWeather(data) {
+                document.getElementById('cityName').textContent = data.name;
+                document.getElementById('temperature').textContent = `${Math.round(data.main.temp)}°C`;
+                document.getElementById('description').textContent = data.weather[0].description;
+                document.getElementById('feelsLike').textContent = `${Math.round(data.main.feels_like)}°C`;
+                document.getElementById('humidity').textContent = `${data.main.humidity}%`;
+                document.getElementById('windSpeed').textContent = `${data.wind.speed} m/s`;
+                document.getElementById('pressure').textContent = `${data.main.pressure} hPa`;
+
+                this.weatherInfo.classList.add('show');
+            }
+
+            showLoading(show) {
+                this.loading.classList.toggle('show', show);
+            }
+
+            showError(message) {
+                this.errorMessage.textContent = message;
+                this.errorMessage.style.display = 'block';
+                this.weatherInfo.classList.remove('show');
+            }
+
+            hideError() {
+                this.errorMessage.style.display = 'none';
+            }
+        }
+
+        // 启动应用
+        document.addEventListener('DOMContentLoaded', () => {
+            new WeatherApp();
+        });
+    </script>
+</body>
+</html>
+```
+
+## 练习题与答案
+
+### 1. HTML基础练习
+
+**问题：** 创建一个个人简历网页，包含个人信息、教育背景、工作经历和技能列表。
+
+**答案：**
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人简历 - 张三</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #333;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .contact-info {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .contact-info span {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #2c3e50;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+            margin-bottom: 20px;
+        }
+
+        .experience-item, .education-item {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+
+        .experience-item h3, .education-item h3 {
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+
+        .experience-item .company, .education-item .school {
+            font-weight: bold;
+            color: #3498db;
+            margin-bottom: 5px;
+        }
+
+        .experience-item .duration, .education-item .duration {
+            color: #666;
+            font-style: italic;
+            margin-bottom: 10px;
+        }
+
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .skill-category {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+        }
+
+        .skill-category h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .skill-list {
+            list-style: none;
+        }
+
+        .skill-list li {
+            padding: 3px 0;
+            color: #555;
+        }
+
+        .skill-list li:before {
+            content: "▶ ";
+            color: #3498db;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>张三</h1>
+            <p>软件工程师</p>
+            <div class="contact-info">
+                <span>📧 zhangsan@email.com</span>
+                <span>📱 +86 138 0000 0000</span>
+                <span>📍 北京市朝阳区</span>
+                <span>🔗 linkedin.com/in/zhangsan</span>
+            </div>
+        </header>
+
+        <section class="section">
+            <h2>个人简介</h2>
+            <p>拥有5年软件开发经验的软件工程师，专注于Web开发和移动应用开发。熟练掌握多种编程语言和技术栈，具备良好的团队协作能力和问题解决能力。热爱学习新技术，善于将理论知识应用于实际项目中。</p>
+        </section>
+
+        <section class="section">
+            <h2>工作经历</h2>
+            <div class="experience-item">
+                <h3>高级软件工程师</h3>
+                <div class="company">科技有限公司</div>
+                <div class="duration">2021年6月 - 至今</div>
+                <ul>
+                    <li>负责公司核心产品的架构设计和开发</li>
+                    <li>带领5人开发团队完成多个重要项目</li>
+                    <li>优化系统性能，将响应时间减少40%</li>
+                    <li>制定开发规范和代码审查流程</li>
+                </ul>
+            </div>
+            <div class="experience-item">
+                <h3>软件工程师</h3>
+                <div class="company">互联网科技公司</div>
+                <div class="duration">2019年3月 - 2021年5月</div>
+                <ul>
+                    <li>参与电商平台后端开发</li>
+                    <li>开发和维护RESTful API</li>
+                    <li>数据库设计和优化</li>
+                    <li>参与敏捷开发流程</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>教育背景</h2>
+            <div class="education-item">
+                <h3>计算机科学与技术学士</h3>
+                <div class="school">北京大学</div>
+                <div class="duration">2015年9月 - 2019年6月</div>
+                <p>主修课程：数据结构、算法分析、数据库系统、软件工程、计算机网络</p>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>技能专长</h2>
+            <div class="skills-grid">
+                <div class="skill-category">
+                    <h4>编程语言</h4>
+                    <ul class="skill-list">
+                        <li>JavaScript (高级)</li>
+                        <li>Python (高级)</li>
+                        <li>Java (中级)</li>
+                        <li>C++ (中级)</li>
+                    </ul>
+                </div>
+                <div class="skill-category">
+                    <h4>前端技术</h4>
+                    <ul class="skill-list">
+                        <li>HTML5/CSS3</li>
+                        <li>React</li>
+                        <li>Vue.js</li>
+                        <li>Node.js</li>
+                    </ul>
+                </div>
+                <div class="skill-category">
+                    <h4>后端技术</h4>
+                    <ul class="skill-list">
+                        <li>Django</li>
+                        <li>Flask</li>
+                        <li>MySQL</li>
+                        <li>Redis</li>
+                    </ul>
+                </div>
+                <div class="skill-category">
+                    <h4>工具和其他</h4>
+                    <ul class="skill-list">
+                        <li>Git</li>
+                        <li>Docker</li>
+                        <li>Linux</li>
+                        <li>Agile/Scrum</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>项目经历</h2>
+            <div class="experience-item">
+                <h3>在线教育平台</h3>
+                <div class="duration">2022年1月 - 2022年8月</div>
+                <ul>
+                    <li>负责平台前端架构设计和开发</li>
+                    <li>实现了视频播放、实时互动等功能</li>
+                    <li>用户量达到10万+</li>
+                </ul>
+            </div>
+            <div class="experience-item">
+                <h3>企业管理系统</h3>
+                <div class="duration">2020年6月 - 2021年2月</div>
+                <ul>
+                    <li>开发员工管理和薪资计算模块</li>
+                    <li>提高数据处理效率60%</li>
+                    <li>为公司节省大量人力成本</li>
+                </ul>
+            </div>
+        </section>
+    </div>
+</body>
+</html>
+```
+
+### 2. CSS布局练习
+
+**问题：** 创建一个响应式的博客文章列表页面，包含文章卡片、侧边栏和导航栏。
+
+**答案：**
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>技术博客</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+
+        /* 导航栏样式 */
+        .navbar {
+            background: #2c3e50;
+            color: white;
+            padding: 1rem 0;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: #3498db;
+        }
+
+        /* 主容器 */
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 20px;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 2rem;
+        }
+
+        /* 主要内容区域 */
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        /* 文章卡片 */
+        .article-card {
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .article-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+        }
+
+        .article-image {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .article-content {
+            padding: 1.5rem;
+        }
+
+        .article-meta {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .article-category {
+            background: #3498db;
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+        }
+
+        .article-title {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #2c3e50;
+        }
+
+        .article-title a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .article-title a:hover {
+            color: #3498db;
+        }
+
+        .article-excerpt {
+            color: #666;
+            margin-bottom: 1rem;
+            line-height: 1.6;
+        }
+
+        .read-more {
+            color: #3498db;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .read-more:hover {
+            text-decoration: underline;
+        }
+
+        /* 侧边栏 */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .sidebar-section {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .sidebar-section h3 {
+            margin-bottom: 1rem;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 0.5rem;
+        }
+
+        .category-list, .tag-list {
+            list-style: none;
+        }
+
+        .category-list li, .tag-list li {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .category-list li:last-child, .tag-list li:last-child {
+            border-bottom: none;
+        }
+
+        .category-list a, .tag-list a {
+            color: #666;
+            text-decoration: none;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .category-list a:hover, .tag-list a:hover {
+            color: #3498db;
+        }
+
+        .tag-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .tag {
+            background: #ecf0f1;
+            color: #2c3e50;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            text-decoration: none;
+            transition: background-color 0.3s;
+        }
+
+        .tag:hover {
+            background: #3498db;
+            color: white;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+            }
+
+            .container {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+
+            .sidebar {
+                order: -1;
+            }
+
+            .article-title {
+                font-size: 1.2rem;
+            }
+
+            .tag-cloud {
+                justify-content: center;
+            }
+        }
+
+        /* 分页 */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-top: 2rem;
+        }
+
+        .pagination a {
+            padding: 0.5rem 1rem;
+            background: white;
+            color: #666;
+            text-decoration: none;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+
+        .pagination a:hover {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+
+        .pagination .active {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">技术博客</div>
+            <ul class="nav-links">
+                <li><a href="#home">首页</a></li>
+                <li><a href="#articles">文章</a></li>
+                <li><a href="#categories">分类</a></li>
+                <li><a href="#about">关于</a></li>
+                <li><a href="#contact">联系</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- 主容器 -->
+    <div class="container">
+        <!-- 主要内容 -->
+        <main class="main-content">
+            <!-- 文章卡片1 -->
+            <article class="article-card">
+                <img src="https://via.placeholder.com/800x400" alt="JavaScript高级特性" class="article-image">
+                <div class="article-content">
+                    <div class="article-meta">
+                        <span class="article-category">JavaScript</span>
+                        <span>📅 2024年1月15日</span>
+                        <span>👤 张三</span>
+                        <span>💬 23条评论</span>
+                    </div>
+                    <h2 class="article-title">
+                        <a href="#">深入理解JavaScript异步编程</a>
+                    </h2>
+                    <p class="article-excerpt">
+                        本文将深入探讨JavaScript中的异步编程概念，包括Promise、async/await以及事件循环机制。通过实际案例帮助你更好地理解和应用这些重要概念...
+                    </p>
+                    <a href="#" class="read-more">阅读更多 →</a>
+                </div>
+            </article>
+
+            <!-- 文章卡片2 -->
+            <article class="article-card">
+                <img src="https://via.placeholder.com/800x400" alt="React开发指南" class="article-image">
+                <div class="article-content">
+                    <div class="article-meta">
+                        <span class="article-category">React</span>
+                        <span>📅 2024年1月12日</span>
+                        <span>👤 李四</span>
+                        <span>💬 15条评论</span>
+                    </div>
+                    <h2 class="article-title">
+                        <a href="#">React 18新特性完全指南</a>
+                    </h2>
+                    <p class="article-excerpt">
+                        React 18带来了许多令人兴奋的新特性，包括并发渲染、Suspense改进和新的Hooks。本文将详细介绍这些特性及其在实际项目中的应用...
+                    </p>
+                    <a href="#" class="read-more">阅读更多 →</a>
+                </div>
+            </article>
+
+            <!-- 文章卡片3 -->
+            <article class="article-card">
+                <img src="https://via.placeholder.com/800x400" alt="CSS布局技术" class="article-image">
+                <div class="article-content">
+                    <div class="article-meta">
+                        <span class="article-category">CSS</span>
+                        <span>📅 2024年1月10日</span>
+                        <span>👤 王五</span>
+                        <span>💬 31条评论</span>
+                    </div>
+                    <h2 class="article-title">
+                        <a href="#">现代CSS布局：Flexbox与Grid完全指南</a>
+                    </h2>
+                    <p class="article-excerpt">
+                        掌握现代CSS布局技术，包括Flexbox和Grid布局系统的使用方法和最佳实践。通过实例演示如何创建复杂而灵活的页面布局...
+                    </p>
+                    <a href="#" class="read-more">阅读更多 →</a>
+                </div>
+            </article>
+
+            <!-- 分页 -->
+            <div class="pagination">
+                <a href="#" class="active">1</a>
+                <a href="#">2</a>
+                <a href="#">3</a>
+                <a href="#">下一页 →</a>
+            </div>
+        </main>
+
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <!-- 分类 -->
+            <div class="sidebar-section">
+                <h3>文章分类</h3>
+                <ul class="category-list">
+                    <li><a href="#">JavaScript <span>(23)</span></a></li>
+                    <li><a href="#">React <span>(18)</span></a></li>
+                    <li><a href="#">CSS <span>(15)</span></a></li>
+                    <li><a href="#">Node.js <span>(12)</span></a></li>
+                    <li><a href="#">Python <span>(8)</span></a></li>
+                </ul>
+            </div>
+
+            <!-- 标签云 -->
+            <div class="sidebar-section">
+                <h3>热门标签</h3>
+                <div class="tag-cloud">
+                    <a href="#" class="tag">前端开发</a>
+                    <a href="#" class="tag">JavaScript</a>
+                    <a href="#" class="tag">React</a>
+                    <a href="#" class="tag">CSS</a>
+                    <a href="#" class="tag">HTML5</a>
+                    <a href="#" class="tag">ES6</a>
+                    <a href="#" class="tag">Vue.js</a>
+                    <a href="#" class="tag">TypeScript</a>
+                </div>
+            </div>
+
+            <!-- 最新文章 -->
+            <div class="sidebar-section">
+                <h3>最新文章</h3>
+                <ul class="category-list">
+                    <li><a href="#">Vue 3组合式API详解</a></li>
+                    <li><a href="#">TypeScript类型系统深入理解</a></li>
+                    <li><a href="#">Webpack 5配置优化指南</a></li>
+                    <li><a href="#">GraphQL入门教程</a></li>
+                    <li><a href="#">Docker容器化部署实践</a></li>
+                </ul>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // 添加一些交互效果
+        document.addEventListener('DOMContentLoaded', function() {
+            // 文章卡片点击效果
+            const articleCards = document.querySelectorAll('.article-card');
+            articleCards.forEach(card => {
+                card.addEventListener('click', function(e) {
+                    if (!e.target.classList.contains('read-more')) {
+                        const link = this.querySelector('.article-title a');
+                        if (link) {
+                            window.location.href = link.href;
+                        }
+                    }
+                });
+            });
+
+            // 标签点击效果
+            const tags = document.querySelectorAll('.tag');
+            tags.forEach(tag => {
+                tag.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const tagName = this.textContent;
+                    console.log('点击了标签:', tagName);
+                    // 这里可以添加筛选文章的逻辑
+                });
+            });
+
+            // 滚动时导航栏效果
+            let lastScrollTop = 0;
+            window.addEventListener('scroll', function() {
+                const navbar = document.querySelector('.navbar');
+                const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+
+                if (scrollTop > lastScrollTop && scrollTop > 100) {
+                    navbar.style.transform = 'translateY(-100%)';
+                } else {
+                    navbar.style.transform = 'translateY(0)';
+                }
+
+                lastScrollTop = scrollTop;
+            });
+
+            // 添加过渡效果
+            const navbar = document.querySelector('.navbar');
+            navbar.style.transition = 'transform 0.3s ease-in-out';
+        });
+    </script>
+</body>
+</html>
+```
+
+### 3. JavaScript交互练习
+
+**问题：** 创建一个交互式计算器，支持基本运算和历史记录功能。
+
+**答案：**
+```html
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式计算器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .calculator-container {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+            max-width: 800px;
+            width: 100%;
+        }
+
+        .calculator {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+        }
+
+        .display {
+            background: #2c3e50;
+            color: white;
+            font-size: 2.5em;
+            text-align: right;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .buttons {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 20px;
+            font-size: 1.2em;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 600;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn.number {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+
+        .btn.number:hover {
+            background: #bdc3c7;
+        }
+
+        .btn.operator {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn.operator:hover {
+            background: #2980b9;
+        }
+
+        .btn.equals {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn.equals:hover {
+            background: #c0392b;
+        }
+
+        .btn.clear {
+            background: #f39c12;
+            color: white;
+        }
+
+        .btn.clear:hover {
+            background: #e67e22;
+        }
+
+        .btn.span-2 {
+            grid-column: span 2;
+        }
+
+        .history {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .history h3 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .history-list {
+            list-style: none;
+        }
+
+        .history-item {
+            background: #f8f9fa;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .history-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+
+        .history-expression {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .history-result {
+            color: #3498db;
+            font-size: 0.9em;
+        }
+
+        .clear-history {
+            width: 100%;
+            padding: 10px;
+            background: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 15px;
+            font-weight: 600;
+        }
+
+        .clear-history:hover {
+            background: #c0392b;
+        }
+
+        .error {
+            color: #e74c3c;
+            font-size: 0.8em;
+            text-align: center;
+            margin-top: 10px;
+            min-height: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .calculator-container {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+
+            .calculator {
+                padding: 20px;
+            }
+
+            .display {
+                font-size: 2em;
+                padding: 15px;
+            }
+
+            .btn {
+                padding: 15px;
+                font-size: 1em;
+            }
+
+            .history {
+                max-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="calculator-container">
+        <div class="calculator">
+            <div class="display" id="display">0</div>
+            <div class="error" id="error"></div>
+            <div class="buttons">
+                <button class="btn clear span-2" onclick="clearAll()">C</button>
+                <button class="btn clear" onclick="clearEntry()">CE</button>
+                <button class="btn operator" onclick="inputOperator('/')">÷</button>
+
+                <button class="btn number" onclick="inputNumber('7')">7</button>
+                <button class="btn number" onclick="inputNumber('8')">8</button>
+                <button class="btn number" onclick="inputNumber('9')">9</button>
+                <button class="btn operator" onclick="inputOperator('*')">×</button>
+
+                <button class="btn number" onclick="inputNumber('4')">4</button>
+                <button class="btn number" onclick="inputNumber('5')">5</button>
+                <button class="btn number" onclick="inputNumber('6')">6</button>
+                <button class="btn operator" onclick="inputOperator('-')">−</button>
+
+                <button class="btn number" onclick="inputNumber('1')">1</button>
+                <button class="btn number" onclick="inputNumber('2')">2</button>
+                <button class="btn number" onclick="inputNumber('3')">3</button>
+                <button class="btn operator" onclick="inputOperator('+')">+</button>
+
+                <button class="btn number span-2" onclick="inputNumber('0')">0</button>
+                <button class="btn number" onclick="inputDecimal()">.</button>
+                <button class="btn equals" onclick="calculate()">=</button>
+            </div>
+        </div>
+
+        <div class="history">
+            <h3>历史记录</h3>
+            <ul class="history-list" id="historyList"></ul>
+            <button class="clear-history" onclick="clearHistory()">清空历史</button>
+        </div>
+    </div>
+
+    <script>
+        class Calculator {
+            constructor() {
+                this.display = document.getElementById('display');
+                this.errorElement = document.getElementById('error');
+                this.historyList = document.getElementById('historyList');
+
+                this.currentInput = '0';
+                this.previousInput = '';
+                this.operator = '';
+                this.waitingForOperand = false;
+
+                this.history = JSON.parse(localStorage.getItem('calculatorHistory')) || [];
+
+                this.updateDisplay();
+                this.renderHistory();
+
+                // 键盘支持
+                document.addEventListener('keydown', (e) => this.handleKeyPress(e));
+            }
+
+            handleKeyPress(e) {
+                e.preventDefault();
+
+                if (e.key >= '0' && e.key <= '9') {
+                    this.inputNumber(e.key);
+                } else if (e.key === '.') {
+                    this.inputDecimal();
+                } else if (e.key === '+' || e.key === '-' || e.key === '*' || e.key === '/') {
+                    this.inputOperator(e.key);
+                } else if (e.key === 'Enter' || e.key === '=') {
+                    this.calculate();
+                } else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') {
+                    this.clearAll();
+                } else if (e.key === 'Backspace') {
+                    this.clearEntry();
+                }
+            }
+
+            inputNumber(num) {
+                this.clearError();
+
+                if (this.waitingForOperand) {
+                    this.currentInput = num;
+                    this.waitingForOperand = false;
+                } else {
+                    this.currentInput = this.currentInput === '0' ? num : this.currentInput + num;
+                }
+
+                this.updateDisplay();
+            }
+
+            inputDecimal() {
+                this.clearError();
+
+                if (this.waitingForOperand) {
+                    this.currentInput = '0.';
+                    this.waitingForOperand = false;
+                } else if (this.currentInput.indexOf('.') === -1) {
+                    this.currentInput += '.';
+                }
+
+                this.updateDisplay();
+            }
+
+            inputOperator(nextOperator) {
+                this.clearError();
+
+                const inputValue = parseFloat(this.currentInput);
+
+                if (this.previousInput === '') {
+                    this.previousInput = inputValue;
+                } else if (this.operator) {
+                    const currentValue = this.previousInput || 0;
+                    const newValue = this.performCalculation();
+
+                    if (newValue === null) return;
+
+                    this.currentInput = String(newValue);
+                    this.previousInput = newValue;
+                    this.updateDisplay();
+                }
+
+                this.waitingForOperand = true;
+                this.operator = nextOperator;
+            }
+
+            calculate() {
+                this.clearError();
+
+                if (this.operator === '' || this.waitingForOperand) return;
+
+                const inputValue = parseFloat(this.currentInput);
+
+                if (this.previousInput === '') {
+                    this.previousInput = inputValue;
+                }
+
+                const result = this.performCalculation();
+
+                if (result === null) return;
+
+                // 添加到历史记录
+                const expression = `${this.previousInput} ${this.getOperatorSymbol(this.operator)} ${inputValue}`;
+                this.addToHistory(expression, result);
+
+                this.currentInput = String(result);
+                this.previousInput = '';
+                this.operator = '';
+                this.waitingForOperand = true;
+
+                this.updateDisplay();
+            }
+
+            performCalculation() {
+                const prev = this.previousInput;
+                const current = parseFloat(this.currentInput);
+
+                if (isNaN(prev) || isNaN(current)) {
+                    this.showError('无效的数字');
+                    return null;
+                }
+
+                let result;
+                switch (this.operator) {
+                    case '+':
+                        result = prev + current;
+                        break;
+                    case '-':
+                        result = prev - current;
+                        break;
+                    case '*':
+                        result = prev * current;
+                        break;
+                    case '/':
+                        if (current === 0) {
+                            this.showError('除数不能为零');
+                            return null;
+                        }
+                        result = prev / current;
+                        break;
+                    default:
+                        return null;
+                }
+
+                // 处理精度问题
+                return Math.round(result * 100000000) / 100000000;
+            }
+
+            getOperatorSymbol(operator) {
+                const symbols = {
+                    '+': '+',
+                    '-': '−',
+                    '*': '×',
+                    '/': '÷'
+                };
+                return symbols[operator] || operator;
+            }
+
+            clearAll() {
+                this.currentInput = '0';
+                this.previousInput = '';
+                this.operator = '';
+                this.waitingForOperand = false;
+                this.clearError();
+                this.updateDisplay();
+            }
+
+            clearEntry() {
+                this.currentInput = '0';
+                this.clearError();
+                this.updateDisplay();
+            }
+
+            clearError() {
+                this.errorElement.textContent = '';
+            }
+
+            showError(message) {
+                this.errorElement.textContent = message;
+                setTimeout(() => this.clearError(), 3000);
+            }
+
+            updateDisplay() {
+                this.display.textContent = this.currentInput;
+            }
+
+            addToHistory(expression, result) {
+                const historyItem = {
+                    expression: expression,
+                    result: result,
+                    timestamp: new Date().toLocaleString()
+                };
+
+                this.history.unshift(historyItem);
+
+                // 限制历史记录数量
+                if (this.history.length > 50) {
+                    this.history = this.history.slice(0, 50);
+                }
+
+                this.saveHistory();
+                this.renderHistory();
+            }
+
+            renderHistory() {
+                this.historyList.innerHTML = '';
+
+                this.history.forEach((item, index) => {
+                    const li = document.createElement('li');
+                    li.className = 'history-item';
+                    li.innerHTML = `
+                        <div class="history-expression">${item.expression} = ${item.result}</div>
+                        <div class="history-result">${item.timestamp}</div>
+                    `;
+
+                    li.addEventListener('click', () => {
+                        this.currentInput = String(item.result);
+                        this.updateDisplay();
+                    });
+
+                    this.historyList.appendChild(li);
+                });
+            }
+
+            saveHistory() {
+                localStorage.setItem('calculatorHistory', JSON.stringify(this.history));
+            }
+
+            clearHistory() {
+                this.history = [];
+                this.saveHistory();
+                this.renderHistory();
+            }
+        }
+
+        // 初始化计算器
+        const calculator = new Calculator();
+
+        // 全局函数供HTML调用
+        function inputNumber(num) {
+            calculator.inputNumber(num);
+        }
+
+        function inputDecimal() {
+            calculator.inputDecimal();
+        }
+
+        function inputOperator(op) {
+            calculator.inputOperator(op);
+        }
+
+        function calculate() {
+            calculator.calculate();
+        }
+
+        function clearAll() {
+            calculator.clearAll();
+        }
+
+        function clearEntry() {
+            calculator.clearEntry();
+        }
+
+        function clearHistory() {
+            calculator.clearHistory();
+        }
+    </script>
+</body>
+</html>
+```
+
+## 学习建议
+
+1. **实践为主**：多动手编写代码，从简单页面开始
+2. **理解概念**：掌握HTML、CSS、JavaScript的核心概念
+3. **学习工具**：熟悉浏览器开发工具和调试技巧
+4. **响应式设计**：学习如何适配不同设备
+5. **项目驱动**：通过实际项目提升开发能力
+
+## 扩展资源
+
+- **官方资源**：
+  - [CS50 Week 8 Lecture](https://cs50.harvard.edu/x/2025/weeks/8/)
+  - [CS50 Week 8 Notes](https://cs50.harvard.edu/x/2025/notes/8/)
+
+- **学习平台**：
+  - [MDN Web Docs](https://developer.mozilla.org/zh-CN/)
+  - [freeCodeCamp](https://www.freecodecamp.org/)
+  - [W3Schools](https://www.w3schools.com/)
+
+- **开发工具**：
+  - [VS Code](https://code.visualstudio.com/)
+  - [Chrome DevTools](https://developers.google.com/web/tools/chrome-devtools)
+  - [GitHub](https://github.com/)
+
+- **前端框架**：
+  - [React官方文档](https://react.dev/)
+  - [Vue官方文档](https://vuejs.org/)
+  - [Angular官方文档](https://angular.io/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 9: Flask后端" icon="arrow-right" href="./week9">
+    学习Flask框架和后端开发
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你完成了Week 8的学习！Web前端开发是现代软件开发的重要技能，掌握HTML、CSS、JavaScript将为你打开更多可能性。现在你已经具备了构建基本Web页面的能力，可以开始探索更高级的前端技术和框架了。*

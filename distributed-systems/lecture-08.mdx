@@ -1,0 +1,1141 @@
+---
+title: "Lecture 8: GFS"
+description: "Google文件系统(GFS)的设计和实现"
+---
+
+# Lecture 8: GFS
+
+## 本周内容
+
+- **GFS设计目标**：大规模数据存储和处理，工作负载特征分析
+- **系统架构**：Master、Chunkserver、Client的角色和职责
+- **关键技术**：租约机制、数据流控制、快照操作、垃圾回收
+- **容错机制**：数据完整性、故障恢复、一致性保证
+- **性能优化**：大块设计、流水线操作、缓存策略
+- **实践项目**：简化的GFS实现
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/Kd2H_5i2_9U" title="Google File System" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### GFS概述
+
+Google文件系统（GFS）是一个可扩展的分布式文件系统，用于处理大规模数据集。它在Google内部支撑着搜索引擎和其他大数据应用，为后续的分布式文件系统设计提供了重要参考。
+
+**设计前提假设**
+- 组件故障是常态而非异常
+- 文件很大，通常GB到TB级别
+- 工作负载主要是两种操作：大规模流式读取和小规模随机写入
+- 对低延迟的要求相对宽松
+- 高效支持追加操作是关键需求
+
+**核心设计目标**
+- 可扩展性：支持PB级存储和上千节点
+- 高性能：高吞吐量和有效利用网络带宽
+- 可靠性：数据持久性和可用性
+- 一致性：提供清晰的一致性模型
+
+### GFS系统架构
+
+```
+                   +----------------+
+                   |     Client     |
+                   +----------------+
+                          |
+                     +---------+
+                     |  Master |
+                     +---------+
+                          |
+    +------------------+------------------+
+    |                  |                  |
++----------+     +----------+     +----------+
+|Chunkserver|     |Chunkserver|     |Chunkserver|
++----------+     +----------+     +----------+
+    |                  |                  |
++----------+     +----------+     +----------+
+|  Disk    |     |  Disk    |     |  Disk    |
++----------+     +----------+     +----------+
+```
+
+**架构组件详解**
+
+**1. Master（主控节点）**
+- 管理文件系统元数据
+- 维护文件名空间
+- 控制Chunk的位置信息
+- 处理系统级活动
+- 执行垃圾回收
+
+**2. Chunkserver（数据节点）**
+- 存储实际的数据块
+- 每个块默认64MB
+- 支持数据校验
+- 定期向Master发送心跳
+- 执行数据复制和迁移
+
+**3. Client（客户端）**
+- 提供文件访问接口
+- 与Master交互获取元数据
+- 直接与Chunkserver交换数据
+- 支持缓存和预读取
+
+### 数据模型和存储
+
+**文件和Chunk结构**
+```
+文件名: /user/data/example.txt
++-------+-------+-------+-------+
+| Chunk1 | Chunk2 | Chunk3 | Chunk4 |
++-------+-------+-------+-------+
+   64MB    64MB    64MB    64MB
+```
+
+**Chunk命名和版本**
+- 每个Chunk有唯一的64位句柄
+- 包含版本号用于变更追踪
+- 副本分布在多个Chunkserver上
+- 默认保存3个副本
+
+```go
+// Chunk句柄结构
+type ChunkHandle struct {
+    FileID    uint64 // 文件唯一标识
+    ChunkNum  uint32 // 文件内Chunk序号
+    Version   uint64 // 版本号
+}
+
+// Chunk位置信息
+type ChunkLocation struct {
+    Handle     ChunkHandle
+    Primary    string  // 主副本地址
+    Secondaries []string // 从副本地址列表
+}
+```
+
+### 租约机制
+
+租约机制是GFS的关键创新，用于协调多个Chunkserver之间的写操作。
+
+**租约工作原理**
+```
+Client请求写操作
+        ↓
+   Master授予租约
+        ↓
+   选定Primary副本
+        ↓
+   Primary协调写入
+        ↓
+   所有副本确认
+        ↓
+   写操作完成
+```
+
+**租约实现代码**
+
+```go
+package gfs
+
+import (
+    "context"
+    "sync"
+    "time"
+)
+
+// 租约管理器
+type LeaseManager struct {
+    mu        sync.Mutex
+    leases    map[ChunkHandle]*Lease
+    leaseTime time.Duration
+}
+
+// 租约信息
+type Lease struct {
+    Handle      ChunkHandle
+    Primary     string
+    ExpiredAt   time.Time
+    Extensions  int
+}
+
+// 租约请求
+type LeaseRequest struct {
+    Handle ChunkHandle
+    Client string
+}
+
+// 租约回复
+type LeaseResponse struct {
+    Granted   bool
+    Primary   string
+    ExpiresAt time.Time
+}
+
+// 申请租约
+func (lm *LeaseManager) AcquireLease(req LeaseRequest) (*LeaseResponse, error) {
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+
+    handle := req.Handle
+    now := time.Now()
+
+    // 检查现有租约
+    if lease, exists := lm.leases[handle]; exists {
+        if now.Before(lease.ExpiredAt) {
+            // 租约仍然有效
+            return &LeaseResponse{
+                Granted:   false,
+                Primary:   lease.Primary,
+                ExpiresAt: lease.ExpiredAt,
+            }, nil
+        }
+    }
+
+    // 授予新租约
+    primary := lm.selectPrimary(handle)
+    newLease := &Lease{
+        Handle:    handle,
+        Primary:   primary,
+        ExpiredAt: now.Add(lm.leaseTime),
+    }
+
+    lm.leases[handle] = newLease
+
+    return &LeaseResponse{
+        Granted:   true,
+        Primary:   primary,
+        ExpiresAt: newLease.ExpiredAt,
+    }, nil
+}
+
+// 延长租约
+func (lm *LeaseManager) ExtendLease(handle ChunkHandle) bool {
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+
+    if lease, exists := lm.leases[handle]; exists {
+        if lease.Extensions < 3 { // 最多延长3次
+            lease.ExpiredAt = time.Now().Add(lm.leaseTime)
+            lease.Extensions++
+            return true
+        }
+    }
+
+    return false
+}
+
+// 选择Primary副本
+func (lm *LeaseManager) selectPrimary(handle ChunkHandle) string {
+    // 实际实现需要考虑负载均衡、网络位置等因素
+    // 这里简化为选择第一个副本
+    return "chunkserver1.example.com"
+}
+
+// 检查租约有效性
+func (lm *LeaseManager) IsValidLease(handle ChunkHandle, primary string) bool {
+    lm.mu.Lock()
+    defer lm.mu.Unlock()
+
+    if lease, exists := lm.leases[handle]; exists {
+        return lease.Primary == primary && time.Now().Before(lease.ExpiredAt)
+    }
+    return false
+}
+```
+
+### 数据流控制
+
+GFS采用创新的数据流控制机制，优化了网络带宽利用。
+
+**数据流分离**
+```
+Client → Master: 控制信息（租约、元数据）
+Client → Primary: 数据
+Primary → Secondaries: 数据
+```
+
+**流水线数据传输**
+```
+Chunk1 → Chunk2 → Chunk3 → Chunk4
+   ↓        ↓        ↓        ↓
+  写入     转发     转发     完成
+```
+
+**数据流实现**
+
+```go
+// 数据流控制器
+type DataFlowController struct {
+    chunkSize    int64
+    pipelineSize int
+}
+
+// 写数据流
+func (dfc *DataFlowController) WriteDataFlow(
+    ctx context.Context,
+    primary string,
+    secondaries []string,
+    data []byte,
+    offset int64,
+) error {
+    // 1. 将数据分成块
+    chunks := dfc.splitData(data)
+
+    // 2. 流水线传输
+    results := make(chan error, len(chunks))
+
+    for i, chunk := range chunks {
+        go func(chunkIndex int, chunkData []byte) {
+            err := dfc.writeChunkPipeline(
+                ctx,
+                primary,
+                secondaries,
+                chunkData,
+                offset+int64(chunkIndex*dfc.chunkSize),
+            )
+            results <- err
+        }(i, chunk)
+    }
+
+    // 3. 等待所有块写入完成
+    for i := 0; i < len(chunks); i++ {
+        if err := <-results; err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+
+// 流水线写入单个块
+func (dfc *DataFlowController) writeChunkPipeline(
+    ctx context.Context,
+    primary string,
+    secondaries []string,
+    data []byte,
+    offset int64,
+) error {
+    // 1. 并行发送到所有副本
+    errChan := make(chan error, len(secondaries)+1)
+
+    // 发送到Primary
+    go func() {
+        err := dfc.sendToServer(ctx, primary, data, offset)
+        errChan <- err
+    }()
+
+    // 发送到Secondaries
+    for _, secondary := range secondaries {
+        go func(server string) {
+            err := dfc.sendToServer(ctx, server, data, offset)
+            errChan <- err
+        }(secondary)
+    }
+
+    // 2. 等待所有服务器响应
+    successCount := 0
+    totalServers := len(secondaries) + 1
+
+    for i := 0; i < totalServers; i++ {
+        if err := <-errChan; err == nil {
+            successCount++
+        }
+    }
+
+    // 3. 检查是否写入成功（至少需要多数）
+    if successCount > totalServers/2 {
+        return nil
+    }
+
+    return fmt.Errorf("write failed: only %d/%d servers succeeded", successCount, totalServers)
+}
+
+// 发送数据到单个服务器
+func (dfc *DataFlowController) sendToServer(
+    ctx context.Context,
+    server string,
+    data []byte,
+    offset int64,
+) error {
+    // 实际实现需要网络通信
+    // 这里简化为模拟写入
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    case <-time.After(time.Millisecond * time.Duration(10+rand.Intn(50))):
+        // 模拟网络延迟
+        if rand.Intn(10) == 0 { // 10%失败率
+            return fmt.Errorf("network error")
+        }
+        return nil
+    }
+}
+
+// 分割数据为块
+func (dfc *DataFlowController) splitData(data []byte) [][]byte {
+    var chunks [][]byte
+    chunkSize := dfc.chunkSize
+
+    for i := 0; i < len(data); i += chunkSize {
+        end := i + chunkSize
+        if end > len(data) {
+            end = len(data)
+        }
+        chunks = append(chunks, data[i:end])
+    }
+
+    return chunks
+}
+```
+
+### 快照机制
+
+GFS使用Copy-on-Write技术实现高效的快照操作。
+
+**快照实现原理**
+```
+原始文件: [ChunkA][ChunkB][ChunkC]
+            ↓ 快照操作
+快照文件: [ChunkA][ChunkB][ChunkC]
+            ↓ 修改ChunkB
+原始文件: [ChunkA][ChunkB][ChunkC]
+快照文件: [ChunkA][ChunkB'][ChunkC]
+```
+
+**快照实现代码**
+
+```go
+// 快照管理器
+type SnapshotManager struct {
+    mu        sync.Mutex
+    snapshots map[string]*Snapshot
+    chunks    map[ChunkHandle]*ChunkMetadata
+}
+
+// 快照信息
+type Snapshot struct {
+    ID        string
+    SourceFile string
+    CreatedAt time.Time
+    Metadata  map[ChunkHandle]*ChunkMetadata
+}
+
+// Chunk元数据
+type ChunkMetadata struct {
+    Handle      ChunkHandle
+    Locations   []string
+    RefCount    int
+    IsSnapshot  bool
+}
+
+// 创建快照
+func (sm *SnapshotManager) CreateSnapshot(sourceFile string) (*Snapshot, error) {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    // 生成快照ID
+    snapshotID := fmt.Sprintf("snap_%d_%s", time.Now().Unix(), sourceFile)
+
+    // 创建快照元数据
+    snapshot := &Snapshot{
+        ID:         snapshotID,
+        SourceFile: sourceFile,
+        CreatedAt:  time.Now(),
+        Metadata:   make(map[ChunkHandle]*ChunkMetadata),
+    }
+
+    // 复制文件元数据（Copy-on-Write）
+    fileChunks := sm.getFileChunks(sourceFile)
+    for handle, metadata := range fileChunks {
+        // 增加引用计数
+        metadata.RefCount++
+
+        // 创建快照元数据
+        snapshotMetadata := &ChunkMetadata{
+            Handle:     handle,
+            Locations:  append([]string{}, metadata.Locations...),
+            RefCount:   1,
+            IsSnapshot: true,
+        }
+
+        snapshot.Metadata[handle] = snapshotMetadata
+    }
+
+    sm.snapshots[snapshotID] = snapshot
+
+    return snapshot, nil
+}
+
+// 写入Chunk（处理Copy-on-Write）
+func (sm *SnapshotManager) WriteChunk(handle ChunkHandle, data []byte) error {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    metadata, exists := sm.chunks[handle]
+    if !exists {
+        return fmt.Errorf("chunk not found")
+    }
+
+    // 如果有其他引用，需要复制
+    if metadata.RefCount > 1 {
+        // 创建新的Chunk
+        newHandle := ChunkHandle{
+            FileID:   handle.FileID,
+            ChunkNum: handle.ChunkNum,
+            Version:  handle.Version + 1,
+        }
+
+        // 复制数据
+        newMetadata := &ChunkMetadata{
+            Handle:    newHandle,
+            Locations: metadata.Locations,
+            RefCount:  1,
+        }
+
+        // 减少原Chunk的引用计数
+        metadata.RefCount--
+
+        // 更新映射
+        sm.chunks[newHandle] = newMetadata
+        handle = newHandle
+    }
+
+    // 执行实际写入
+    return sm.writeChunkData(handle, data)
+}
+
+// 删除快照
+func (sm *SnapshotManager) DeleteSnapshot(snapshotID string) error {
+    sm.mu.Lock()
+    defer sm.mu.Unlock()
+
+    snapshot, exists := sm.snapshots[snapshotID]
+    if !exists {
+        return fmt.Errorf("snapshot not found")
+    }
+
+    // 减少所有Chunk的引用计数
+    for _, metadata := range snapshot.Metadata {
+        if originalMeta, exists := sm.chunks[metadata.Handle]; exists {
+            originalMeta.RefCount--
+            if originalMeta.RefCount == 0 {
+                // 可以删除Chunk
+                delete(sm.chunks, metadata.Handle)
+            }
+        }
+    }
+
+    delete(sm.snapshots, snapshotID)
+
+    return nil
+}
+```
+
+### 容错机制
+
+GFS设计了对组件故障的高容忍度。
+
+**故障检测和恢复**
+
+```go
+// 故障检测器
+type FaultDetector struct {
+    mu            sync.Mutex
+    failedServers map[string]time.Time
+    timeout       time.Duration
+}
+
+// 检测故障服务器
+func (fd *FaultDetector) CheckServer(server string) bool {
+    fd.mu.Lock()
+    defer fd.mu.Unlock()
+
+    // 检查是否在故障列表中
+    if failTime, exists := fd.failedServers[server]; exists {
+        if time.Since(failTime) < fd.timeout {
+            return false
+        }
+        // 超时，从故障列表中移除
+        delete(fd.failedServers, server)
+    }
+
+    // 实际检测逻辑（简化版）
+    return fd.pingServer(server)
+}
+
+// 标记服务器故障
+func (fd *FaultDetector) MarkFailed(server string) {
+    fd.mu.Lock()
+    defer fd.mu.Unlock()
+
+    fd.failedServers[server] = time.Now()
+}
+
+// 心跳检测
+func (fd *FaultDetector) pingServer(server string) bool {
+    // 实际实现需要网络通信
+    // 这里模拟90%的成功率
+    return rand.Intn(10) != 0
+}
+
+// 副本复制管理器
+type ReplicaManager struct {
+    detector    *FaultDetector
+    replication int // 副本数量
+}
+
+// 修复缺失副本
+func (rm *ReplicaManager) RepairReplicas(handle ChunkHandle) error {
+    // 获取当前副本位置
+    locations := rm.getChunkLocations(handle)
+
+    if len(locations) >= rm.replication {
+        return nil // 副本数量足够
+    }
+
+    // 选择健康的源服务器
+    source := rm.selectHealthyServer(locations)
+    if source == "" {
+        return fmt.Errorf("no healthy source available")
+    }
+
+    // 选择目标服务器
+    targets := rm.selectTargetServers(handle, locations)
+    if len(targets) == 0 {
+        return fmt.Errorf("no target servers available")
+    }
+
+    // 执行复制
+    for _, target := range targets {
+        err := rm.copyChunk(source, target, handle)
+        if err != nil {
+            return fmt.Errorf("copy to %s failed: %v", target, err)
+        }
+
+        // 更新位置信息
+        locations = append(locations, target)
+    }
+
+    return nil
+}
+
+// 选择健康服务器
+func (rm *ReplicaManager) selectHealthyServer(locations []string) string {
+    for _, location := range locations {
+        if rm.detector.CheckServer(location) {
+            return location
+        }
+    }
+    return ""
+}
+
+// 选择目标服务器
+func (rm *ReplicaManager) selectTargetServers(handle ChunkHandle, currentLocations []string) []string {
+    // 实际实现需要考虑负载均衡、网络拓扑等因素
+    // 这里简化为返回固定服务器列表
+    availableServers := []string{
+        "chunkserver1.example.com",
+        "chunkserver2.example.com",
+        "chunkserver3.example.com",
+    }
+
+    var targets []string
+    for _, server := range availableServers {
+        if !contains(currentLocations, server) && rm.detector.CheckServer(server) {
+            targets = append(targets, server)
+        }
+    }
+
+    return targets
+}
+
+// 复制Chunk
+func (rm *ReplicaManager) copyChunk(source, target string, handle ChunkHandle) error {
+    // 实际实现需要从源服务器读取数据并写入目标服务器
+    // 这里简化为模拟操作
+    time.Sleep(time.Millisecond * 100) // 模拟复制时间
+
+    if rand.Intn(10) == 0 { // 10%失败率
+        return fmt.Errorf("copy failed")
+    }
+
+    return nil
+}
+
+// 辅助函数：检查字符串是否在切片中
+func contains(slice []string, item string) bool {
+    for _, s := range slice {
+        if s == item {
+            return true
+        }
+    }
+    return false
+}
+```
+
+### 完整的GFS客户端实现
+
+```go
+package gfs
+
+import (
+    "context"
+    "fmt"
+    "io"
+    "sync"
+    "time"
+)
+
+// GFS客户端
+type GFSClient struct {
+    masterAddr string
+    master     MasterClient
+    cache      *ClientCache
+}
+
+// Master客户端接口
+type MasterClient interface {
+    Create(filename string) error
+    Open(filename string) (*FileInfo, error)
+    GetChunkLocations(filename string, chunkIndex int) (*ChunkLocation, error)
+    AcquireLease(handle ChunkHandle, client string) (*LeaseResponse, error)
+}
+
+// Chunkserver客户端接口
+type ChunkserverClient interface {
+    ReadChunk(handle ChunkHandle, offset int64, size int) ([]byte, error)
+    WriteChunk(handle ChunkHandle, offset int64, data []byte) error
+}
+
+// 文件信息
+type FileInfo struct {
+    Name      string
+    Size      int64
+    Chunks    int
+    CreatedAt time.Time
+    ModifiedAt time.Time
+}
+
+// 客户端缓存
+type ClientCache struct {
+    mu        sync.Mutex
+    fileMeta  map[string]*FileInfo
+    locations map[string]*ChunkLocation
+    leases    map[ChunkHandle]*Lease
+}
+
+// 新建GFS客户端
+func NewGFSClient(masterAddr string) *GFSClient {
+    return &GFSClient{
+        masterAddr: masterAddr,
+        cache:      NewClientCache(),
+    }
+}
+
+// 创建文件
+func (client *GFSClient) Create(filename string) error {
+    return client.master.Create(filename)
+}
+
+// 打开文件
+func (client *GFSClient) Open(filename string) (*GFSFile, error) {
+    // 获取文件信息
+    fileInfo, err := client.master.Open(filename)
+    if err != nil {
+        return nil, err
+    }
+
+    // 缓存文件信息
+    client.cache.SetFileInfo(filename, fileInfo)
+
+    return &GFSFile{
+        client:  client,
+        name:    filename,
+        info:    fileInfo,
+        current: 0,
+    }, nil
+}
+
+// GFS文件句柄
+type GFSFile struct {
+    client  *GFSClient
+    name    string
+    info    *FileInfo
+    current int64
+}
+
+// 读取文件
+func (file *GFSFile) Read(p []byte) (n int, err error) {
+    if file.current >= file.info.Size {
+        return 0, io.EOF
+    }
+
+    // 计算要读取的块
+    chunkIndex := int(file.current / (64 * 1024 * 1024)) // 64MB chunk
+    chunkOffset := file.current % (64 * 1024 * 1024)
+
+    // 获取块位置
+    locations, err := file.client.master.GetChunkLocations(file.name, chunkIndex)
+    if err != nil {
+        return 0, err
+    }
+
+    // 选择最近的服务器
+    server := file.selectNearestServer(locations)
+
+    // 读取数据
+    remaining := int64(len(p))
+    if remaining > file.info.Size-file.current {
+        remaining = file.info.Size - file.current
+    }
+
+    chunkRemaining := (64 * 1024 * 1024) - chunkOffset
+    if remaining > chunkRemaining {
+        remaining = chunkRemaining
+    }
+
+    data, err := file.client.readFromServer(server, locations.Handle, chunkOffset, int(remaining))
+    if err != nil {
+        return 0, err
+    }
+
+    // 复制数据
+    copy(p, data)
+    n = len(data)
+    file.current += int64(n)
+
+    return n, nil
+}
+
+// 写入文件（追加模式）
+func (file *GFSFile) Write(p []byte) (n int, err error) {
+    // GFS主要支持追加操作
+    chunkIndex := int(file.info.Size / (64 * 1024 * 1024))
+    chunkOffset := file.info.Size % (64 * 1024 * 1024)
+
+    // 获取租约
+    handle := ChunkHandle{
+        FileID:   0, // 需要从文件信息获取
+        ChunkNum: uint32(chunkIndex),
+        Version:  0, // 需要从Master获取
+    }
+
+    lease, err := file.client.master.AcquireLease(handle, "client-1")
+    if err != nil {
+        return 0, err
+    }
+
+    if !lease.Granted {
+        return 0, fmt.Errorf("lease not granted")
+    }
+
+    // 写入数据
+    err = file.client.writeToChunk(handle, chunkOffset, p, lease.Primary)
+    if err != nil {
+        return 0, err
+    }
+
+    // 更新文件大小
+    file.info.Size += int64(len(p))
+    n = len(p)
+
+    return n, nil
+}
+
+// 选择最近的服务器
+func (file *GFSFile) selectNearestServer(locations *ChunkLocation) string {
+    // 简化实现，实际应该考虑网络延迟
+    return locations.Primary
+}
+
+// 从服务器读取数据
+func (client *GFSClient) readFromServer(server string, handle ChunkHandle, offset int64, size int) ([]byte, error) {
+    // 实际实现需要网络通信
+    // 这里模拟读取操作
+    time.Sleep(time.Millisecond * 10)
+
+    // 模拟数据
+    data := make([]byte, size)
+    for i := range data {
+        data[i] = byte(i % 256)
+    }
+
+    return data, nil
+}
+
+// 写入数据到Chunk
+func (client *GFSClient) writeToChunk(handle ChunkHandle, offset int64, data []byte, primary string) error {
+    // 实际实现需要网络通信
+    // 这里模拟写入操作
+    time.Sleep(time.Millisecond * 50)
+
+    if rand.Intn(20) == 0 { // 5%失败率
+        return fmt.Errorf("write failed")
+    }
+
+    return nil
+}
+
+// 新建客户端缓存
+func NewClientCache() *ClientCache {
+    return &ClientCache{
+        fileMeta:  make(map[string]*FileInfo),
+        locations: make(map[string]*ChunkLocation),
+        leases:    make(map[ChunkHandle]*Lease),
+    }
+}
+
+// 设置文件信息缓存
+func (cache *ClientCache) SetFileInfo(filename string, info *FileInfo) {
+    cache.mu.Lock()
+    defer cache.mu.Unlock()
+
+    cache.fileMeta[filename] = info
+}
+
+// 获取文件信息缓存
+func (cache *ClientCache) GetFileInfo(filename string) (*FileInfo, bool) {
+    cache.mu.Lock()
+    defer cache.mu.Unlock()
+
+    info, exists := cache.fileMeta[filename]
+    return info, exists
+}
+```
+
+## 实践项目：简化GFS实现
+
+### 项目概述
+
+实现一个简化版的GFS，包含核心功能：
+
+1. **Master服务**：元数据管理、租约分配
+2. **Chunkserver服务**：数据存储和复制
+3. **客户端库**：文件读写接口
+4. **监控工具**：系统状态监控
+
+### 测试用例
+
+```go
+package gfs_test
+
+import (
+    "testing"
+    "time"
+)
+
+func TestBasicReadWrite(t *testing.T) {
+    // 创建测试集群
+    cluster := NewTestCluster(1, 3) // 1 Master, 3 Chunkservers
+    defer cluster.Shutdown()
+
+    // 等待集群启动
+    time.Sleep(1 * time.Second)
+
+    // 创建客户端
+    client := cluster.NewClient()
+
+    // 创建文件
+    err := client.Create("test.txt")
+    if err != nil {
+        t.Fatalf("Create failed: %v", err)
+    }
+
+    // 打开文件
+    file, err := client.Open("test.txt")
+    if err != nil {
+        t.Fatalf("Open failed: %v", err)
+    }
+
+    // 写入数据
+    data := []byte("Hello, GFS!")
+    n, err := file.Write(data)
+    if err != nil {
+        t.Fatalf("Write failed: %v", err)
+    }
+    if n != len(data) {
+        t.Fatalf("Write returned %d, expected %d", n, len(data))
+    }
+
+    // 读取数据
+    file.Seek(0, 0)
+    buf := make([]byte, len(data))
+    n, err = file.Read(buf)
+    if err != nil {
+        t.Fatalf("Read failed: %v", err)
+    }
+    if n != len(data) {
+        t.Fatalf("Read returned %d, expected %d", n, len(data))
+    }
+
+    // 验证数据
+    if string(buf) != string(data) {
+        t.Fatalf("Data mismatch: got %q, want %q", string(buf), string(data))
+    }
+}
+
+func TestReplication(t *testing.T) {
+    // 创建测试集群
+    cluster := NewTestCluster(1, 3)
+    defer cluster.Shutdown()
+
+    time.Sleep(1 * time.Second)
+
+    client := cluster.NewClient()
+    client.Create("replication.txt")
+    file, _ := client.Open("replication.txt")
+
+    // 写入数据
+    data := make([]byte, 64*1024*1024) // 1个Chunk
+    file.Write(data)
+
+    // 检查副本
+    chunks := cluster.GetChunks()
+    if len(chunks) != 3 {
+        t.Fatalf("Expected 3 replicas, got %d", len(chunks))
+    }
+
+    // 关闭一个Chunkserver
+    cluster.KillChunkserver(0)
+    time.Sleep(1 * time.Second)
+
+    // 重新打开文件，应该仍然可读
+    file2, err := client.Open("replication.txt")
+    if err != nil {
+        t.Fatalf("Reopen failed: %v", err)
+    }
+
+    buf := make([]byte, 1024)
+    n, err := file2.Read(buf)
+    if err != nil {
+        t.Fatalf("Read after failure failed: %v", err)
+    }
+    if n == 0 {
+        t.Fatal("Read returned 0 bytes")
+    }
+}
+
+func TestLeaseManagement(t *testing.T) {
+    // 创建测试集群
+    cluster := NewTestCluster(1, 3)
+    defer cluster.Shutdown()
+
+    time.Sleep(1 * time.Second)
+
+    master := cluster.GetMaster()
+    handle := ChunkHandle{FileID: 1, ChunkNum: 0, Version: 1}
+
+    // 申请租约
+    lease, err := master.AcquireLease(handle, "client1")
+    if err != nil {
+        t.Fatalf("AcquireLease failed: %v", err)
+    }
+
+    if !lease.Granted {
+        t.Fatal("Lease not granted")
+    }
+
+    // 再次申请应该失败
+    lease2, err := master.AcquireLease(handle, "client2")
+    if err != nil {
+        t.Fatalf("Second AcquireLease failed: %v", err)
+    }
+
+    if lease2.Granted {
+        t.Fatal("Second lease should not be granted")
+    }
+
+    // 等待租约过期
+    time.Sleep(65 * time.Second) // 假设租约60秒
+
+    // 现在应该可以申请到租约
+    lease3, err := master.AcquireLease(handle, "client3")
+    if err != nil {
+        t.Fatalf("Third AcquireLease failed: %v", err)
+    }
+
+    if !lease3.Granted {
+        t.Fatal("Lease should be granted after expiration")
+    }
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **大块设计**：为什么GFS选择64MB的Chunk大小？
+
+2. **租约机制**：租约机制如何避免"脑裂"问题？
+
+3. **数据流控制**：为什么GFS要分离控制流和数据流？
+
+4. **一致性模型**：GFS提供了什么样的一致性保证？
+
+### 编程题
+
+1. **实现GFS**：完成Master和Chunkserver的完整实现。
+
+2. **数据校验**：添加数据校验和验证机制。
+
+3. **负载均衡**：实现Chunk的动态负载均衡。
+
+4. **监控接口**：添加系统监控和统计接口。
+
+### 设计题
+
+1. **小文件优化**：设计针对小文件的优化方案。
+
+2. **多Master**：设计支持多Master的架构。
+
+3. **跨数据中心**：设计跨数据中心的GFS部署方案。
+
+4. **性能调优**：分析并优化GFS的性能瓶颈。
+
+## 常见问题
+
+### Q: 为什么GFS不适合小文件？
+
+A: GFS的64MB大块设计对小文件不友好，会导致Master内存浪费和随机访问性能下降。对于小文件，应该考虑其他存储方案。
+
+### Q: GFS的一致性模型有什么限制？
+
+A: GFS提供的是宽松的一致性模型，文件区域可能处于"defined"或"undefined"状态。应用需要处理数据不一致的情况。
+
+### Q: 如何处理Master单点故障？
+
+A: GFS使用影子Master和快速恢复机制来处理Master故障。定期将元数据状态同步到影子Master，故障时可以快速切换。
+
+## 扩展资源
+
+### 必读论文
+
+1. **[GFS原始论文](https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-sosp2003.pdf)** - Google File System论文
+2. **[GFS演进](https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-eurosys2010.pdf)** - GFS演进经验
+3. **[Colossus](https://queue.acm.org/detail.cfm?id=2888783)** - GFS的后续版本
+
+### 实践项目
+
+1. **[HDFS](https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html)** - 基于GFS的开源实现
+2. **[Ceph](https://ceph.com/)** - 现代分布式文件系统
+3. **[GlusterFS](https://www.gluster.org/)** - 另一个开源分布式文件系统
+
+### 在线课程
+
+1. **[MIT 6.824 GFS讲座](https://www.youtube.com/watch?v=Y_5d2G2pYqQ)** - MIT的GFS课程视频
+2. **[分布式存储系统](https://www.coursera.org/learn/cloud-computing)** - 分布式存储课程
+3. **[Google技术分享](https://research.google/pubs/pubs.html)** - Google技术研究论文
+
+## 下一步学习
+
+在完成GFS学习后，你应该继续：
+
+1. **ZooKeeper**: 学习分布式协调服务
+2. **Spanner**: 了解全球分布式数据库
+3. **Chubby**: 学习分布式锁服务
+4. **现代存储**: 了解最新的分布式存储技术
+
+---
+
+*GFS是分布式系统发展史上的里程碑，它的设计思想和架构模式深刻影响了后续的分布式系统。理解GFS的设计原理对学习现代分布式存储系统至关重要。*

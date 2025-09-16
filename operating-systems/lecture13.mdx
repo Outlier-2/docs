@@ -1,0 +1,1230 @@
+---
+sidebar_position: 13
+title: 第13讲 - 并发性能优化
+description: 并发算法设计、无锁数据结构和内存模型优化
+---
+
+# 第13讲 - 并发性能优化
+
+## 课程概述
+
+本讲深入探讨并发程序的性能优化技术，包括无锁编程、内存模型、并发算法设计和性能分析。通过理解现代多核处理器的架构特性和内存模型，学习如何设计高性能的并发程序。
+
+## 学习目标
+
+- 理解并发程序的性能瓶颈和优化策略
+- 掌握无锁数据结构的设计和实现
+- 理解内存模型和内存一致性
+- 学习并发算法设计和性能分析
+- 掌握并发调试和性能监控技术
+
+## 主要内容
+
+### 1. 并发性能分析
+
+#### 1.1 并发程序的性能瓶颈
+
+```c
+#include <stdio.h>
+#include <pthread.h>
+#include <time.h>
+#include <stdatomic.h>
+
+#define NUM_THREADS 8
+#define OPERATIONS 1000000
+
+// 性能测试结果结构
+typedef struct {
+    double sequential_time;
+    double parallel_time;
+    double speedup;
+    double efficiency;
+} benchmark_result;
+
+// 基准测试函数
+benchmark_result benchmark_concurrent_operation(void* (*thread_func)(void*),
+                                              void* sequential_func(),
+                                              void* arg) {
+    benchmark_result result;
+    struct timespec start, end;
+
+    // 顺序执行基准
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    sequential_func();
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    result.sequential_time = (end.tv_sec - start.tv_sec) +
+                            (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    // 并行执行基准
+    pthread_t threads[NUM_THREADS];
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, thread_func, arg);
+    }
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    result.parallel_time = (end.tv_sec - start.tv_sec) +
+                          (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    // 计算加速比和效率
+    result.speedup = result.sequential_time / result.parallel_time;
+    result.efficiency = result.speedup / NUM_THREADS;
+
+    return result;
+}
+
+// 性能瓶颈分析
+void analyze_performance_bottlenecks() {
+    printf("=== 并发程序性能瓶颈分析 ===\n");
+
+    // 1. 争用分析
+    printf("1. 资源争用瓶颈：\n");
+    printf("   - 锁争用：多个线程竞争同一个锁\n");
+    printf("   - 内存争用：多个线程访问同一缓存行\n");
+    printf("   - I/O争用：并发访问外部设备\n");
+
+    // 2. 同步开销
+    printf("\n2. 同步开销瓶颈：\n");
+    printf("   - 锁获取/释放开销\n");
+    printf("   - 线程切换开销\n");
+    printf("   - 缓存一致性协议开销\n");
+
+    // 3. 负载均衡
+    printf("\n3. 负载均衡问题：\n");
+    printf("   - 任务分配不均\n");
+    printf("   - 数据倾斜\n");
+    printf("   - 工作窃取效率\n");
+
+    // 4. 内存访问模式
+    printf("\n4. 内存访问模式问题：\n");
+    printf("   - 伪共享\n");
+    printf("   - 缓存未命中\n");
+    printf("   - 内存带宽限制\n");
+}
+```
+
+#### 1.2 性能监控工具
+
+```c
+#include <perfmon/pfmlib.h>
+#include <perfmon/pfmlib_perf_event.h>
+
+// 性能计数器监控
+typedef struct {
+    uint64_t cache_misses;
+    uint64_t cache_hits;
+    uint64_t branch_misses;
+    uint64_t instructions;
+    uint64_t cycles;
+    uint64_t context_switches;
+} performance_counters;
+
+// 初始化性能计数器
+void init_performance_counters(performance_counters* counters) {
+    // 使用 perf_event_open 系统调用
+    struct perf_event_attr pe;
+    memset(&pe, 0, sizeof(pe));
+
+    // 配置性能计数器
+    pe.type = PERF_TYPE_HARDWARE;
+    pe.size = sizeof(pe);
+    pe.config = PERF_COUNT_HW_CACHE_MISSES;
+    pe.disabled = 1;
+    pe.exclude_kernel = 1;
+    pe.exclude_hv = 1;
+
+    // 打开性能计数器文件描述符
+    int fd = perf_event_open(&pe, 0, -1, -1, 0);
+    if (fd == -1) {
+        perror("perf_event_open");
+        return;
+    }
+
+    // 启动计数器
+    ioctl(fd, PERF_EVENT_IOC_RESET, 0);
+    ioctl(fd, PERF_EVENT_IOC_ENABLE, 0);
+
+    // 读取计数器值
+    read(fd, &counters->cache_misses, sizeof(uint64_t));
+
+    close(fd);
+}
+
+// 性能分析器
+typedef struct {
+    performance_counters counters;
+    struct timespec start_time;
+    struct timespec end_time;
+    int is_profiling;
+} profiler;
+
+// 开始性能分析
+void start_profiling(profiler* prof) {
+    prof->is_profiling = 1;
+    clock_gettime(CLOCK_MONOTONIC, &prof->start_time);
+    init_performance_counters(&prof->counters);
+}
+
+// 结束性能分析
+void stop_profiling(profiler* prof) {
+    if (!prof->is_profiling) return;
+
+    clock_gettime(CLOCK_MONOTONIC, &prof->end_time);
+    prof->is_profiling = 0;
+
+    // 计算性能指标
+    double elapsed_time = (prof->end_time.tv_sec - prof->start_time.tv_sec) +
+                         (prof->end_time.tv_nsec - prof->start_time.tv_nsec) / 1e9;
+
+    printf("=== 性能分析结果 ===\n");
+    printf("执行时间: %.3f 秒\n", elapsed_time);
+    printf("缓存未命中: %lu\n", prof->counters.cache_misses);
+    printf("分支预测失败: %lu\n", prof->counters.branch_misses);
+    printf("指令数: %lu\n", prof->counters.instructions);
+    printf("CPU周期数: %lu\n", prof->counters.cycles);
+    printf("上下文切换: %lu\n", prof->counters.context_switches);
+
+    if (prof->counters.cycles > 0) {
+        double ipc = (double)prof->counters.instructions / prof->counters.cycles;
+        printf("IPC: %.2f\n", ipc);
+    }
+}
+```
+
+### 2. 无锁数据结构
+
+#### 2.1 无锁队列实现
+
+```c
+#include <stdatomic.h>
+#include <stdlib.h>
+
+// 无锁队列节点
+typedef struct lockfree_node {
+    void* data;
+    _Atomic struct lockfree_node* next;
+} lockfree_node;
+
+// 无锁队列
+typedef struct {
+    _Atomic lockfree_node* head;
+    _Atomic lockfree_node* tail;
+} lockfree_queue;
+
+// 初始化无锁队列
+void lockfree_queue_init(lockfree_queue* queue) {
+    lockfree_node* dummy = malloc(sizeof(lockfree_node));
+    dummy->data = NULL;
+    dummy->next = NULL;
+
+    atomic_store(&queue->head, dummy);
+    atomic_store(&queue->tail, dummy);
+}
+
+// 入队操作（无锁）
+int lockfree_enqueue(lockfree_queue* queue, void* data) {
+    lockfree_node* new_node = malloc(sizeof(lockfree_node));
+    if (!new_node) return -1;
+
+    new_node->data = data;
+    new_node->next = NULL;
+
+    lockfree_node* tail;
+    while (1) {
+        tail = atomic_load(&queue->tail);
+        lockfree_node* next = atomic_load(&tail->next);
+
+        if (tail == atomic_load(&queue->tail)) {
+            if (next == NULL) {
+                if (atomic_compare_exchange_weak(&tail->next, &next, new_node)) {
+                    break;
+                }
+            } else {
+                atomic_compare_exchange_weak(&queue->tail, &tail, next);
+            }
+        }
+    }
+
+    atomic_compare_exchange_weak(&queue->tail, &tail, new_node);
+    return 0;
+}
+
+// 出队操作（无锁）
+void* lockfree_dequeue(lockfree_queue* queue) {
+    lockfree_node* head;
+    void* data = NULL;
+
+    while (1) {
+        head = atomic_load(&queue->head);
+        lockfree_node* tail = atomic_load(&queue->tail);
+        lockfree_node* next = atomic_load(&head->next);
+
+        if (head == atomic_load(&queue->head)) {
+            if (head == tail) {
+                if (next == NULL) {
+                    return NULL;  // 队列为空
+                }
+                atomic_compare_exchange_weak(&queue->tail, &tail, next);
+            } else {
+                data = next->data;
+                if (atomic_compare_exchange_weak(&queue->head, &head, next)) {
+                    break;
+                }
+            }
+        }
+    }
+
+    free(head);
+    return data;
+}
+
+// 销毁无锁队列
+void lockfree_queue_destroy(lockfree_queue* queue) {
+    lockfree_node* current = atomic_load(&queue->head);
+    while (current) {
+        lockfree_node* next = current->next;
+        free(current);
+        current = next;
+    }
+}
+```
+
+#### 2.2 无锁栈实现
+
+```c
+#include <stdatomic.h>
+
+// 无锁栈节点
+typedef struct lockfree_stack_node {
+    void* data;
+    _Atomic struct lockfree_stack_node* next;
+} lockfree_stack_node;
+
+// 无锁栈
+typedef struct {
+    _Atomic lockfree_stack_node* top;
+} lockfree_stack;
+
+// 初始化无锁栈
+void lockfree_stack_init(lockfree_stack* stack) {
+    atomic_store(&stack->top, NULL);
+}
+
+// 压栈操作（无锁）
+void lockfree_push(lockfree_stack* stack, void* data) {
+    lockfree_stack_node* new_node = malloc(sizeof(lockfree_stack_node));
+    new_node->data = data;
+
+    lockfree_stack_node* old_top;
+    do {
+        old_top = atomic_load(&stack->top);
+        new_node->next = old_top;
+    } while (!atomic_compare_exchange_weak(&stack->top, &old_top, new_node));
+}
+
+// 弹栈操作（无锁）
+void* lockfree_pop(lockfree_stack* stack) {
+    lockfree_stack_node* old_top;
+    lockfree_stack_node* new_top;
+    void* data;
+
+    do {
+        old_top = atomic_load(&stack->top);
+        if (!old_top) return NULL;  // 栈为空
+        new_top = old_top->next;
+        data = old_top->data;
+    } while (!atomic_compare_exchange_weak(&stack->top, &old_top, new_top));
+
+    free(old_top);
+    return data;
+}
+
+// 销毁无锁栈
+void lockfree_stack_destroy(lockfree_stack* stack) {
+    lockfree_stack_node* current = atomic_load(&stack->top);
+    while (current) {
+        lockfree_stack_node* next = current->next;
+        free(current);
+        current = next;
+    }
+}
+```
+
+### 3. 内存模型和内存一致性
+
+#### 3.1 内存屏障
+
+```c
+#include <stdatomic.h>
+
+// 内存屏障类型
+typedef enum {
+    MEMORY_BARRIER_FULL,
+    MEMORY_BARRIER_ACQUIRE,
+    MEMORY_BARRIER_RELEASE,
+    MEMORY_BARRIER_ACQ_REL
+} memory_barrier_type;
+
+// 内存屏障操作
+void memory_barrier(memory_barrier_type type) {
+    switch (type) {
+        case MEMORY_BARRIER_FULL:
+            atomic_thread_fence(memory_order_seq_cst);
+            break;
+        case MEMORY_BARRIER_ACQUIRE:
+            atomic_thread_fence(memory_order_acquire);
+            break;
+        case MEMORY_BARRIER_RELEASE:
+            atomic_thread_fence(memory_order_release);
+            break;
+        case MEMORY_BARRIER_ACQ_REL:
+            atomic_thread_fence(memory_order_acq_rel);
+            break;
+    }
+}
+
+// 生产者-消费者模式中的内存屏障
+typedef struct {
+    _Atomic int data;
+    _Atomic int ready;
+} producer_consumer_buffer;
+
+// 生产者（使用释放屏障）
+void producer_write(producer_consumer_buffer* buffer, int value) {
+    atomic_store(&buffer->data, value);
+    memory_barrier(MEMORY_BARRIER_RELEASE);  // 确保数据写入完成
+    atomic_store(&buffer->ready, 1);          // 然后设置ready标志
+}
+
+// 消费者（使用获取屏障）
+int consumer_read(producer_consumer_buffer* buffer) {
+    if (atomic_load(&buffer->ready)) {
+        memory_barrier(MEMORY_BARRIER_ACQUIRE);  // 确保看到最新的data
+        return atomic_load(&buffer->data);
+    }
+    return -1;
+}
+```
+
+#### 3.2 顺序一致性模型
+
+```c
+#include <stdatomic.h>
+#include <pthread.h>
+
+#define NUM_THREADS 4
+#define ITERATIONS 1000000
+
+// 顺序一致性测试
+typedef struct {
+    _Atomic int x;
+    _Atomic int y;
+    _Atomic int r1;
+    _Atomic int r2;
+} consistency_test;
+
+// 线程1函数
+void* thread1_func(void* arg) {
+    consistency_test* test = (consistency_test*)arg;
+
+    for (int i = 0; i < ITERATIONS; i++) {
+        atomic_store(&test->x, 1);
+        int temp = atomic_load(&test->y);
+        atomic_store(&test->r1, temp);
+    }
+
+    return NULL;
+}
+
+// 线程2函数
+void* thread2_func(void* arg) {
+    consistency_test* test = (consistency_test*)arg;
+
+    for (int i = 0; i < ITERATIONS; i++) {
+        atomic_store(&test->y, 1);
+        int temp = atomic_load(&test->x);
+        atomic_store(&test->r2, temp);
+    }
+
+    return NULL;
+}
+
+// 顺序一致性验证
+void verify_sequential_consistency() {
+    consistency_test test;
+    atomic_init(&test.x, 0);
+    atomic_init(&test.y, 0);
+    atomic_init(&test.r1, 0);
+    atomic_init(&test.r2, 0);
+
+    pthread_t t1, t2;
+
+    // 创建线程
+    pthread_create(&t1, NULL, thread1_func, &test);
+    pthread_create(&t2, NULL, thread2_func, &test);
+
+    // 等待线程完成
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    // 检查是否满足顺序一致性
+    int r1 = atomic_load(&test.r1);
+    int r2 = atomic_load(&test.r2);
+
+    printf("顺序一致性测试结果:\n");
+    printf("r1 = %d, r2 = %d\n", r1, r2);
+
+    if (r1 == 0 && r2 == 0) {
+        printf("检测到弱内存模型行为！\n");
+    } else {
+        printf("满足顺序一致性要求\n");
+    }
+}
+```
+
+### 4. 并发算法设计
+
+#### 4.1 并行排序算法
+
+```c
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+// 并行归并排序
+typedef struct {
+    int* array;
+    int left;
+    int right;
+    int* temp;
+} merge_sort_params;
+
+// 归并函数
+void merge(int* array, int left, int mid, int right, int* temp) {
+    int i = left;
+    int j = mid + 1;
+    int k = left;
+
+    while (i <= mid && j <= right) {
+        if (array[i] <= array[j]) {
+            temp[k++] = array[i++];
+        } else {
+            temp[k++] = array[j++];
+        }
+    }
+
+    while (i <= mid) {
+        temp[k++] = array[i++];
+    }
+
+    while (j <= right) {
+        temp[k++] = array[j++];
+    }
+
+    memcpy(array + left, temp + left, (right - left + 1) * sizeof(int));
+}
+
+// 并行归并排序线程函数
+void* parallel_merge_sort_thread(void* arg) {
+    merge_sort_params* params = (merge_sort_params*)arg;
+
+    if (params->left < params->right) {
+        int mid = params->left + (params->right - params->left) / 2;
+
+        // 创建子任务
+        merge_sort_params left_params = {
+            params->array, params->left, mid, params->temp
+        };
+        merge_sort_params right_params = {
+            params->array, mid + 1, params->right, params->temp
+        };
+
+        pthread_t left_thread, right_thread;
+
+        // 创建左子线程
+        pthread_create(&left_thread, NULL, parallel_merge_sort_thread, &left_params);
+
+        // 右子线程在当前线程执行
+        parallel_merge_sort_thread(&right_params);
+
+        // 等待左子线程完成
+        pthread_join(left_thread, NULL);
+
+        // 合并结果
+        merge(params->array, params->left, mid, params->right, params->temp);
+    }
+
+    return NULL;
+}
+
+// 并行归并排序入口
+void parallel_merge_sort(int* array, int size) {
+    int* temp = malloc(size * sizeof(int));
+    if (!temp) return;
+
+    merge_sort_params params = {array, 0, size - 1, temp};
+    parallel_merge_sort_thread(&params);
+
+    free(temp);
+}
+
+// 并行快速排序
+typedef struct {
+    int* array;
+    int low;
+    int high;
+} quick_sort_params;
+
+// 分区函数
+int partition(int* array, int low, int high) {
+    int pivot = array[high];
+    int i = low - 1;
+
+    for (int j = low; j < high; j++) {
+        if (array[j] <= pivot) {
+            i++;
+            int temp = array[i];
+            array[i] = array[j];
+            array[j] = temp;
+        }
+    }
+
+    int temp = array[i + 1];
+    array[i + 1] = array[high];
+    array[high] = temp;
+
+    return i + 1;
+}
+
+// 并行快速排序线程函数
+void* parallel_quick_sort_thread(void* arg) {
+    quick_sort_params* params = (quick_sort_params*)arg;
+
+    if (params->low < params->high) {
+        int pi = partition(params->array, params->low, params->high);
+
+        // 创建子任务
+        quick_sort_params left_params = {
+            params->array, params->low, pi - 1
+        };
+        quick_sort_params right_params = {
+            params->array, pi + 1, params->high
+        };
+
+        pthread_t left_thread, right_thread;
+
+        // 创建左右子线程
+        pthread_create(&left_thread, NULL, parallel_quick_sort_thread, &left_params);
+        pthread_create(&right_thread, NULL, parallel_quick_sort_thread, &right_params);
+
+        // 等待子线程完成
+        pthread_join(left_thread, NULL);
+        pthread_join(right_thread, NULL);
+    }
+
+    return NULL;
+}
+
+// 并行快速排序入口
+void parallel_quick_sort(int* array, int size) {
+    quick_sort_params params = {array, 0, size - 1};
+    parallel_quick_sort_thread(&params);
+}
+```
+
+#### 4.2 并行矩阵运算
+
+```c
+#include <pthread.h>
+#include <stdlib.h>
+
+// 矩阵乘法参数
+typedef struct {
+    double** A;
+    double** B;
+    double** C;
+    int start_row;
+    int end_row;
+    int n;
+    int m;
+    int p;
+} matrix_mult_params;
+
+// 矩阵乘法线程函数
+void* matrix_mult_thread(void* arg) {
+    matrix_mult_params* params = (matrix_mult_params*)arg;
+
+    for (int i = params->start_row; i < params->end_row; i++) {
+        for (int j = 0; j < params->p; j++) {
+            params->C[i][j] = 0;
+            for (int k = 0; k < params->m; k++) {
+                params->C[i][j] += params->A[i][k] * params->B[k][j];
+            }
+        }
+    }
+
+    return NULL;
+}
+
+// 并行矩阵乘法
+double** parallel_matrix_multiply(double** A, double** B, int n, int m, int p, int num_threads) {
+    // 分配结果矩阵
+    double** C = (double**)malloc(n * sizeof(double*));
+    for (int i = 0; i < n; i++) {
+        C[i] = (double*)malloc(p * sizeof(double));
+    }
+
+    pthread_t threads[num_threads];
+    matrix_mult_params params[num_threads];
+
+    int rows_per_thread = n / num_threads;
+
+    // 创建线程
+    for (int i = 0; i < num_threads; i++) {
+        params[i].A = A;
+        params[i].B = B;
+        params[i].C = C;
+        params[i].n = n;
+        params[i].m = m;
+        params[i].p = p;
+        params[i].start_row = i * rows_per_thread;
+        params[i].end_row = (i == num_threads - 1) ? n : (i + 1) * rows_per_thread;
+
+        pthread_create(&threads[i], NULL, matrix_mult_thread, &params[i]);
+    }
+
+    // 等待线程完成
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    return C;
+}
+
+// 分块矩阵乘法（缓存优化）
+typedef struct {
+    double** A;
+    double** B;
+    double** C;
+    int start_row;
+    int end_row;
+    int start_col;
+    int end_col;
+    int n;
+    int block_size;
+} block_matrix_params;
+
+// 分块矩阵乘法线程函数
+void* block_matrix_mult_thread(void* arg) {
+    block_matrix_params* params = (block_matrix_params*)arg;
+
+    for (int i = params->start_row; i < params->end_row; i += params->block_size) {
+        for (int j = params->start_col; j < params->end_col; j += params->block_size) {
+            for (int k = 0; k < params->n; k += params->block_size) {
+                // 处理当前块
+                for (int ii = i; ii < i + params->block_size && ii < params->end_row; ii++) {
+                    for (int jj = j; jj < j + params->block_size && jj < params->end_col; jj++) {
+                        double sum = 0;
+                        for (int kk = k; kk < k + params->block_size && kk < params->n; kk++) {
+                            sum += params->A[ii][kk] * params->B[kk][jj];
+                        }
+                        params->C[ii][jj] += sum;
+                    }
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+```
+
+### 5. 并发调试技术
+
+#### 5.1 数据竞争检测器
+
+```c
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+#include <string.h>
+
+// 内存访问记录
+typedef struct {
+    void* address;
+    int thread_id;
+    int is_write;
+    size_t size;
+    struct timespec timestamp;
+} memory_access;
+
+// 数据竞争检测器
+typedef struct {
+    memory_access* accesses;
+    int capacity;
+    int count;
+    pthread_mutex_t lock;
+} race_detector;
+
+// 初始化数据竞争检测器
+void race_detector_init(race_detector* detector, int capacity) {
+    detector->accesses = malloc(capacity * sizeof(memory_access));
+    detector->capacity = capacity;
+    detector->count = 0;
+    pthread_mutex_init(&detector->lock, NULL);
+}
+
+// 记录内存访问
+void record_memory_access(race_detector* detector, void* address,
+                         int thread_id, int is_write, size_t size) {
+    pthread_mutex_lock(&detector->lock);
+
+    if (detector->count < detector->capacity) {
+        memory_access* access = &detector->accesses[detector->count];
+        access->address = address;
+        access->thread_id = thread_id;
+        access->is_write = is_write;
+        access->size = size;
+        clock_gettime(CLOCK_MONOTONIC, &access->timestamp);
+
+        detector->count++;
+    }
+
+    pthread_mutex_unlock(&detector->lock);
+}
+
+// 检查数据竞争
+void detect_data_races(race_detector* detector) {
+    printf("=== 数据竞争检测报告 ===\n");
+
+    for (int i = 0; i < detector->count; i++) {
+        for (int j = i + 1; j < detector->count; j++) {
+            memory_access* access1 = &detector->accesses[i];
+            memory_access* access2 = &detector->accesses[j];
+
+            // 检查是否访问同一内存区域
+            if (access1->address == access2->address) {
+                // 检查是否为不同线程
+                if (access1->thread_id != access2->thread_id) {
+                    // 检查是否至少有一个写操作
+                    if (access1->is_write || access2->is_write) {
+                        // 检查时间重叠
+                        double time1 = access1->timestamp.tv_sec + access1->timestamp.tv_nsec / 1e9;
+                        double time2 = access2->timestamp.tv_sec + access2->timestamp.tv_nsec / 1e9;
+
+                        printf("检测到数据竞争：\n");
+                        printf("  地址: %p\n", access1->address);
+                        printf("  线程 %d: %s (时间: %.6f)\n",
+                               access1->thread_id, access1->is_write ? "写" : "读", time1);
+                        printf("  线程 %d: %s (时间: %.6f)\n",
+                               access2->thread_id, access2->is_write ? "写" : "读", time2);
+                        printf("\n");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 销毁数据竞争检测器
+void race_detector_destroy(race_detector* detector) {
+    free(detector->accesses);
+    pthread_mutex_destroy(&detector->lock);
+}
+```
+
+#### 5.2 死锁检测器
+
+```c
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdlib.h>
+
+// 锁图节点
+typedef struct lock_node {
+    pthread_mutex_t* lock;
+    int thread_id;
+    struct lock_node* next;
+} lock_node;
+
+// 线程等待图
+typedef struct {
+    lock_node* nodes;
+    int capacity;
+    int count;
+} wait_graph;
+
+// 初始化等待图
+void wait_graph_init(wait_graph* graph, int capacity) {
+    graph->nodes = malloc(capacity * sizeof(lock_node));
+    graph->capacity = capacity;
+    graph->count = 0;
+}
+
+// 添加锁等待关系
+void add_lock_wait(wait_graph* graph, pthread_mutex_t* lock, int thread_id) {
+    if (graph->count < graph->capacity) {
+        lock_node* node = &graph->nodes[graph->count];
+        node->lock = lock;
+        node->thread_id = thread_id;
+        node->next = NULL;
+        graph->count++;
+    }
+}
+
+// 检测循环等待（死锁）
+int detect_deadlock(wait_graph* graph) {
+    // 简化的死锁检测算法
+    for (int i = 0; i < graph->count; i++) {
+        for (int j = i + 1; j < graph->count; j++) {
+            if (graph->nodes[i].lock == graph->nodes[j].lock) {
+                printf("检测到死锁：多个线程等待同一个锁\n");
+                printf("  线程 %d 和线程 %d 都在等待锁 %p\n",
+                       graph->nodes[i].thread_id, graph->nodes[j].thread_id, graph->nodes[i].lock);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// 销毁等待图
+void wait_graph_destroy(wait_graph* graph) {
+    free(graph->nodes);
+}
+```
+
+### 6. 实验项目：并发性能优化实验 (M4)
+
+#### 6.1 实验目标
+
+- 实现一个高性能的并发任务调度器
+- 比较不同同步机制的性能
+- 优化无锁数据结构的实现
+- 分析和解决并发性能瓶颈
+
+#### 6.2 实验代码
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <time.h>
+#include <unistd.h>
+
+#define NUM_THREADS 8
+#define QUEUE_SIZE 1024
+#define NUM_TASKS 10000
+
+// 任务类型
+typedef struct {
+    int id;
+    void (*func)(void*);
+    void* arg;
+} task;
+
+// 基于锁的任务队列
+typedef struct {
+    task queue[QUEUE_SIZE];
+    int head;
+    int tail;
+    pthread_mutex_t lock;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+    int count;
+} locked_task_queue;
+
+// 无锁任务队列
+typedef struct {
+    task queue[QUEUE_SIZE];
+    _Atomic int head;
+    _Atomic int tail;
+    _Atomic int count;
+} lockfree_task_queue;
+
+// 初始化基于锁的任务队列
+void locked_queue_init(locked_task_queue* q) {
+    q->head = 0;
+    q->tail = 0;
+    q->count = 0;
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->not_empty, NULL);
+    pthread_cond_init(&q->not_full, NULL);
+}
+
+// 入队（基于锁）
+void locked_enqueue(locked_task_queue* q, task t) {
+    pthread_mutex_lock(&q->lock);
+
+    while (q->count == QUEUE_SIZE) {
+        pthread_cond_wait(&q->not_full, &q->lock);
+    }
+
+    q->queue[q->tail] = t;
+    q->tail = (q->tail + 1) % QUEUE_SIZE;
+    q->count++;
+
+    pthread_cond_signal(&q->not_empty);
+    pthread_mutex_unlock(&q->lock);
+}
+
+// 出队（基于锁）
+task locked_dequeue(locked_task_queue* q) {
+    pthread_mutex_lock(&q->lock);
+
+    while (q->count == 0) {
+        pthread_cond_wait(&q->not_empty, &q->lock);
+    }
+
+    task t = q->queue[q->head];
+    q->head = (q->head + 1) % QUEUE_SIZE;
+    q->count--;
+
+    pthread_cond_signal(&q->not_full);
+    pthread_mutex_unlock(&q->lock);
+
+    return t;
+}
+
+// 初始化无锁任务队列
+void lockfree_queue_init(lockfree_task_queue* q) {
+    atomic_init(&q->head, 0);
+    atomic_init(&q->tail, 0);
+    atomic_init(&q->count, 0);
+}
+
+// 入队（无锁）
+int lockfree_enqueue(lockfree_task_queue* q, task t) {
+    int old_count, new_count;
+    int old_tail, new_tail;
+
+    do {
+        old_count = atomic_load(&q->count);
+        if (old_count >= QUEUE_SIZE) {
+            return -1;  // 队列已满
+        }
+        new_count = old_count + 1;
+    } while (!atomic_compare_exchange_weak(&q->count, &old_count, new_count));
+
+    do {
+        old_tail = atomic_load(&q->tail);
+        new_tail = (old_tail + 1) % QUEUE_SIZE;
+    } while (!atomic_compare_exchange_weak(&q->tail, &old_tail, new_tail));
+
+    q->queue[old_tail] = t;
+    return 0;
+}
+
+// 出队（无锁）
+task lockfree_dequeue(lockfree_task_queue* q) {
+    int old_count, new_count;
+    int old_head, new_head;
+
+    do {
+        old_count = atomic_load(&q->count);
+        if (old_count <= 0) {
+            task empty_task = {0, NULL, NULL};
+            return empty_task;  // 队列为空
+        }
+        new_count = old_count - 1;
+    } while (!atomic_compare_exchange_weak(&q->count, &old_count, new_count));
+
+    do {
+        old_head = atomic_load(&q->head);
+        new_head = (old_head + 1) % QUEUE_SIZE;
+    } while (!atomic_compare_exchange_weak(&q->head, &old_head, new_head));
+
+    return q->queue[old_head];
+}
+
+// 示例任务函数
+void example_task(void* arg) {
+    int task_id = *(int*)arg;
+    usleep(1000);  // 模拟工作
+    printf("任务 %d 完成\n", task_id);
+}
+
+// 工作线程函数（基于锁）
+void* locked_worker_thread(void* arg) {
+    locked_task_queue* queue = (locked_task_queue*)arg;
+
+    while (1) {
+        task t = locked_dequeue(queue);
+        if (t.func) {
+            t.func(t.arg);
+        } else {
+            break;  // 终止信号
+        }
+    }
+
+    return NULL;
+}
+
+// 工作线程函数（无锁）
+void* lockfree_worker_thread(void* arg) {
+    lockfree_task_queue* queue = (lockfree_task_queue*)arg;
+
+    while (1) {
+        task t = lockfree_dequeue(queue);
+        if (t.func) {
+            t.func(t.arg);
+        } else {
+            break;  // 终止信号
+        }
+        usleep(10);  // 避免忙等待
+    }
+
+    return NULL;
+}
+
+// 性能测试函数
+void performance_test() {
+    struct timespec start, end;
+    pthread_t threads[NUM_THREADS];
+
+    // 基于锁的队列测试
+    printf("=== 基于锁的队列性能测试 ===\n");
+    locked_task_queue locked_queue;
+    locked_queue_init(&locked_queue);
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    // 创建工作线程
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, locked_worker_thread, &locked_queue);
+    }
+
+    // 提交任务
+    for (int i = 0; i < NUM_TASKS; i++) {
+        task t = {i, example_task, &i};
+        locked_enqueue(&locked_queue, t);
+    }
+
+    // 发送终止信号
+    for (int i = 0; i < NUM_THREADS; i++) {
+        task terminate = {0, NULL, NULL};
+        locked_enqueue(&locked_queue, terminate);
+    }
+
+    // 等待线程完成
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double locked_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("基于锁的队列执行时间: %.3f 秒\n", locked_time);
+
+    // 无锁队列测试
+    printf("\n=== 无锁队列性能测试 ===\n");
+    lockfree_task_queue lockfree_queue;
+    lockfree_queue_init(&lockfree_queue);
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
+    // 创建工作线程
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_create(&threads[i], NULL, lockfree_worker_thread, &lockfree_queue);
+    }
+
+    // 提交任务
+    for (int i = 0; i < NUM_TASKS; i++) {
+        task t = {i, example_task, &i};
+        while (lockfree_enqueue(&lockfree_queue, t) != 0) {
+            usleep(1);  // 等待队列有空位
+        }
+    }
+
+    // 发送终止信号
+    for (int i = 0; i < NUM_THREADS; i++) {
+        task terminate = {0, NULL, NULL};
+        while (lockfree_enqueue(&lockfree_queue, terminate) != 0) {
+            usleep(1);
+        }
+    }
+
+    // 等待线程完成
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double lockfree_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("无锁队列执行时间: %.3f 秒\n", lockfree_time);
+
+    // 性能比较
+    printf("\n=== 性能比较 ===\n");
+    printf("性能提升: %.2f%%\n", (locked_time - lockfree_time) / locked_time * 100);
+    printf("吞吐量提升: %.2f%%\n", (NUM_TASKS / lockfree_time) / (NUM_TASKS / locked_time) * 100 - 100);
+}
+
+int main() {
+    performance_test();
+    return 0;
+}
+```
+
+## 实验任务
+
+### 基础任务
+
+1. **实现无锁队列**：完成无锁队列的入队和出队操作
+2. **性能测试**：比较基于锁和无锁队列的性能差异
+3. **内存屏障实验**：验证不同内存屏障的效果
+
+### 进阶任务
+
+1. **无锁栈实现**：实现并测试无锁栈数据结构
+2. **并发算法优化**：优化并行排序或矩阵乘法算法
+3. **内存模型验证**：测试不同内存模型的性能表现
+
+### 挑战任务
+
+1. **无锁哈希表**：实现一个线程安全的无锁哈希表
+2. **无锁内存池**：实现高性能的无锁内存分配器
+3. **性能分析工具**：开发并发程序性能分析工具
+
+## 扩展阅读
+
+### 推荐书籍
+
+1. 《The Art of Multiprocessor Programming》- Maurice Herlihy
+2. 《Concurrency in Action》- Anthony Williams
+3. 《Parallel Programming with C++》- Kamran H. Husain
+
+### 在线资源
+
+1. [Intel 64 and IA-32 Architectures Software Developer Manuals](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+2. [Linux Kernel Documentation on Memory Barriers](https://www.kernel.org/doc/html/latest/memory-barriers.html)
+3. [CPPReference - stdatomic.h](https://en.cppreference.com/w/c/atomic)
+
+## 课后习题
+
+1. **概念题**：解释无锁编程与基于锁编程的优缺点
+2. **分析题**：分析不同内存模型对程序性能的影响
+3. **设计题**：设计一个高性能的并发任务调度系统
+4. **实现题**：实现一个无锁的双向链表
+5. **优化题**：优化给定的并发算法，提升其性能
+
+## 下一讲预告
+
+第14讲将介绍设备驱动程序和I/O系统，包括：
+
+- 设备驱动程序架构
+- 中断处理机制
+- DMA和I/O优化
+- 块设备和字符设备
+- 虚拟文件系统接口
+
+## 参考资料
+
+- 南京大学操作系统课程讲义: https://jyywiki.cn/OS/2025/
+- B站视频资源: [南京大学操作系统课程](https://www.bilibili.com/video/BV1GX4y1K7Kj/)
+- 《操作系统概念》- Abraham Silberschatz
+- 《深入理解Linux内核》- Daniel P. Bovet

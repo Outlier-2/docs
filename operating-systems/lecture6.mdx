@@ -1,0 +1,811 @@
+---
+title: "第6讲：Shell与命令行接口"
+description: "南京大学操作系统2025 - Shell的工作原理、命令解析与执行、管道和重定向机制"
+---
+
+# 第6讲：Shell与命令行接口
+
+## Shell概述
+
+### 什么是Shell？
+
+Shell是用户与操作系统之间的交互界面，它是一个命令解释器，负责解释和执行用户输入的命令。
+
+**Shell的功能**
+- **命令解释**：解析和执行用户命令
+- **程序执行**：启动和管理进程
+- **环境管理**：管理用户环境和变量
+- **脚本编程**：支持命令脚本编程
+- **交互接口**：提供用户交互界面
+
+### Shell的分类
+
+| Shell类型 | 特点 | 使用场景 |
+|-----------|------|----------|
+| Bash | 功能强大，脚本编程能力强 | Linux默认Shell |
+| Zsh | 高度可定制，插件丰富 | 开发者喜爱 |
+| Fish | 用户友好，自动补全 | 新手用户 |
+| Csh | C语法风格，历史命令 | 传统Unix系统 |
+| PowerShell | 面向对象，系统集成 | Windows系统 |
+
+## Shell的工作原理
+
+### Shell的启动流程
+
+```c
+// Shell启动的基本流程
+int main(int argc, char **argv) {
+    // 1. 初始化Shell环境
+    init_shell();
+
+    // 2. 读取配置文件
+    read_config_files();
+
+    // 3. 设置环境变量
+    setup_environment();
+
+    // 4. 进入主循环
+    shell_loop();
+
+    return 0;
+}
+
+// Shell主循环
+void shell_loop(void) {
+    char *line;
+    char **args;
+    int status;
+
+    do {
+        // 显示提示符
+        printf("%s", get_prompt());
+
+        // 读取用户输入
+        line = read_line();
+
+        // 解析命令
+        args = parse_line(line);
+
+        // 执行命令
+        status = execute_command(args);
+
+        // 释放资源
+        free(line);
+        free(args);
+    } while (status != EXIT_SHELL);
+}
+```
+
+### Shell的内部命令处理
+
+```c
+// 内部命令处理函数
+int execute_builtin(char **args) {
+    // 比较命令名称
+    if (strcmp(args[0], "cd") == 0) {
+        return builtin_cd(args);
+    } else if (strcmp(args[0], "help") == 0) {
+        return builtin_help(args);
+    } else if (strcmp(args[0], "exit") == 0) {
+        return builtin_exit(args);
+    } else if (strcmp(args[0], "export") == 0) {
+        return builtin_export(args);
+    } else if (strcmp(args[0], "alias") == 0) {
+        return builtin_alias(args);
+    } else if (strcmp(args[0], "history") == 0) {
+        return builtin_history(args);
+    }
+
+    return -1;  // 不是内部命令
+}
+
+// cd命令实现
+int builtin_cd(char **args) {
+    if (args[1] == NULL) {
+        // 切换到用户主目录
+        const char *home = getenv("HOME");
+        if (home == NULL) {
+            fprintf(stderr, "cd: No home directory\n");
+            return 1;
+        }
+        chdir(home);
+    } else {
+        // 切换到指定目录
+        if (chdir(args[1]) != 0) {
+            perror("cd");
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// help命令实现
+int builtin_help(char **args) {
+    printf("Mini Shell Help\n");
+    printf("Built-in commands:\n");
+    printf("  cd [dir]    - Change directory\n");
+    printf("  help        - Show this help\n");
+    printf("  exit        - Exit shell\n");
+    printf("  export      - Set environment variable\n");
+    printf("  alias       - Create command alias\n");
+    printf("  history     - Show command history\n");
+    return 0;
+}
+```
+
+## 命令解析与执行
+
+### 命令解析过程
+
+```c
+// 命令行解析器
+char **parse_line(char *line) {
+    int position = 0;
+    char **tokens = malloc(MAX_TOKENS * sizeof(char *));
+    char *token;
+
+    if (!tokens) {
+        fprintf(stderr, "Allocation error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // 使用strtok分割字符串
+    token = strtok(line, TOKEN_DELIMITERS);
+    while (token != NULL && position < MAX_TOKENS - 1) {
+        tokens[position] = token;
+        position++;
+
+        token = strtok(NULL, TOKEN_DELIMITERS);
+    }
+
+    tokens[position] = NULL;  // 结束标记
+    return tokens;
+}
+
+// 高级命令解析（支持引号和转义）
+char **parse_line_advanced(char *line) {
+    int position = 0;
+    char **tokens = malloc(MAX_TOKENS * sizeof(char *));
+    char *token_start = line;
+    int in_quote = 0;
+    int in_escape = 0;
+
+    if (!tokens) {
+        fprintf(stderr, "Allocation error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    while (*line && position < MAX_TOKENS - 1) {
+        if (in_escape) {
+            in_escape = 0;
+            line++;
+            continue;
+        }
+
+        switch (*line) {
+            case '\\':
+                in_escape = 1;
+                line++;
+                break;
+
+            case '"':
+            case '\'':
+                if (in_quote && *line == in_quote) {
+                    in_quote = 0;
+                } else if (!in_quote) {
+                    in_quote = *line;
+                }
+                line++;
+                break;
+
+            case ' ':
+            case '\t':
+                if (!in_quote) {
+                    *line = '\0';  // 终止当前token
+                    if (token_start != line) {
+                        tokens[position++] = token_start;
+                    }
+                    token_start = line + 1;
+                }
+                line++;
+                break;
+
+            default:
+                line++;
+                break;
+        }
+    }
+
+    // 添加最后一个token
+    if (token_start != line) {
+        tokens[position++] = token_start;
+    }
+
+    tokens[position] = NULL;  // 结束标记
+    return tokens;
+}
+```
+
+### 外部命令执行
+
+```c
+// 执行外部命令
+int execute_external(char **args) {
+    pid_t pid;
+    int status;
+
+    // 创建子进程
+    pid = fork();
+
+    if (pid == 0) {
+        // 子进程
+        if (execvp(args[0], args) == -1) {
+            perror("execvp");
+            exit(EXIT_FAILURE);
+        }
+    } else if (pid < 0) {
+        // fork失败
+        perror("fork");
+        return -1;
+    } else {
+        // 父进程
+        do {
+            // 等待子进程结束
+            waitpid(pid, &status, WUNTRACED);
+        } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+    }
+
+    return 1;
+}
+
+// 命令执行主函数
+int execute_command(char **args) {
+    if (args[0] == NULL) {
+        // 空命令
+        return 1;
+    }
+
+    // 检查是否是内部命令
+    if (execute_builtin(args) != -1) {
+        return 1;
+    }
+
+    // 执行外部命令
+    return execute_external(args);
+}
+```
+
+## 管道和重定向机制
+
+### 输入输出重定向
+
+```c
+// 重定向类型定义
+#define REDIR_INPUT   0
+#define REDIR_OUTPUT  1
+#define REDIR_APPEND  2
+#define REDIR_ERROR   3
+
+// 重定向信息结构
+typedef struct {
+    int type;        // 重定向类型
+    char *filename;  // 文件名
+} redirection_t;
+
+// 执行重定向
+int do_redirection(redirection_t *redir) {
+    int fd;
+    int flags;
+
+    switch (redir->type) {
+        case REDIR_INPUT:
+            // 输入重定向
+            fd = open(redir->filename, O_RDONLY);
+            if (fd == -1) {
+                perror("open");
+                return -1;
+            }
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+            break;
+
+        case REDIR_OUTPUT:
+            // 输出重定向（覆盖）
+            fd = open(redir->filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd == -1) {
+                perror("open");
+                return -1;
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+            break;
+
+        case REDIR_APPEND:
+            // 输出重定向（追加）
+            fd = open(redir->filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (fd == -1) {
+                perror("open");
+                return -1;
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+            break;
+
+        case REDIR_ERROR:
+            // 错误重定向
+            fd = open(redir->filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd == -1) {
+                perror("open");
+                return -1;
+            }
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+            break;
+    }
+
+    return 0;
+}
+
+// 解析重定向
+int parse_redirection(char **args, redirection_t *redirs, int *redir_count) {
+    int i = 0;
+    *redir_count = 0;
+
+    while (args[i] != NULL) {
+        if (strcmp(args[i], "<") == 0) {
+            // 输入重定向
+            if (args[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: missing filename after '<'\n");
+                return -1;
+            }
+            redirs[*redir_count].type = REDIR_INPUT;
+            redirs[*redir_count].filename = args[i + 1];
+            (*redir_count)++;
+            i += 2;
+        } else if (strcmp(args[i], ">") == 0) {
+            // 输出重定向
+            if (args[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: missing filename after '>'\n");
+                return -1;
+            }
+            redirs[*redir_count].type = REDIR_OUTPUT;
+            redirs[*redir_count].filename = args[i + 1];
+            (*redir_count)++;
+            i += 2;
+        } else if (strcmp(args[i], ">>") == 0) {
+            // 输出重定向（追加）
+            if (args[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: missing filename after '>>'\n");
+                return -1;
+            }
+            redirs[*redir_count].type = REDIR_APPEND;
+            redirs[*redir_count].filename = args[i + 1];
+            (*redir_count)++;
+            i += 2;
+        } else if (strcmp(args[i], "2>") == 0) {
+            // 错误重定向
+            if (args[i + 1] == NULL) {
+                fprintf(stderr, "Syntax error: missing filename after '2>'\n");
+                return -1;
+            }
+            redirs[*redir_count].type = REDIR_ERROR;
+            redirs[*redir_count].filename = args[i + 1];
+            (*redir_count)++;
+            i += 2;
+        } else {
+            i++;
+        }
+    }
+
+    return 0;
+}
+```
+
+### 管道机制
+
+```c
+// 管道命令结构
+typedef struct {
+    char **commands[MAX_PIPE_COMMANDS];  // 命令数组
+    int command_count;                  // 命令数量
+} pipeline_t;
+
+// 创建管道
+int create_pipe(int pipefd[2]) {
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        return -1;
+    }
+    return 0;
+}
+
+// 执行管道命令
+int execute_pipeline(pipeline_t *pipeline) {
+    int i;
+    int pipefd[2];
+    int prev_pipe = -1;
+    pid_t pid;
+
+    for (i = 0; i < pipeline->command_count; i++) {
+        // 创建管道（除了最后一个命令）
+        if (i < pipeline->command_count - 1) {
+            if (create_pipe(pipefd) == -1) {
+                return -1;
+            }
+        }
+
+        pid = fork();
+        if (pid == 0) {
+            // 子进程
+            if (prev_pipe != -1) {
+                // 从前一个管道读取
+                dup2(prev_pipe, STDIN_FILENO);
+                close(prev_pipe);
+            }
+
+            if (i < pipeline->command_count - 1) {
+                // 写入到下一个管道
+                dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[0]);
+                close(pipefd[1]);
+            }
+
+            // 执行命令
+            execvp(pipeline->commands[i][0], pipeline->commands[i]);
+            perror("execvp");
+            exit(EXIT_FAILURE);
+        } else if (pid < 0) {
+            perror("fork");
+            return -1;
+        }
+
+        // 父进程
+        if (prev_pipe != -1) {
+            close(prev_pipe);
+        }
+
+        if (i < pipeline->command_count - 1) {
+            close(pipefd[1]);
+            prev_pipe = pipefd[0];
+        }
+    }
+
+    // 等待所有子进程结束
+    for (i = 0; i < pipeline->command_count; i++) {
+        wait(NULL);
+    }
+
+    return 0;
+}
+
+// 解析管道命令
+int parse_pipeline(char *line, pipeline_t *pipeline) {
+    char *command;
+    char *saveptr;
+    int command_index = 0;
+
+    // 分割管道命令
+    command = strtok_r(line, "|", &saveptr);
+    while (command != NULL && command_index < MAX_PIPE_COMMANDS) {
+        // 去除空白字符
+        while (*command == ' ' || *command == '\t') {
+            command++;
+        }
+
+        // 解析单个命令
+        pipeline->commands[command_index] = parse_line(command);
+        if (pipeline->commands[command_index] == NULL) {
+            return -1;
+        }
+
+        command_index++;
+        command = strtok_r(NULL, "|", &saveptr);
+    }
+
+    pipeline->command_count = command_index;
+    return 0;
+}
+```
+
+### 完整的Shell实现
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define MAX_LINE_LENGTH 1024
+#define MAX_TOKENS 128
+#define MAX_PIPE_COMMANDS 16
+#define MAX_REDIRS 10
+
+// Shell主循环
+void shell_loop(void) {
+    char line[MAX_LINE_LENGTH];
+    char *args[MAX_TOKENS];
+    redirection_t redirs[MAX_REDIRS];
+    int redir_count;
+
+    while (1) {
+        // 显示提示符
+        printf("mini-shell$ ");
+
+        // 读取输入
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            break;  // EOF或错误
+        }
+
+        // 去除换行符
+        line[strcspn(line, "\n")] = '\0';
+
+        // 检查是否为管道命令
+        if (strchr(line, '|') != NULL) {
+            // 处理管道命令
+            pipeline_t pipeline;
+            if (parse_pipeline(line, &pipeline) == 0) {
+                execute_pipeline(&pipeline);
+            }
+            continue;
+        }
+
+        // 解析命令
+        parse_command(line, args);
+
+        // 解析重定向
+        if (parse_redirection(args, redirs, &redir_count) == 0) {
+            // 执行重定向
+            for (int i = 0; i < redir_count; i++) {
+                do_redirection(&redirs[i]);
+            }
+
+            // 执行命令
+            execute_command(args);
+        }
+    }
+}
+
+// 获取提示符
+char *get_prompt(void) {
+    static char prompt[256];
+    char hostname[256];
+    char cwd[256];
+
+    // 获取主机名
+    gethostname(hostname, sizeof(hostname));
+
+    // 获取当前目录
+    getcwd(cwd, sizeof(cwd));
+
+    // 简化目录显示
+    char *home = getenv("HOME");
+    if (home && strncmp(cwd, home, strlen(home)) == 0) {
+        sprintf(prompt, "%s@%s:~%s$ ", getenv("USER"), hostname,
+                cwd + strlen(home));
+    } else {
+        sprintf(prompt, "%s@%s:%s$ ", getenv("USER"), hostname, cwd);
+    }
+
+    return prompt;
+}
+
+// 读取命令行
+char *read_line(void) {
+    char *line = malloc(MAX_LINE_LENGTH);
+    if (!line) {
+        fprintf(stderr, "Allocation error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (fgets(line, MAX_LINE_LENGTH, stdin) == NULL) {
+        if (feof(stdin)) {
+            exit(EXIT_SUCCESS);
+        } else {
+            perror("fgets");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    return line;
+}
+
+// 历史记录功能
+typedef struct {
+    char *commands[MAX_HISTORY];
+    int count;
+    int current;
+} history_t;
+
+history_t history;
+
+void add_history(char *command) {
+    if (history.count < MAX_HISTORY) {
+        history.commands[history.count++] = strdup(command);
+    } else {
+        free(history.commands[0]);
+        for (int i = 0; i < MAX_HISTORY - 1; i++) {
+            history.commands[i] = history.commands[i + 1];
+        }
+        history.commands[MAX_HISTORY - 1] = strdup(command);
+    }
+}
+
+void show_history(void) {
+    for (int i = 0; i < history.count; i++) {
+        printf("%d %s\n", i + 1, history.commands[i]);
+    }
+}
+
+int main(int argc, char **argv) {
+    printf("Mini Shell v1.0\n");
+    printf("Type 'help' for available commands\n");
+
+    // 初始化历史记录
+    memset(&history, 0, sizeof(history));
+
+    // 进入Shell主循环
+    shell_loop();
+
+    return 0;
+}
+```
+
+## 实验M4：实现简易Shell
+
+### 实验目标
+
+实现一个功能完整的简易Shell，支持内部命令、外部命令、管道和重定向。
+
+### 实验代码框架
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+
+#define MAX_LINE_LENGTH 1024
+#define MAX_TOKENS 128
+#define MAX_PIPE_COMMANDS 16
+#define MAX_REDIRS 10
+#define MAX_HISTORY 100
+
+// 重定向类型
+#define REDIR_INPUT   0
+#define REDIR_OUTPUT  1
+#define REDIR_APPEND  2
+#define REDIR_ERROR   3
+
+// 重定向结构
+typedef struct {
+    int type;
+    char *filename;
+} redirection_t;
+
+// 管道命令结构
+typedef struct {
+    char **commands[MAX_PIPE_COMMANDS];
+    int command_count;
+} pipeline_t;
+
+// 历史记录
+char *history[MAX_HISTORY];
+int history_count = 0;
+
+// 内部命令
+int builtin_cd(char **args);
+int builtin_help(char **args);
+int builtin_exit(char **args);
+int builtin_history(char **args);
+
+// 核心函数
+char *read_line(void);
+char **parse_line(char *line);
+int execute_command(char **args);
+int execute_builtin(char **args);
+int execute_external(char **args);
+int execute_pipeline(pipeline_t *pipeline);
+int parse_pipeline(char *line, pipeline_t *pipeline);
+int parse_redirection(char **args, redirection_t *redirs, int *redir_count);
+int do_redirection(redirection_t *redir);
+char *get_prompt(void);
+void add_history(char *command);
+void show_history(void);
+
+int main(int argc, char **argv) {
+    char line[MAX_LINE_LENGTH];
+    char **args;
+    redirection_t redirs[MAX_REDIRS];
+    int redir_count;
+
+    printf("Mini Shell v1.0\n");
+    printf("Type 'help' for available commands\n");
+
+    while (1) {
+        // 显示提示符
+        printf("%s", get_prompt());
+
+        // 读取输入
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            break;
+        }
+
+        // 去除换行符
+        line[strcspn(line, "\n")] = '\0';
+
+        // 添加到历史记录
+        if (strlen(line) > 0) {
+            add_history(line);
+        }
+
+        // 检查是否为管道命令
+        if (strchr(line, '|') != NULL) {
+            pipeline_t pipeline;
+            if (parse_pipeline(line, &pipeline) == 0) {
+                execute_pipeline(&pipeline);
+            }
+            continue;
+        }
+
+        // 解析命令
+        args = parse_line(line);
+
+        // 解析重定向
+        redir_count = 0;
+        if (parse_redirection(args, redirs, &redir_count) == 0) {
+            // 执行重定向
+            for (int i = 0; i < redir_count; i++) {
+                do_redirection(&redirs[i]);
+            }
+
+            // 执行命令
+            execute_command(args);
+        }
+
+        free(args);
+    }
+
+    // 清理历史记录
+    for (int i = 0; i < history_count; i++) {
+        free(history[i]);
+    }
+
+    return 0;
+}
+
+// 实现细节...
+// (这里需要实现上述声明的所有函数)
+```
+
+### 实验扩展
+
+1. **作业控制**：实现后台任务(&)和作业控制命令(jobs, fg, bg)
+2. **命令补全**：添加Tab键命令补全功能
+3. **脚本执行**：支持Shell脚本文件的执行
+4. **环境变量**：完善环境变量管理功能
+
+## 课后练习
+
+1. **思考题**：分析Shell的设计模式，讨论如何优化Shell的性能和用户体验。
+
+2. **编程题**：完善实验M4的代码，实现一个功能完整的Shell，支持所有基本功能。
+
+3. **设计题**：设计一个适合AI开发的Shell，集成常用AI工具和命令。
+
+## 下一讲预告
+
+第7讲：可执行文件格式 - ELF文件格式详解、程序加载与链接、动态链接机制。
+
+---
+
+*[B站视频：南京大学操作系统2025 - 第6讲](https://www.bilibili.com/video/BV1D44y1e7Xc)*
+
+*[课程讲义：jyywiki.cn/OS/2025/lect6.md](https://jyywiki.cn/OS/2025/lect6.md)*

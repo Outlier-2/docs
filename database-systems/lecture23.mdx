@@ -1,0 +1,2270 @@
+---
+title: Distributed Databases III - Advanced Topics
+desc: This lecture covers advanced distributed database topics including distributed query optimization, load balancing, replication strategies, and distributed joins.
+---
+
+# 第23讲：分布式数据库 III - 高级主题
+
+## 课程概述
+
+本节课我们将探讨分布式数据库的高级主题，包括分布式查询优化、负载均衡策略、复制技术和分布式连接算法。这些技术对于构建高性能、高可用的分布式数据库系统至关重要。
+
+## 学习目标
+
+- 掌握分布式查询优化的核心策略
+- 理解负载均衡算法和实现
+- 学习分布式复制技术和一致性模型
+- 掌握分布式连接算法的优化技术
+
+## 1. 分布式查询优化
+
+### 1.1 查询重写和优化
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <algorithm>
+#include <cmath>
+
+namespace distributed_db {
+
+/**
+ * 查询统计信息
+ */
+struct TableStatistics {
+    std::string table_name;
+    size_t row_count;
+    size_t avg_row_size;
+    std::unordered_map<std::string, size_t> column_distinct_counts;
+    std::unordered_map<std::string, double> column_min_values;
+    std::unordered_map<std::string, double> column_max_values;
+    std::unordered_map<std::string, std::string> most_common_values;
+
+    TableStatistics(const std::string& name) : table_name(name), row_count(0), avg_row_size(0) {}
+
+    void updateRowCount(size_t count) {
+        row_count = count;
+    }
+
+    void updateColumnStats(const std::string& column, size_t distinct_count,
+                         double min_val, double max_val, const std::string& common_val) {
+        column_distinct_counts[column] = distinct_count;
+        column_min_values[column] = min_val;
+        column_max_values[column] = max_val;
+        most_common_values[column] = common_val;
+    }
+
+    double getSelectivity(const std::string& column, const std::string& op, const std::string& value) const {
+        if (column_distinct_counts.find(column) == column_distinct_counts.end()) {
+            return 0.1;  // 默认选择性
+        }
+
+        size_t distinct_count = column_distinct_counts.at(column);
+
+        if (op == "=") {
+            // 等值条件的选择性
+            if (most_common_values.find(column) != most_common_values.end() &&
+                most_common_values.at(column) == value) {
+                return 0.5;  // 最常见值的选择性较高
+            }
+            return 1.0 / distinct_count;
+        } else if (op == ">" || op == "<") {
+            // 范围条件的选择性
+            if (column_min_values.find(column) != column_min_values.end() &&
+                column_max_values.find(column) != column_max_values.end()) {
+                double min_val = column_min_values.at(column);
+                double max_val = column_max_values.at(column);
+                double val = std::stod(value);
+
+                if (op == ">") {
+                    return (max_val - val) / (max_val - min_val);
+                } else {
+                    return (val - min_val) / (max_val - min_val);
+                }
+            }
+        }
+
+        return 0.1;  // 默认选择性
+    }
+};
+
+/**
+ * 分布式执行计划节点
+ */
+struct DistributedExecutionPlan {
+    struct PlanNode {
+        int node_id;
+        std::string operation_type;
+        std::vector<std::string> input_tables;
+        std::vector<std::string> output_columns;
+        std::vector<std::string> conditions;
+        std::vector<int> child_nodes;
+        std::unordered_map<std::string, std::string> properties;
+        double estimated_cost;
+        size_t estimated_rows;
+
+        PlanNode(int id, const std::string& op_type)
+            : node_id(id), operation_type(op_type), estimated_cost(0.0), estimated_rows(0) {}
+
+        void addInputTable(const std::string& table) {
+            input_tables.push_back(table);
+        }
+
+        void addOutputColumn(const std::string& column) {
+            output_columns.push_back(column);
+        }
+
+        void addCondition(const std::string& condition) {
+            conditions.push_back(condition);
+        }
+
+        void addChild(int child_node_id) {
+            child_nodes.push_back(child_node_id);
+        }
+
+        void setProperty(const std::string& key, const std::string& value) {
+            properties[key] = value;
+        }
+
+        std::string getProperty(const std::string& key) const {
+            auto it = properties.find(key);
+            return it != properties.end() ? it->second : "";
+        }
+    };
+
+    std::unordered_map<int, PlanNode> nodes;
+    int root_node_id;
+    int next_node_id;
+
+    DistributedExecutionPlan() : root_node_id(-1), next_node_id(0) {}
+
+    int addNode(const std::string& operation_type) {
+        int node_id = next_node_id++;
+        nodes[node_id] = PlanNode(node_id, operation_type);
+        return node_id;
+    }
+
+    void setRoot(int node_id) {
+        root_node_id = node_id;
+    }
+
+    PlanNode* getNode(int node_id) {
+        auto it = nodes.find(node_id);
+        return it != nodes.end() ? &it->second : nullptr;
+    }
+
+    const PlanNode* getNode(int node_id) const {
+        auto it = nodes.find(node_id);
+        return it != nodes.end() ? &it->second : nullptr;
+    }
+};
+
+/**
+ * 分布式查询优化器
+ */
+class DistributedQueryOptimizer {
+private:
+    std::unordered_map<std::string, TableStatistics> table_stats;
+    std::unordered_map<std::string, std::vector<std::string>> table_locations;
+    double network_cost_factor = 0.1;  // 网络传输成本因子
+
+public:
+    /**
+     * 添加表统计信息
+     * @param stats 表统计信息
+     */
+    void addTableStatistics(const TableStatistics& stats) {
+        table_stats[stats.table_name] = stats;
+    }
+
+    /**
+     * 添加表位置信息
+     * @param table_name 表名
+     * @param locations 存储该表的节点列表
+     */
+    void addTableLocations(const std::string& table_name, const std::vector<std::string>& locations) {
+        table_locations[table_name] = locations;
+    }
+
+    /**
+     * 优化分布式查询
+     * @param query 查询字符串
+     * @return 优化后的执行计划
+     */
+    std::shared_ptr<DistributedExecutionPlan> optimizeQuery(const std::string& query) {
+        // 解析查询（简化实现）
+        auto parsed_query = parseQuery(query);
+
+        // 生成初始执行计划
+        auto plan = generateInitialPlan(parsed_query);
+
+        // 应用优化规则
+        applyOptimizationRules(plan);
+
+        // 优化数据局部性
+        optimizeDataLocality(plan);
+
+        // 估算成本
+        estimatePlanCost(plan);
+
+        return plan;
+    }
+
+private:
+    /**
+     * 解析查询（简化实现）
+     */
+    struct ParsedQuery {
+        std::vector<std::string> select_columns;
+        std::vector<std::string> from_tables;
+        std::vector<std::string> where_conditions;
+        std::vector<std::string> group_by_columns;
+        std::vector<std::string> order_by_columns;
+        bool has_join = false;
+        std::string join_condition;
+    };
+
+    ParsedQuery parseQuery(const std::string& query) {
+        ParsedQuery parsed;
+        // 简化实现：固定解析一个查询格式
+        // 实际系统中需要完整的SQL解析器
+
+        // 示例：SELECT col1, col2 FROM table1 JOIN table2 ON table1.id = table2.id WHERE table1.value > 100
+        if (query.find("JOIN") != std::string::npos) {
+            parsed.has_join = true;
+            parsed.from_tables = {"table1", "table2"};
+            parsed.join_condition = "table1.id = table2.id";
+            parsed.where_conditions = {"table1.value > 100"};
+            parsed.select_columns = {"col1", "col2"};
+        }
+
+        return parsed;
+    }
+
+    /**
+     * 生成初始执行计划
+     */
+    std::shared_ptr<DistributedExecutionPlan> generateInitialPlan(const ParsedQuery& query) {
+        auto plan = std::make_shared<DistributedExecutionPlan>();
+
+        if (query.has_join) {
+            // 创建连接计划
+            int left_scan = plan->addNode("TABLE_SCAN");
+            auto left_node = plan->getNode(left_scan);
+            left_node->addInputTable(query.from_tables[0]);
+            left_node->addOutputColumn("*");
+
+            int right_scan = plan->addNode("TABLE_SCAN");
+            auto right_node = plan->getNode(right_scan);
+            right_node->addInputTable(query.from_tables[1]);
+            right_node->addOutputColumn("*");
+
+            int join_node = plan->addNode("HASH_JOIN");
+            auto join = plan->getNode(join_node);
+            join->addCondition(query.join_condition);
+            join->addChild(left_scan);
+            join->addChild(right_scan);
+
+            int filter_node = plan->addNode("FILTER");
+            auto filter = plan->getNode(filter_node);
+            filter->addCondition(query.where_conditions[0]);
+            filter->addChild(join_node);
+
+            plan->setRoot(filter_node);
+        } else {
+            // 简单扫描计划
+            int scan_node = plan->addNode("TABLE_SCAN");
+            auto scan = plan->getNode(scan_node);
+            scan->addInputTable(query.from_tables[0]);
+            scan->addOutputColumn("*");
+
+            plan->setRoot(scan_node);
+        }
+
+        return plan;
+    }
+
+    /**
+     * 应用优化规则
+     */
+    void applyOptimizationRules(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 规则1：谓词下推
+        applyPredicatePushdown(plan);
+
+        // 规则2：投影下推
+        applyProjectionPushdown(plan);
+
+        // 规则3：连接顺序优化
+        applyJoinOrderOptimization(plan);
+
+        // 规则4：连接算法选择
+        applyJoinAlgorithmSelection(plan);
+    }
+
+    /**
+     * 谓词下推优化
+     */
+    void applyPredicatePushdown(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 找到所有过滤条件，尽可能下推到数据源
+        std::vector<std::pair<int, std::vector<std::string>>> filter_conditions;
+
+        // 收集所有过滤条件
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            if (node.operation_type == "FILTER" && !node.conditions.empty()) {
+                filter_conditions.emplace_back(node.node_id, node.conditions);
+            }
+        }
+
+        // 尝试将条件下推到表扫描节点
+        for (const auto& filter_pair : filter_conditions) {
+            int filter_id = filter_pair.first;
+            const auto& conditions = filter_pair.second;
+
+            // 找到相关的表扫描节点
+            std::vector<int> related_scans = findRelatedTableScans(plan, conditions);
+
+            for (int scan_id : related_scans) {
+                auto scan_node = plan->getNode(scan_id);
+                if (scan_node) {
+                    // 将条件下推到扫描节点
+                    for (const auto& condition : conditions) {
+                        scan_node->addCondition(condition);
+                    }
+
+                    // 移除原过滤器节点（简化实现）
+                    auto filter_node = plan->getNode(filter_id);
+                    if (filter_node) {
+                        // 重连子节点到父节点
+                        reconnectNodes(plan, filter_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 投影下推优化
+     */
+    void applyProjectionPushdown(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 收集最终需要的列
+        std::unordered_set<std::string> required_columns;
+        auto root_node = plan->getNode(plan->root_node_id);
+        if (root_node) {
+            for (const auto& col : root_node->output_columns) {
+                required_columns.insert(col);
+            }
+        }
+
+        // 向下传播列需求
+        propagateColumnRequirements(plan, plan->root_node_id, required_columns);
+    }
+
+    /**
+     * 连接顺序优化
+     */
+    void applyJoinOrderOptimization(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 找到所有连接节点
+        std::vector<int> join_nodes;
+        for (const auto& node_pair : plan->nodes) {
+            if (node_pair.second.operation_type.find("JOIN") != std::string::npos) {
+                join_nodes.push_back(node_pair.first);
+            }
+        }
+
+        // 对每个连接节点进行优化
+        for (int join_id : join_nodes) {
+            optimizeJoinNode(plan, join_id);
+        }
+    }
+
+    /**
+     * 连接算法选择
+     */
+    void applyJoinAlgorithmSelection(std::shared_ptr<DistributedExecutionPlan> plan) {
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            if (node.operation_type == "HASH_JOIN") {
+                // 根据表大小选择连接算法
+                std::string join_algorithm = selectJoinAlgorithm(node);
+                node.operation_type = join_algorithm;
+                node.setProperty("join_algorithm", join_algorithm);
+            }
+        }
+    }
+
+    /**
+     * 优化数据局部性
+     */
+    void optimizeDataLocality(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 分析数据分布
+        analyzeDataDistribution(plan);
+
+        // 优化数据移动
+        optimizeDataMovement(plan);
+
+        // 选择最优执行节点
+        selectOptimalExecutionNodes(plan);
+    }
+
+    /**
+     * 估算执行计划成本
+     */
+    void estimatePlanCost(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 自底向上估算每个节点的成本
+        estimateNodeCost(plan, plan->root_node_id);
+
+        // 计算总成本
+        double total_cost = 0.0;
+        for (const auto& node_pair : plan->nodes) {
+            total_cost += node_pair.second.estimated_cost;
+        }
+
+        std::cout << "Estimated total query cost: " << total_cost << std::endl;
+    }
+
+    /**
+     * 估算节点成本
+     */
+    void estimateNodeCost(std::shared_ptr<DistributedExecutionPlan> plan, int node_id) {
+        auto node = plan->getNode(node_id);
+        if (!node) {
+            return;
+        }
+
+        // 先估算子节点成本
+        for (int child_id : node->child_nodes) {
+            estimateNodeCost(plan, child_id);
+        }
+
+        // 根据操作类型估算成本
+        switch (getOperationType(node->operation_type)) {
+            case OperationType::SCAN:
+                estimateScanCost(node);
+                break;
+            case OperationType::FILTER:
+                estimateFilterCost(node);
+                break;
+            case OperationType::JOIN:
+                estimateJoinCost(node);
+                break;
+            case OperationType::AGGREGATE:
+                estimateAggregateCost(node);
+                break;
+        }
+    }
+
+    enum class OperationType {
+        SCAN,
+        FILTER,
+        JOIN,
+        AGGREGATE
+    };
+
+    OperationType getOperationType(const std::string& op_str) {
+        if (op_str.find("SCAN") != std::string::npos) return OperationType::SCAN;
+        if (op_str == "FILTER") return OperationType::FILTER;
+        if (op_str.find("JOIN") != std::string::npos) return OperationType::JOIN;
+        if (op_str.find("AGGREGATE") != std::string::npos) return OperationType::AGGREGATE;
+        return OperationType::SCAN;
+    }
+
+    void estimateScanCost(DistributedExecutionPlan::PlanNode* node) {
+        if (node->input_tables.empty()) {
+            node->estimated_cost = 100.0;
+            node->estimated_rows = 1000;
+            return;
+        }
+
+        const std::string& table_name = node->input_tables[0];
+        auto stats_it = table_stats.find(table_name);
+
+        if (stats_it != table_stats.end()) {
+            const auto& stats = stats_it->second;
+            node->estimated_rows = stats.row_count;
+            node->estimated_cost = stats.row_count * 0.01;  // 每行0.01单位成本
+
+            // 考虑过滤条件
+            double selectivity = 1.0;
+            for (const auto& condition : node->conditions) {
+                auto parsed_cond = parseCondition(condition);
+                if (parsed_cond) {
+                    selectivity *= stats.getSelectivity(parsed_cond->column,
+                                                       parsed_cond->op,
+                                                       parsed_cond->value);
+                }
+            }
+
+            node->estimated_rows *= selectivity;
+            node->estimated_cost *= selectivity;
+        } else {
+            node->estimated_cost = 100.0;
+            node->estimated_rows = 1000;
+        }
+    }
+
+    void estimateFilterCost(DistributedExecutionPlan::PlanNode* node) {
+        if (node->child_nodes.empty()) {
+            node->estimated_cost = 50.0;
+            node->estimated_rows = 100;
+            return;
+        }
+
+        auto child_node = plan->getNode(node->child_nodes[0]);
+        if (!child_node) {
+            node->estimated_cost = 50.0;
+            node->estimated_rows = 100;
+            return;
+        }
+
+        // 过滤成本主要取决于输入数据量和条件选择性
+        node->estimated_rows = child_node->estimated_rows * 0.1;  // 假设10%的选择性
+        node->estimated_cost = child_node->estimated_cost + node->estimated_rows * 0.005;
+    }
+
+    void estimateJoinCost(DistributedExecutionPlan::PlanNode* node) {
+        if (node->child_nodes.size() < 2) {
+            node->estimated_cost = 1000.0;
+            node->estimated_rows = 100;
+            return;
+        }
+
+        auto left_node = plan->getNode(node->child_nodes[0]);
+        auto right_node = plan->getNode(node->child_nodes[1]);
+
+        if (!left_node || !right_node) {
+            node->estimated_cost = 1000.0;
+            node->estimated_rows = 100;
+            return;
+        }
+
+        // 连接成本 = 左表成本 + 右表成本 + 连接操作成本
+        double join_selectivity = 0.01;  // 假设1%的连接选择性
+        node->estimated_rows = left_node->estimated_rows * right_node->estimated_rows * join_selectivity;
+        node->estimated_cost = left_node->estimated_cost + right_node->estimated_cost +
+                              node->estimated_rows * 0.1;  // 连接操作成本
+    }
+
+    void estimateAggregateCost(DistributedExecutionPlan::PlanNode* node) {
+        if (node->child_nodes.empty()) {
+            node->estimated_cost = 200.0;
+            node->estimated_rows = 10;
+            return;
+        }
+
+        auto child_node = plan->getNode(node->child_nodes[0]);
+        if (!child_node) {
+            node->estimated_cost = 200.0;
+            node->estimated_rows = 10;
+            return;
+        }
+
+        // 聚合成本 = 输入成本 + 聚合操作成本
+        node->estimated_rows = std::max(size_t(1), child_node->estimated_rows / 100);  // 假设100:1的聚合率
+        node->estimated_cost = child_node->estimated_cost + child_node->estimated_rows * 0.02;
+    }
+
+    struct ParsedCondition {
+        std::string column;
+        std::string op;
+        std::string value;
+    };
+
+    std::unique_ptr<ParsedCondition> parseCondition(const std::string& condition) {
+        auto result = std::make_unique<ParsedCondition>();
+
+        // 简化实现：解析 "column operator value" 格式
+        size_t op_pos = condition.find_first_of("=<>!");
+        if (op_pos == std::string::npos) {
+            return nullptr;
+        }
+
+        result->column = condition.substr(0, op_pos);
+        result->op = condition.substr(op_pos, 1);
+        if (op_pos + 1 < condition.length() && condition[op_pos + 1] == '=') {
+            result->op += "=";
+            result->value = condition.substr(op_pos + 2);
+        } else {
+            result->value = condition.substr(op_pos + 1);
+        }
+
+        // 去除空格
+        result->column.erase(0, result->column.find_first_not_of(" \t"));
+        result->column.erase(result->column.find_last_not_of(" \t") + 1);
+        result->value.erase(0, result->value.find_first_not_of(" \t"));
+        result->value.erase(result->value.find_last_not_of(" \t") + 1);
+
+        return result;
+    }
+
+    std::vector<int> findRelatedTableScans(std::shared_ptr<DistributedExecutionPlan> plan,
+                                         const std::vector<std::string>& conditions) {
+        std::vector<int> scan_nodes;
+
+        for (const auto& node_pair : plan->nodes) {
+            if (node_pair.second.operation_type == "TABLE_SCAN") {
+                // 检查条件是否适用于该表的列
+                for (const auto& condition : conditions) {
+                    auto parsed = parseCondition(condition);
+                    if (parsed) {
+                        // 简化实现：假设所有条件都适用
+                        scan_nodes.push_back(node_pair.first);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return scan_nodes;
+    }
+
+    void propagateColumnRequirements(std::shared_ptr<DistributedExecutionPlan> plan,
+                                   int node_id,
+                                   const std::unordered_set<std::string>& required_columns) {
+        auto node = plan->getNode(node_id);
+        if (!node) {
+            return;
+        }
+
+        // 更新当前节点的输出列
+        node->output_columns.clear();
+        for (const auto& col : required_columns) {
+            node->addOutputColumn(col);
+        }
+
+        // 向子节点传播列需求
+        std::unordered_set<std::string> child_required_columns = required_columns;
+
+        // 对于连接操作，还需要连接键
+        if (node->operation_type.find("JOIN") != std::string::npos) {
+            for (const auto& condition : node->conditions) {
+                auto parsed = parseCondition(condition);
+                if (parsed) {
+                    child_required_columns.insert(parsed->column);
+                    child_required_columns.insert(parsed->value);
+                }
+            }
+        }
+
+        for (int child_id : node->child_nodes) {
+            propagateColumnRequirements(plan, child_id, child_required_columns);
+        }
+    }
+
+    void optimizeJoinNode(std::shared_ptr<DistributedExecutionPlan> plan, int join_id) {
+        auto join_node = plan->getNode(join_id);
+        if (!join_node || join_node->child_nodes.size() < 2) {
+            return;
+        }
+
+        auto left_node = plan->getNode(join_node->child_nodes[0]);
+        auto right_node = plan->getNode(join_node->child_nodes[1]);
+
+        if (!left_node || !right_node) {
+            return;
+        }
+
+        // 简单的连接顺序优化：选择较小的表作为左表
+        if (left_node->estimated_rows > right_node->estimated_rows) {
+            // 交换左右表
+            std::swap(join_node->child_nodes[0], join_node->child_nodes[1]);
+        }
+    }
+
+    std::string selectJoinAlgorithm(const DistributedExecutionPlan::PlanNode& node) {
+        if (node.child_nodes.size() < 2) {
+            return "NESTED_LOOP_JOIN";
+        }
+
+        auto left_node = plan->getNode(node.child_nodes[0]);
+        auto right_node = plan->getNode(node.child_nodes[1]);
+
+        if (!left_node || !right_node) {
+            return "NESTED_LOOP_JOIN";
+        }
+
+        // 根据表大小选择连接算法
+        size_t left_size = left_node->estimated_rows;
+        size_t right_size = right_node->estimated_rows;
+
+        if (left_size < 1000 && right_size < 1000) {
+            return "NESTED_LOOP_JOIN";
+        } else if (left_size < 100000) {
+            return "HASH_JOIN";
+        } else {
+            return "MERGE_JOIN";
+        }
+    }
+
+    void analyzeDataDistribution(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 分析数据在各个节点的分布情况
+        // 为每个节点标记数据位置信息
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            if (node.operation_type == "TABLE_SCAN" && !node.input_tables.empty()) {
+                const std::string& table_name = node.input_tables[0];
+                auto locations_it = table_locations.find(table_name);
+
+                if (locations_it != table_locations.end()) {
+                    std::string locations_str;
+                    for (const auto& location : locations_it->second) {
+                        if (!locations_str.empty()) {
+                            locations_str += ",";
+                        }
+                        locations_str += location;
+                    }
+                    node.setProperty("data_locations", locations_str);
+                }
+            }
+        }
+    }
+
+    void optimizeDataMovement(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 优化数据在节点间的移动
+        // 添加重分布、广播等操作节点
+        // 简化实现：标记需要数据移动的节点
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            if (node.operation_type.find("JOIN") != std::string::npos) {
+                // 检查连接的表是否在同一位置
+                node.setProperty("needs_data_movement", "true");
+            }
+        }
+    }
+
+    void selectOptimalExecutionNodes(std::shared_ptr<DistributedExecutionPlan> plan) {
+        // 为每个操作选择最优的执行节点
+        // 基于数据局部性和负载均衡
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            if (node.operation_type != "TABLE_SCAN") {
+                // 非扫描操作选择数据所在的节点
+                std::string locations = node.getProperty("data_locations");
+                if (!locations.empty()) {
+                    node.setProperty("execution_node", locations.substr(0, locations.find(",")));
+                } else {
+                    node.setProperty("execution_node", "default_node");
+                }
+            }
+        }
+    }
+
+    void reconnectNodes(std::shared_ptr<DistributedExecutionPlan> plan, int removed_node_id) {
+        // 重连节点，移除指定节点
+        auto removed_node = plan->getNode(removed_node_id);
+        if (!removed_node || removed_node->child_nodes.empty()) {
+            return;
+        }
+
+        // 找到引用该节点的父节点
+        for (auto& node_pair : plan->nodes) {
+            auto& node = node_pair.second;
+            for (size_t i = 0; i < node.child_nodes.size(); ++i) {
+                if (node.child_nodes[i] == removed_node_id) {
+                    // 替换为被移除节点的子节点
+                    node.child_nodes[i] = removed_node->child_nodes[0];
+                }
+            }
+        }
+    }
+
+    std::shared_ptr<DistributedExecutionPlan> plan;  // 用于成员函数访问
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建分布式查询优化器
+    DistributedQueryOptimizer optimizer;
+
+    // 添加表统计信息
+    TableStatistics table1_stats("table1");
+    table1_stats.updateRowCount(100000);
+    table1_stats.updateColumnStats("id", 100000, 1, 100000, "50000");
+    table1_stats.updateColumnStats("value", 50000, 0, 1000, "100");
+    optimizer.addTableStatistics(table1_stats);
+
+    TableStatistics table2_stats("table2");
+    table2_stats.updateRowCount(50000);
+    table2_stats.updateColumnStats("id", 50000, 1, 50000, "25000");
+    table2_stats.updateColumnStats("name", 50000, 0, 0, "common_name");
+    optimizer.addTableStatistics(table2_stats);
+
+    // 添加表位置信息
+    optimizer.addTableLocations("table1", {"node1", "node2", "node3"});
+    optimizer.addTableLocations("table2", {"node2", "node4"});
+
+    // 优化查询
+    std::string query = "SELECT t1.col1, t2.col2 FROM table1 t1 JOIN table2 t2 ON t1.id = t2.id WHERE t1.value > 100";
+    auto optimized_plan = optimizer.optimizeQuery(query);
+
+    // 显示优化后的计划
+    std::cout << "\n=== Optimized Execution Plan ===" << std::endl;
+    if (optimized_plan) {
+        auto root_node = optimized_plan->getNode(optimized_plan->root_node_id);
+        if (root_node) {
+            printPlanNode(optimized_plan, root_node, 0);
+        }
+    }
+
+    return 0;
+}
+
+void printPlanNode(std::shared_ptr<distributed_db::DistributedExecutionPlan> plan,
+                  const distributed_db::DistributedExecutionPlan::PlanNode* node,
+                  int indent) {
+    std::string indent_str(indent * 2, ' ');
+    std::cout << indent_str << "Node " << node->node_id << ": " << node->operation_type
+              << " (cost: " << node->estimated_cost << ", rows: " << node->estimated_rows << ")" << std::endl;
+
+    if (!node->input_tables.empty()) {
+        std::cout << indent_str << "  Input tables: ";
+        for (const auto& table : node->input_tables) {
+            std::cout << table << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    if (!node->conditions.empty()) {
+        std::cout << indent_str << "  Conditions: ";
+        for (const auto& cond : node->conditions) {
+            std::cout << cond << " ";
+        }
+        std::cout << std::endl;
+    }
+
+    for (int child_id : node->child_nodes) {
+        auto child_node = plan->getNode(child_id);
+        if (child_node) {
+            printPlanNode(plan, child_node, indent + 1);
+        }
+    }
+}
+```
+
+## 2. 负载均衡策略
+
+### 2.1 动态负载均衡
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <chrono>
+#include <algorithm>
+#include <queue>
+#include <random>
+
+namespace distributed_db {
+
+/**
+ * 节点负载信息
+ */
+struct NodeLoadInfo {
+    std::string node_id;
+    double cpu_usage;           // CPU使用率 (0-100)
+    double memory_usage;        // 内存使用率 (0-100)
+    double disk_usage;          // 磁盘使用率 (0-100)
+    double network_in;          // 网络输入 (MB/s)
+    double network_out;         // 网络输出 (MB/s)
+    int active_connections;     // 活跃连接数
+    int pending_requests;       // 待处理请求数
+    std::chrono::system_clock::time_point last_update;
+    bool is_healthy;           // 节点健康状态
+
+    NodeLoadInfo(const std::string& id)
+        : node_id(id), cpu_usage(0.0), memory_usage(0.0), disk_usage(0.0),
+          network_in(0.0), network_out(0.0), active_connections(0),
+          pending_requests(0), is_healthy(true),
+          last_update(std::chrono::system_clock::now()) {}
+
+    void updateLoad(double cpu, double memory, double disk, double net_in, double net_out,
+                   int connections, int pending) {
+        cpu_usage = cpu;
+        memory_usage = memory;
+        disk_usage = disk;
+        network_in = net_in;
+        network_out = net_out;
+        active_connections = connections;
+        pending_requests = pending;
+        last_update = std::chrono::system_clock::now();
+        is_healthy = true;
+    }
+
+    void markUnhealthy() {
+        is_healthy = false;
+    }
+
+    /**
+     * 计算综合负载分数
+     * @return 负载分数 (0-100，越高表示负载越高)
+     */
+    double calculateLoadScore() const {
+        if (!is_healthy) {
+            return 1000.0;  // 不健康的节点获得最高负载分数
+        }
+
+        // 检查数据时效性
+        auto now = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_update);
+        if (elapsed.count() > 30) {  // 超过30秒未更新
+            return 200.0;  // 数据过时的节点
+        }
+
+        // 加权计算负载分数
+        double score = 0.0;
+        score += cpu_usage * 0.3;           // CPU权重30%
+        score += memory_usage * 0.25;        // 内存权重25%
+        score += disk_usage * 0.15;          // 磁盘权重15%
+        score += (network_in + network_out) * 0.1;  // 网络权重10%
+        score += active_connections * 0.1;   // 连接数权重10%
+        score += pending_requests * 0.1;     // 待处理请求权重10%
+
+        return std::min(score, 100.0);  // 最高100分
+    }
+
+    /**
+     * 检查节点是否过载
+     * @param threshold 过载阈值
+     * @return 是否过载
+     */
+    bool isOverloaded(double threshold = 80.0) const {
+        return calculateLoadScore() > threshold;
+    }
+
+    /**
+     * 检查节点是否可用
+     * @param max_age 最大数据年龄（秒）
+     * @return 是否可用
+     */
+    bool isAvailable(int max_age = 60) const {
+        if (!is_healthy) {
+            return false;
+        }
+
+        auto now = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_update);
+        return elapsed.count() <= max_age;
+    }
+};
+
+/**
+ * 负载均衡策略枚举
+ */
+enum class LoadBalanceStrategy {
+    ROUND_ROBIN,        // 轮询
+    LEAST_CONNECTIONS,  // 最少连接数
+    LEAST_LOAD,         // 最低负载
+    WEIGHTED_ROUND_ROBIN, // 加权轮询
+    CONSISTENT_HASH,    // 一致性哈希
+    ADAPTIVE            // 自适应
+};
+
+/**
+ * 请求路由信息
+ */
+struct RequestRoute {
+    std::string request_id;
+    std::string source_node;
+    std::string target_node;
+    std::string resource_id;
+    double estimated_cost;
+    std::chrono::system_clock::time_point timestamp;
+
+    RequestRoute(const std::string& req_id, const std::string& source,
+                const std::string& target, const std::string& resource)
+        : request_id(req_id), source_node(source), target_node(target),
+          resource_id(resource), estimated_cost(0.0),
+          timestamp(std::chrono::system_clock::now()) {}
+};
+
+/**
+ * 负载均衡器
+ */
+class LoadBalancer {
+private:
+    std::unordered_map<std::string, NodeLoadInfo> nodes;
+    LoadBalanceStrategy strategy;
+    std::vector<RequestRoute> routing_history;
+    std::unordered_map<std::string, double> node_weights;
+    std::mutex balancer_mutex;
+    std::random_device rd;
+    std::mt19937 gen;
+
+    // 一致性哈希相关
+    std::vector<std::pair<std::string, int>> hash_ring;
+    int virtual_nodes_per_real = 3;
+
+public:
+    LoadBalancer(LoadBalanceStrategy strat = LoadBalanceStrategy::LEAST_LOAD)
+        : strategy(strat), gen(rd()) {}
+
+    /**
+     * 添加节点
+     * @param node_id 节点ID
+     * @param initial_weight 初始权重
+     * @return 是否成功添加
+     */
+    bool addNode(const std::string& node_id, double initial_weight = 1.0) {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+
+        nodes[node_id] = NodeLoadInfo(node_id);
+        node_weights[node_id] = initial_weight;
+
+        if (strategy == LoadBalanceStrategy::CONSISTENT_HASH) {
+            addToHashRing(node_id, initial_weight);
+        }
+
+        return true;
+    }
+
+    /**
+     * 移除节点
+     * @param node_id 节点ID
+     * @return 是否成功移除
+     */
+    bool removeNode(const std::string& node_id) {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+
+        auto node_it = nodes.find(node_id);
+        if (node_it == nodes.end()) {
+            return false;
+        }
+
+        // 标记节点不健康，而不是立即删除
+        node_it->second.markUnhealthy();
+
+        if (strategy == LoadBalanceStrategy::CONSISTENT_HASH) {
+            removeFromHashRing(node_id);
+        }
+
+        return true;
+    }
+
+    /**
+     * 更新节点负载信息
+     * @param node_id 节点ID
+     * @param cpu_usage CPU使用率
+     * @param memory_usage 内存使用率
+     * @param disk_usage 磁盘使用率
+     * @param network_in 网络输入
+     * @param network_out 网络输出
+     * @param connections 活跃连接数
+     * @param pending 待处理请求数
+     * @return 是否成功更新
+     */
+    bool updateNodeLoad(const std::string& node_id, double cpu_usage, double memory_usage,
+                      double disk_usage, double network_in, double network_out,
+                      int connections, int pending) {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+
+        auto node_it = nodes.find(node_id);
+        if (node_it == nodes.end()) {
+            return false;
+        }
+
+        node_it->second.updateLoad(cpu_usage, memory_usage, disk_usage,
+                                  network_in, network_out, connections, pending);
+
+        // 动态调整权重（基于自适应策略）
+        if (strategy == LoadBalanceStrategy::ADAPTIVE) {
+            adjustNodeWeights();
+        }
+
+        return true;
+    }
+
+    /**
+     * 选择目标节点
+     * @param request_id 请求ID
+     * @param resource_id 资源ID（用于一致性哈希）
+     * @return 选择的节点ID
+     */
+    std::string selectNode(const std::string& request_id, const std::string& resource_id = "") {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+
+        // 过滤可用节点
+        std::vector<std::string> available_nodes;
+        for (const auto& node_pair : nodes) {
+            if (node_pair.second.isAvailable()) {
+                available_nodes.push_back(node_pair.first);
+            }
+        }
+
+        if (available_nodes.empty()) {
+            throw std::runtime_error("No available nodes");
+        }
+
+        std::string selected_node;
+
+        switch (strategy) {
+            case LoadBalanceStrategy::ROUND_ROBIN:
+                selected_node = roundRobinSelect(available_nodes);
+                break;
+            case LoadBalanceStrategy::LEAST_CONNECTIONS:
+                selected_node = leastConnectionsSelect(available_nodes);
+                break;
+            case LoadBalanceStrategy::LEAST_LOAD:
+                selected_node = leastLoadSelect(available_nodes);
+                break;
+            case LoadBalanceStrategy::WEIGHTED_ROUND_ROBIN:
+                selected_node = weightedRoundRobinSelect(available_nodes);
+                break;
+            case LoadBalanceStrategy::CONSISTENT_HASH:
+                selected_node = consistentHashSelect(resource_id);
+                break;
+            case LoadBalanceStrategy::ADAPTIVE:
+                selected_node = adaptiveSelect(available_nodes, request_id);
+                break;
+            default:
+                selected_node = leastLoadSelect(available_nodes);
+        }
+
+        // 记录路由信息
+        routing_history.emplace_back(request_id, "client", selected_node, resource_id);
+
+        return selected_node;
+    }
+
+    /**
+     * 获取集群负载统计
+     * @return 负载统计信息
+     */
+    std::unordered_map<std::string, double> getClusterLoadStats() {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+
+        std::unordered_map<std::string, double> stats;
+        double total_cpu = 0.0, total_memory = 0.0, total_disk = 0.0;
+        double total_network = 0.0, total_connections = 0.0, total_pending = 0.0;
+        int healthy_nodes = 0;
+
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node.isAvailable()) {
+                total_cpu += node.cpu_usage;
+                total_memory += node.memory_usage;
+                total_disk += node.disk_usage;
+                total_network += node.network_in + node.network_out;
+                total_connections += node.active_connections;
+                total_pending += node.pending_requests;
+                healthy_nodes++;
+            }
+        }
+
+        if (healthy_nodes > 0) {
+            stats["avg_cpu"] = total_cpu / healthy_nodes;
+            stats["avg_memory"] = total_memory / healthy_nodes;
+            stats["avg_disk"] = total_disk / healthy_nodes;
+            stats["avg_network"] = total_network / healthy_nodes;
+            stats["avg_connections"] = total_connections / healthy_nodes;
+            stats["avg_pending"] = total_pending / healthy_nodes;
+            stats["healthy_nodes"] = healthy_nodes;
+            stats["total_nodes"] = nodes.size();
+        }
+
+        return stats;
+    }
+
+    /**
+     * 获取节点详细信息
+     * @return 节点信息映射
+     */
+    std::unordered_map<std::string, NodeLoadInfo> getNodeDetails() {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+        return nodes;
+    }
+
+    /**
+     * 设置负载均衡策略
+     * @param new_strategy 新策略
+     */
+    void setStrategy(LoadBalanceStrategy new_strategy) {
+        std::lock_guard<std::mutex> lock(balancer_mutex);
+        strategy = new_strategy;
+
+        // 如果切换到一致性哈希，初始化哈希环
+        if (new_strategy == LoadBalanceStrategy::CONSISTENT_HASH && hash_ring.empty()) {
+            initializeHashRing();
+        }
+    }
+
+private:
+    /**
+     * 轮询选择
+     */
+    std::string roundRobinSelect(const std::vector<std::string>& available_nodes) {
+        static size_t current_index = 0;
+        std::string selected = available_nodes[current_index % available_nodes.size()];
+        current_index++;
+        return selected;
+    }
+
+    /**
+     * 最少连接数选择
+     */
+    std::string leastConnectionsSelect(const std::vector<std::string>& available_nodes) {
+        std::string selected = available_nodes[0];
+        int min_connections = nodes[selected].active_connections;
+
+        for (size_t i = 1; i < available_nodes.size(); ++i) {
+            const auto& node = nodes[available_nodes[i]];
+            if (node.active_connections < min_connections) {
+                min_connections = node.active_connections;
+                selected = available_nodes[i];
+            }
+        }
+
+        return selected;
+    }
+
+    /**
+     * 最低负载选择
+     */
+    std::string leastLoadSelect(const std::vector<std::string>& available_nodes) {
+        std::string selected = available_nodes[0];
+        double min_load = nodes[selected].calculateLoadScore();
+
+        for (size_t i = 1; i < available_nodes.size(); ++i) {
+            const auto& node = nodes[available_nodes[i]];
+            double load_score = node.calculateLoadScore();
+            if (load_score < min_load) {
+                min_load = load_score;
+                selected = available_nodes[i];
+            }
+        }
+
+        return selected;
+    }
+
+    /**
+     * 加权轮询选择
+     */
+    std::string weightedRoundRobinSelect(const std::vector<std::string>& available_nodes) {
+        // 计算总权重
+        double total_weight = 0.0;
+        for (const auto& node_id : available_nodes) {
+            total_weight += node_weights[node_id];
+        }
+
+        // 生成随机数
+        std::uniform_real_distribution<double> dis(0.0, total_weight);
+        double random_value = dis(gen);
+
+        // 根据权重选择节点
+        double current_weight = 0.0;
+        for (const auto& node_id : available_nodes) {
+            current_weight += node_weights[node_id];
+            if (random_value <= current_weight) {
+                return node_id;
+            }
+        }
+
+        return available_nodes.back();
+    }
+
+    /**
+     * 一致性哈希选择
+     */
+    std::string consistentHashSelect(const std::string& resource_id) {
+        if (hash_ring.empty() || resource_id.empty()) {
+            // 如果哈希环为空或没有资源ID，使用最低负载策略
+            std::vector<std::string> available_nodes;
+            for (const auto& node_pair : nodes) {
+                if (node_pair.second.isAvailable()) {
+                    available_nodes.push_back(node_pair.first);
+                }
+            }
+            return leastLoadSelect(available_nodes);
+        }
+
+        // 计算资源哈希值
+        std::hash<std::string> hasher;
+        size_t hash_value = hasher(resource_id);
+
+        // 在哈希环中找到第一个大于等于该哈希值的节点
+        auto it = std::lower_bound(hash_ring.begin(), hash_ring.end(),
+                                  std::make_pair("", static_cast<int>(hash_value)),
+                                  [](const auto& a, const auto& b) {
+                                      return a.second < b.second;
+                                  });
+
+        if (it == hash_ring.end()) {
+            it = hash_ring.begin();  // 循环到开头
+        }
+
+        return it->first;
+    }
+
+    /**
+     * 自适应选择
+     */
+    std::string adaptiveSelect(const std::vector<std::string>& available_nodes,
+                             const std::string& request_id) {
+        // 综合考虑多种因素进行自适应选择
+
+        // 1. 负载分数 (40%)
+        std::vector<std::pair<std::string, double>> load_scores;
+        for (const auto& node_id : available_nodes) {
+            double score = nodes[node_id].calculateLoadScore();
+            load_scores.emplace_back(node_id, score);
+        }
+
+        // 2. 网络延迟 (30%) - 简化实现，使用距离代替
+        std::vector<std::pair<std::string, double>> latency_scores;
+        for (const auto& node_id : available_nodes) {
+            double latency = estimateNetworkLatency(node_id);
+            latency_scores.emplace_back(node_id, latency);
+        }
+
+        // 3. 请求历史 (20%) - 考虑节点的历史性能
+        std::vector<std::pair<std::string, double>> history_scores;
+        for (const auto& node_id : available_nodes) {
+            double score = calculateHistoryScore(node_id);
+            history_scores.emplace_back(node_id, score);
+        }
+
+        // 4. 资源局部性 (10%) - 基于请求ID的哈希
+        std::vector<std::pair<std::string, double>> locality_scores;
+        for (const auto& node_id : available_nodes) {
+            double score = calculateLocalityScore(node_id, request_id);
+            locality_scores.emplace_back(node_id, score);
+        }
+
+        // 计算综合分数
+        std::vector<std::pair<std::string, double>> total_scores;
+        for (const auto& node_id : available_nodes) {
+            double load_score = getScore(load_scores, node_id);
+            double latency_score = getScore(latency_scores, node_id);
+            double history_score = getScore(history_scores, node_id);
+            double locality_score = getScore(locality_scores, node_id);
+
+            // 标准化并加权
+            double normalized_load = load_score / 100.0 * 0.4;
+            double normalized_latency = (1.0 - latency_score / 1000.0) * 0.3;  // 延迟越低越好
+            double normalized_history = history_score * 0.2;
+            double normalized_locality = locality_score * 0.1;
+
+            double total_score = normalized_load + normalized_latency +
+                               normalized_history + normalized_locality;
+
+            total_scores.emplace_back(node_id, total_score);
+        }
+
+        // 选择分数最高的节点
+        auto best_node = std::max_element(total_scores.begin(), total_scores.end(),
+                                        [](const auto& a, const auto& b) {
+                                            return a.second < b.second;
+                                        });
+
+        return best_node->first;
+    }
+
+    /**
+     * 初始化一致性哈希环
+     */
+    void initializeHashRing() {
+        hash_ring.clear();
+        for (const auto& node_pair : nodes) {
+            addToHashRing(node_pair.first, node_weights[node_pair.first]);
+        }
+
+        // 按哈希值排序
+        std::sort(hash_ring.begin(), hash_ring.end(),
+                 [](const auto& a, const auto& b) {
+                     return a.second < b.second;
+                 });
+    }
+
+    /**
+     * 添加节点到哈希环
+     */
+    void addToHashRing(const std::string& node_id, double weight) {
+        int virtual_count = static_cast<int>(weight * virtual_nodes_per_real);
+
+        for (int i = 0; i < virtual_count; ++i) {
+            std::string virtual_key = node_id + "#virtual" + std::to_string(i);
+            std::hash<std::string> hasher;
+            int hash_value = static_cast<int>(hasher(virtual_key));
+            hash_ring.emplace_back(node_id, hash_value);
+        }
+    }
+
+    /**
+     * 从哈希环移除节点
+     */
+    void removeFromHashRing(const std::string& node_id) {
+        hash_ring.erase(
+            std::remove_if(hash_ring.begin(), hash_ring.end(),
+                          [&node_id](const auto& pair) {
+                              return pair.first == node_id;
+                          }),
+            hash_ring.end());
+    }
+
+    /**
+     * 动态调整节点权重
+     */
+    void adjustNodeWeights() {
+        for (auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            double load_score = node.calculateLoadScore();
+
+            // 根据负载调整权重：负载越高，权重越低
+            double new_weight = std::max(0.1, 1.0 - load_score / 200.0);
+            node_weights[node_pair.first] = new_weight;
+        }
+    }
+
+    /**
+     * 估算网络延迟
+     */
+    double estimateNetworkLatency(const std::string& node_id) {
+        // 简化实现：基于节点ID生成伪随机延迟
+        std::hash<std::string> hasher;
+        size_t hash_value = hasher(node_id);
+        return (hash_value % 100) + 10.0;  // 10-110ms
+    }
+
+    /**
+     * 计算历史性能分数
+     */
+    double calculateHistoryScore(const std::string& node_id) {
+        // 基于路由历史计算节点性能分数
+        int success_count = 0;
+        int total_count = 0;
+
+        for (const auto& route : routing_history) {
+            if (route.target_node == node_id) {
+                total_count++;
+                // 简化：假设所有路由都成功
+                success_count++;
+            }
+        }
+
+        return total_count > 0 ? static_cast<double>(success_count) / total_count : 0.5;
+    }
+
+    /**
+     * 计算资源局部性分数
+     */
+    double calculateLocalityScore(const std::string& node_id, const std::string& request_id) {
+        // 基于请求ID和节点ID的哈希匹配度
+        std::hash<std::string> hasher;
+        size_t request_hash = hasher(request_id);
+        size_t node_hash = hasher(node_id);
+
+        // 计算哈希值的相似度（简化实现）
+        double similarity = 1.0 - std::abs(static_cast<int>(request_hash - node_hash)) % 100 / 100.0;
+        return std::max(0.0, similarity);
+    }
+
+    /**
+     * 从分数列表中获取指定节点的分数
+     */
+    double getScore(const std::vector<std::pair<std::string, double>>& scores,
+                   const std::string& node_id) {
+        auto it = std::find_if(scores.begin(), scores.end(),
+                              [&node_id](const auto& pair) {
+                                  return pair.first == node_id;
+                              });
+        return it != scores.end() ? it->second : 0.0;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建负载均衡器
+    LoadBalancer balancer(LoadBalanceStrategy::ADAPTIVE);
+
+    // 添加节点
+    balancer.addNode("node1", 1.0);
+    balancer.addNode("node2", 1.5);
+    balancer.addNode("node3", 1.2);
+    balancer.addNode("node4", 0.8);
+
+    // 模拟节点负载更新
+    auto update_thread = std::thread([&balancer]() {
+        for (int i = 0; i < 10; ++i) {
+            // 随机更新节点负载
+            for (int node = 1; node <= 4; ++node) {
+                std::string node_id = "node" + std::to_string(node);
+                double cpu = 20.0 + (rand() % 60);
+                double memory = 30.0 + (rand() % 50);
+                double disk = 40.0 + (rand() % 40);
+                double net_in = (rand() % 100) / 10.0;
+                double net_out = (rand() % 100) / 10.0;
+                int connections = rand() % 50;
+                int pending = rand() % 20;
+
+                balancer.updateNodeLoad(node_id, cpu, memory, disk, net_in, net_out,
+                                       connections, pending);
+            }
+
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+    });
+
+    // 模拟请求路由
+    std::cout << "=== Load Balancing Simulation ===" << std::endl;
+    for (int i = 0; i < 20; ++i) {
+        std::string request_id = "req_" + std::to_string(i);
+        std::string resource_id = "resource_" + std::to_string(i % 10);
+
+        try {
+            std::string selected_node = balancer.selectNode(request_id, resource_id);
+            std::cout << "Request " << request_id << " routed to " << selected_node << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Request " << request_id << " failed: " << e.what() << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    // 显示集群负载统计
+    auto cluster_stats = balancer.getClusterLoadStats();
+    std::cout << "\n=== Cluster Load Statistics ===" << std::endl;
+    for (const auto& stat : cluster_stats) {
+        std::cout << stat.first << ": " << stat.second << std::endl;
+    }
+
+    // 显示节点详细信息
+    auto node_details = balancer.getNodeDetails();
+    std::cout << "\n=== Node Details ===" << std::endl;
+    for (const auto& node_pair : node_details) {
+        const auto& node = node_pair.second;
+        std::cout << "Node " << node.node_id << ":" << std::endl;
+        std::cout << "  CPU: " << node.cpu_usage << "%" << std::endl;
+        std::cout << "  Memory: " << node.memory_usage << "%" << std::endl;
+        std::cout << "  Load Score: " << node.calculateLoadScore() << std::endl;
+        std::cout << "  Healthy: " << (node.is_healthy ? "Yes" : "No") << std::endl;
+    }
+
+    update_thread.join();
+
+    return 0;
+}
+```
+
+## 3. 分布式复制技术
+
+### 3.1 复制策略和一致性模型
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <atomic>
+
+namespace distributed_db {
+
+/**
+ * 复制模式枚举
+ */
+enum class ReplicationMode {
+    SYNCHRONOUS,    // 同步复制
+    ASYNCHRONOUS,   // 异步复制
+    SEMI_SYNCHRONOUS  // 半同步复制
+};
+
+/**
+ * 一致性模型枚举
+ */
+enum class ConsistencyModel {
+    STRONG,         // 强一致性
+    EVENTUAL,       // 最终一致性
+    CAUSAL,         // 因果一致性
+    SESSION,        // 会话一致性
+    MONOTONIC_READ  // 单调读一致性
+};
+
+/**
+ * 复制角色枚举
+ */
+enum class ReplicationRole {
+    PRIMARY,        // 主节点
+    SECONDARY,      // 从节点
+    ARBITER         // 仲裁节点
+};
+
+/**
+ * 复制状态信息
+ */
+struct ReplicationStatus {
+    std::string node_id;
+    ReplicationRole role;
+    ConsistencyModel consistency_model;
+    int replication_lag;    // 复制延迟（毫秒）
+    std::string last_applied_op;  // 最后应用的操作ID
+    std::chrono::system_clock::time_point last_heartbeat;
+    bool is_synced;          // 是否已同步
+    bool is_healthy;         // 节点健康状态
+
+    ReplicationStatus(const std::string& id, ReplicationRole r)
+        : node_id(id), role(r), consistency_model(ConsistencyModel::STRONG),
+          replication_lag(0), is_synced(false), is_healthy(true),
+          last_heartbeat(std::chrono::system_clock::now()) {}
+
+    void updateHeartbeat() {
+        last_heartbeat = std::chrono::system_clock::now();
+        is_healthy = true;
+    }
+
+    void markUnhealthy() {
+        is_healthy = false;
+    }
+
+    bool isAlive(int timeout_seconds = 30) const {
+        auto now = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - last_heartbeat);
+        return elapsed.count() <= timeout_seconds && is_healthy;
+    }
+};
+
+/**
+ * 复制操作日志
+ */
+struct ReplicationLogEntry {
+    std::string operation_id;
+    std::string operation_type;  // "INSERT", "UPDATE", "DELETE"
+    std::string table_name;
+    std::string key;
+    std::string old_value;
+    std::string new_value;
+    std::chrono::system_clock::time_point timestamp;
+    std::unordered_map<std::string, std::string> metadata;
+
+    ReplicationLogEntry(const std::string& op_id, const std::string& op_type,
+                       const std::string& table, const std::string& k,
+                       const std::string& old_val, const std::string& new_val)
+        : operation_id(op_id), operation_type(op_type), table_name(table),
+          key(k), old_value(old_val), new_value(new_val),
+          timestamp(std::chrono::system_clock::now()) {}
+
+    void setMetadata(const std::string& key, const std::string& value) {
+        metadata[key] = value;
+    }
+};
+
+/**
+ * 复制管理器
+ */
+class ReplicationManager {
+private:
+    std::unordered_map<std::string, std::shared_ptr<ReplicationStatus>> nodes;
+    std::vector<ReplicationLogEntry> operation_log;
+    ReplicationMode replication_mode;
+    ConsistencyModel consistency_model;
+    std::unordered_map<std::string, std::vector<std::string>> write_concerns;
+    std::mutex manager_mutex;
+    std::atomic<bool> running{true};
+    std::thread heartbeat_thread;
+    std::thread replication_thread;
+
+public:
+    ReplicationManager(ReplicationMode mode = ReplicationMode::ASYNCHRONOUS,
+                      ConsistencyModel model = ConsistencyModel::EVENTUAL)
+        : replication_mode(mode), consistency_model(model) {}
+
+    ~ReplicationManager() {
+        running = false;
+        if (heartbeat_thread.joinable()) {
+            heartbeat_thread.join();
+        }
+        if (replication_thread.joinable()) {
+            replication_thread.join();
+        }
+    }
+
+    /**
+     * 添加节点到复制集群
+     * @param node_id 节点ID
+     * @param role 节点角色
+     * @return 是否成功添加
+     */
+    bool addNode(const std::string& node_id, ReplicationRole role = ReplicationRole::SECONDARY) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        auto status = std::make_shared<ReplicationStatus>(node_id, role);
+        status->consistency_model = consistency_model;
+        nodes[node_id] = status;
+
+        std::cout << "Added node " << node_id << " with role " << static_cast<int>(role) << std::endl;
+
+        // 如果是第一个节点，设为主节点
+        if (nodes.size() == 1) {
+            status->role = ReplicationRole::PRIMARY;
+            std::cout << "Node " << node_id << " promoted to PRIMARY" << std::endl;
+        }
+
+        return true;
+    }
+
+    /**
+     * 移除节点
+     * @param node_id 节点ID
+     * @return 是否成功移除
+     */
+    bool removeNode(const std::string& node_id) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        auto it = nodes.find(node_id);
+        if (it == nodes.end()) {
+            return false;
+        }
+
+        // 如果移除的是主节点，需要选举新的主节点
+        if (it->second->role == ReplicationRole::PRIMARY) {
+            it->second->markUnhealthy();
+            electNewPrimary();
+        }
+
+        nodes.erase(it);
+        std::cout << "Removed node " << node_id << std::endl;
+        return true;
+    }
+
+    /**
+     * 执行写操作
+     * @param operation 操作类型
+     * @param table 表名
+     * @param key 数据键
+     * @param old_value 旧值
+     * @param new_value 新值
+     * @param write_concern 写关注点（需要确认的节点数）
+     * @return 操作ID
+     */
+    std::string executeWrite(const std::string& operation, const std::string& table,
+                            const std::string& key, const std::string& old_value,
+                            const std::string& new_value, int write_concern = 1) {
+        std::string operation_id = generateOperationId();
+
+        // 创建操作日志
+        ReplicationLogEntry log_entry(operation_id, operation, table, key, old_value, new_value);
+        operation_log.push_back(log_entry);
+
+        // 根据复制模式执行复制
+        switch (replication_mode) {
+            case ReplicationMode::SYNCHRONOUS:
+                return executeSynchronousWrite(log_entry, write_concern);
+            case ReplicationMode::ASYNCHRONOUS:
+                return executeAsynchronousWrite(log_entry, write_concern);
+            case ReplicationMode::SEMI_SYNCHRONOUS:
+                return executeSemiSynchronousWrite(log_entry, write_concern);
+            default:
+                return executeAsynchronousWrite(log_entry, write_concern);
+        }
+    }
+
+    /**
+     * 执行读操作
+     * @param table 表名
+     * @param key 数据键
+     * @param read_concern 读关注点
+     * @return 读取的值
+     */
+    std::string executeRead(const std::string& table, const std::string& key,
+                           int read_concern = 1) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        // 根据一致性模型选择读取策略
+        switch (consistency_model) {
+            case ConsistencyModel::STRONG:
+                return executeStrongConsistencyRead(table, key);
+            case ConsistencyModel::EVENTUAL:
+                return executeEventualConsistencyRead(table, key);
+            case ConsistencyModel::CAUSAL:
+                return executeCausalConsistencyRead(table, key);
+            default:
+                return executeEventualConsistencyRead(table, key);
+        }
+    }
+
+    /**
+     * 获取复制状态
+     * @return 复制状态映射
+     */
+    std::unordered_map<std::string, std::shared_ptr<ReplicationStatus>> getReplicationStatus() {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+        return nodes;
+    }
+
+    /**
+     * 故障转移
+     * @param failed_node_id 故障节点ID
+     * @return 是否成功转移
+     */
+    bool failover(const std::string& failed_node_id) {
+        std::lock_guard<std::mutex> lock(manager_mutex);
+
+        auto it = nodes.find(failed_node_id);
+        if (it == nodes.end()) {
+            return false;
+        }
+
+        it->second->markUnhealthy();
+
+        // 如果故障的是主节点，选举新的主节点
+        if (it->second->role == ReplicationRole::PRIMARY) {
+            return electNewPrimary();
+        }
+
+        return true;
+    }
+
+    /**
+     * 启动复制服务
+     */
+    void startReplicationService() {
+        // 启动心跳监控线程
+        heartbeat_thread = std::thread(&ReplicationManager::monitorHeartbeats, this);
+
+        // 启动复制线程
+        replication_thread = std::thread(&ReplicationManager::replicationWorker, this);
+
+        std::cout << "Replication service started" << std::endl;
+    }
+
+private:
+    /**
+     * 执行同步写
+     */
+    std::string executeSynchronousWrite(const ReplicationLogEntry& log_entry, int write_concern) {
+        std::vector<std::string> acknowledgments;
+        int required_acks = std::min(write_concern, static_cast<int>(nodes.size()));
+
+        // 向所有节点发送写请求
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node->isAlive()) {
+                bool success = sendWriteRequest(node, log_entry);
+                if (success) {
+                    acknowledgments.push_back(node->node_id);
+                    node->last_applied_op = log_entry.operation_id;
+                }
+            }
+        }
+
+        // 检查是否满足写关注点
+        if (acknowledgments.size() >= required_acks) {
+            std::cout << "Synchronous write " << log_entry.operation_id
+                      << " acknowledged by " << acknowledgments.size() << " nodes" << std::endl;
+            return log_entry.operation_id;
+        } else {
+            std::cout << "Synchronous write " << log_entry.operation_id
+                      << " failed: only " << acknowledgments.size() << "/" << required_acks
+                      << " acknowledgments" << std::endl;
+            throw std::runtime_error("Write concern not satisfied");
+        }
+    }
+
+    /**
+     * 执行异步写
+     */
+    std::string executeAsynchronousWrite(const ReplicationLogEntry& log_entry, int write_concern) {
+        // 主节点写入后立即返回
+        auto primary_node = getPrimaryNode();
+        if (!primary_node) {
+            throw std::runtime_error("No primary node available");
+        }
+
+        bool primary_success = sendWriteRequest(primary_node, log_entry);
+        if (!primary_success) {
+            throw std::runtime_error("Failed to write to primary node");
+        }
+
+        primary_node->last_applied_op = log_entry.operation_id;
+
+        std::cout << "Asynchronous write " << log_entry.operation_id
+                  << " acknowledged by primary node" << std::endl;
+
+        return log_entry.operation_id;
+    }
+
+    /**
+     * 执行半同步写
+     */
+    std::string executeSemiSynchronousWrite(const ReplicationLogEntry& log_entry, int write_concern) {
+        auto primary_node = getPrimaryNode();
+        if (!primary_node) {
+            throw std::runtime_error("No primary node available");
+        }
+
+        // 主节点写入
+        bool primary_success = sendWriteRequest(primary_node, log_entry);
+        if (!primary_success) {
+            throw std::runtime_error("Failed to write to primary node");
+        }
+
+        primary_node->last_applied_op = log_entry.operation_id;
+
+        // 等待至少一个从节点确认
+        std::vector<std::string> acknowledgments;
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node->role == ReplicationRole::SECONDARY && node->isAlive()) {
+                bool success = sendWriteRequest(node, log_entry);
+                if (success) {
+                    acknowledgments.push_back(node->node_id);
+                    node->last_applied_op = log_entry.operation_id;
+                    break;  // 只需要一个从节点确认
+                }
+            }
+        }
+
+        std::cout << "Semi-synchronous write " << log_entry.operation_id
+                  << " acknowledged by primary"
+                  << (acknowledgments.empty() ? "" : " and one secondary")
+                  << std::endl;
+
+        return log_entry.operation_id;
+    }
+
+    /**
+     * 执行强一致性读
+     */
+    std::string executeStrongConsistencyRead(const std::string& table, const std::string& key) {
+        auto primary_node = getPrimaryNode();
+        if (!primary_node) {
+            throw std::runtime_error("No primary node available");
+        }
+
+        // 只从主节点读取，保证强一致性
+        std::string value = readFromNode(primary_node, table, key);
+        std::cout << "Strong consistency read from primary: " << value << std::endl;
+        return value;
+    }
+
+    /**
+     * 执行最终一致性读
+     */
+    std::string executeEventualConsistencyRead(const std::string& table, const std::string& key) {
+        // 从任意可用节点读取
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node->isAlive()) {
+                try {
+                    std::string value = readFromNode(node, table, key);
+                    std::cout << "Eventual consistency read from " << node->node_id
+                              << ": " << value << std::endl;
+                    return value;
+                } catch (const std::exception&) {
+                    continue;  // 尝试下一个节点
+                }
+            }
+        }
+
+        throw std::runtime_error("No available nodes for read");
+    }
+
+    /**
+     * 执行因果一致性读
+     */
+    std::string executeCausalConsistencyRead(const std::string& table, const std::string& key) {
+        // 简化实现：读取已同步到大多数节点的数据
+        std::unordered_map<std::string, int> value_counts;
+
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node->isAlive()) {
+                try {
+                    std::string value = readFromNode(node, table, key);
+                    value_counts[value]++;
+                } catch (const std::exception&) {
+                    continue;
+                }
+            }
+        }
+
+        // 返回出现次数最多的值
+        if (value_counts.empty()) {
+            throw std::runtime_error("No values read from any node");
+        }
+
+        auto most_common = std::max_element(value_counts.begin(), value_counts.end(),
+                                          [](const auto& a, const auto& b) {
+                                              return a.second < b.second;
+                                          });
+
+        std::cout << "Causal consistency read: " << most_common->first
+                  << " (appears " << most_common->second << " times)" << std::endl;
+        return most_common->first;
+    }
+
+    /**
+     * 选举新主节点
+     */
+    bool electNewPrimary() {
+        std::vector<std::shared_ptr<ReplicationStatus>> candidates;
+
+        // 收集候选节点（健康的从节点）
+        for (const auto& node_pair : nodes) {
+            const auto& node = node_pair.second;
+            if (node->role == ReplicationRole::SECONDARY && node->isAlive()) {
+                candidates.push_back(node);
+            }
+        }
+
+        if (candidates.empty()) {
+            std::cout << "No candidates available for primary election" << std::endl;
+            return false;
+        }
+
+        // 选择复制延迟最小的节点作为新主节点
+        auto new_primary = *std::min_element(candidates.begin(), candidates.end(),
+                                           [](const auto& a, const auto& b) {
+                                               return a->replication_lag < b->replication_lag;
+                                           });
+
+        // 更新节点角色
+        for (const auto& node_pair : nodes) {
+            if (node_pair.second->role == ReplicationRole::PRIMARY) {
+                node_pair.second->role = ReplicationRole::SECONDARY;
+            }
+        }
+
+        new_primary->role = ReplicationRole::PRIMARY;
+        std::cout << "Node " << new_primary->node_id << " elected as new PRIMARY" << std::endl;
+
+        return true;
+    }
+
+    /**
+     * 发送写请求到节点
+     */
+    bool sendWriteRequest(std::shared_ptr<ReplicationStatus> node,
+                          const ReplicationLogEntry& log_entry) {
+        // 模拟网络延迟和可能的失败
+        std::this_thread::sleep_for(std::chrono::milliseconds(10 + rand() % 50));
+
+        // 98%的成功率
+        if (rand() % 100 < 98) {
+            std::cout << "Write operation " << log_entry.operation_id
+                      << " sent to node " << node->node_id << " successfully" << std::endl;
+            node->is_synced = true;
+            return true;
+        } else {
+            std::cout << "Write operation " << log_entry.operation_id
+                      << " failed on node " << node->node_id << std::endl;
+            return false;
+        }
+    }
+
+    /**
+     * 从节点读取数据
+     */
+    std::string readFromNode(std::shared_ptr<ReplicationStatus> node,
+                           const std::string& table, const std::string& key) {
+        // 模拟读取延迟
+        std::this_thread::sleep_for(std::chrono::milliseconds(5 + rand() % 20));
+
+        // 模拟读取失败
+        if (rand() % 100 < 95) {  // 95%成功率
+            return "value_for_" + key + "_from_" + node->node_id;
+        } else {
+            throw std::runtime_error("Read failed from node " + node->node_id);
+        }
+    }
+
+    /**
+     * 获取主节点
+     */
+    std::shared_ptr<ReplicationStatus> getPrimaryNode() {
+        for (const auto& node_pair : nodes) {
+            if (node_pair.second->role == ReplicationRole::PRIMARY && node_pair.second->isAlive()) {
+                return node_pair.second;
+            }
+        }
+        return nullptr;
+    }
+
+    /**
+     * 监控节点心跳
+     */
+    void monitorHeartbeats() {
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            std::lock_guard<std::mutex> lock(manager_mutex);
+            for (auto& node_pair : nodes) {
+                auto& node = node_pair.second;
+
+                if (!node->isAlive(10)) {  // 10秒超时
+                    std::cout << "Node " << node->node_id << " is unreachable" << std::endl;
+                    failover(node->node_id);
+                } else {
+                    // 更新复制延迟
+                    node->replication_lag = rand() % 100;  // 模拟延迟
+                }
+            }
+        }
+    }
+
+    /**
+     * 复制工作线程
+     */
+    void replicationWorker() {
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            std::lock_guard<std::mutex> lock(manager_mutex);
+            // 处理异步复制任务
+            if (replication_mode == ReplicationMode::ASYNCHRONOUS) {
+                processAsyncReplication();
+            }
+        }
+    }
+
+    /**
+     * 处理异步复制
+     */
+    void processAsyncReplication() {
+        auto primary_node = getPrimaryNode();
+        if (!primary_node) {
+            return;
+        }
+
+        // 模拟异步复制过程
+        for (const auto& node_pair : nodes) {
+            auto& node = node_pair.second;
+            if (node->role == ReplicationRole::SECONDARY && node->isAlive()) {
+                // 检查是否有未复制的操作
+                if (node->last_applied_op != primary_node->last_applied_op) {
+                    // 模拟复制延迟
+                    node->replication_lag = rand() % 200;
+                }
+            }
+        }
+    }
+
+    /**
+     * 生成操作ID
+     */
+    std::string generateOperationId() {
+        static std::atomic<uint64_t> counter{0};
+        return "op_" + std::to_string(++counter) + "_" +
+               std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建复制管理器（异步复制，最终一致性）
+    ReplicationManager manager(ReplicationMode::ASYNCHRONOUS, ConsistencyModel::EVENTUAL);
+
+    // 添加节点
+    manager.addNode("primary", ReplicationRole::PRIMARY);
+    manager.addNode("secondary1", ReplicationRole::SECONDARY);
+    manager.addNode("secondary2", ReplicationRole::SECONDARY);
+    manager.addNode("secondary3", ReplicationRole::SECONDARY);
+
+    // 启动复制服务
+    manager.startReplicationService();
+
+    // 模拟写操作
+    std::cout << "\n=== Write Operations ===" << std::endl;
+    for (int i = 1; i <= 5; ++i) {
+        try {
+            std::string op_id = manager.executeWrite("INSERT", "users", "user_" + std::to_string(i),
+                                                    "", "data_" + std::to_string(i), 1);
+            std::cout << "Write operation " << op_id << " completed" << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Write operation failed: " << e.what() << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+    // 模拟读操作
+    std::cout << "\n=== Read Operations ===" << std::endl;
+    for (int i = 1; i <= 10; ++i) {
+        try {
+            std::string key = "user_" + std::to_string(i % 5 + 1);
+            std::string value = manager.executeRead("users", key, 1);
+            std::cout << "Read " << key << ": " << value << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "Read operation failed: " << e.what() << std::endl;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+
+    // 显示复制状态
+    std::cout << "\n=== Replication Status ===" << std::endl;
+    auto status = manager.getReplicationStatus();
+    for (const auto& node_pair : status) {
+        const auto& node = node_pair.second;
+        std::cout << "Node " << node->node_id << " (" << static_cast<int>(node->role) << "):" << std::endl;
+        std::cout << "  Healthy: " << (node->is_healthy ? "Yes" : "No") << std::endl;
+        std::cout << "  Replication Lag: " << node->replication_lag << "ms" << std::endl;
+        std::cout << "  Last Operation: " << node->last_applied_op << std::endl;
+    }
+
+    // 模拟故障转移
+    std::cout << "\n=== Failover Simulation ===" << std::endl;
+    bool failover_result = manager.failover("primary");
+    std::cout << "Failover result: " << (failover_result ? "SUCCESS" : "FAILED") << std::endl;
+
+    // 显示故障转移后的状态
+    std::cout << "\n=== Post-Failover Status ===" << std::endl;
+    status = manager.getReplicationStatus();
+    for (const auto& node_pair : status) {
+        const auto& node = node_pair.second;
+        std::cout << "Node " << node->node_id << " (" << static_cast<int>(node->role) << ")" << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 4. 实践练习
+
+### 练习1：实现分布式查询优化器
+
+基于本节课的代码框架，扩展实现一个完整的分布式查询优化器，包括统计信息收集、成本模型和多种优化规则。
+
+### 练习2：实现自适应负载均衡算法
+
+设计并实现一个能够根据历史性能、网络延迟、负载变化等多种因素动态调整的负载均衡算法。
+
+### 练习3：实现多级复制策略
+
+实现支持多级复制的系统，包括级联复制、环形复制和混合复制策略，并实现自动故障恢复。
+
+### 练习4：分布式连接算法优化
+
+实现多种分布式连接算法，包括广播连接、重分布连接、半连接等，并设计自动选择最优算法的策略。
+
+## 总结
+
+本节课我们深入学习了分布式数据库的高级主题，包括：
+
+1. **分布式查询优化**：查询重写、执行计划优化、成本估算等技术
+2. **负载均衡策略**：多种负载均衡算法和自适应选择机制
+3. **分布式复制技术**：不同的一致性模型和复制策略
+4. **高级特性**：故障转移、读写分离、数据局部性优化
+
+这些技术是构建大规模、高性能分布式数据库系统的核心组件。通过合理组合和应用这些技术，可以构建出既满足性能需求，又保证数据一致性的分布式数据库系统。在实际应用中，需要根据具体场景选择合适的技术组合，在性能、可用性和一致性之间取得最佳平衡。
+
+至此，我们已经完成了分布式数据库核心内容的学习。这些知识为进一步研究分布式系统的前沿技术奠定了坚实的基础。

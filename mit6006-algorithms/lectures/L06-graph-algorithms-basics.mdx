@@ -1,0 +1,1503 @@
+---
+title: "L06 - 图算法基础"
+description: "深入理解图表示、遍历算法和连通性分析"
+---
+
+import { useState, useEffect } from 'react';
+import { CodeBlock } from '@/src/components/algorithm';
+import { AlgorithmVisualizer } from '@/src/components/algorithm';
+import { ArrayVisualizer } from '@/src/components/algorithm';
+import { ComplexityAnalyzer } from '@/src/components/algorithm';
+import { ExerciseBlock } from '@/src/components/algorithm';
+
+# L06 - 图算法基础
+
+## 📚 学习目标
+
+完成本讲义后，你将能够：
+
+- 🌐 **掌握图的基础**：理解图的术语、性质和表示方法
+- 🔍 **精通遍历算法**：实现BFS、DFS及其变体
+- 🎯 **分析连通性**：判断图的连通分量和强连通性
+- 🛠️ **应用图算法**：解决实际网络和路径问题
+
+## 🎯 图的基础概念
+
+### 图的数学定义
+
+**图G = (V, E)** 由顶点集合V和边集合E组成。
+
+| 术语 | 定义 | 重要性 | 应用场景 |
+|------|------|--------|----------|
+| **顶点(Vertex)** | 图中的基本单元 | 数据存储 | 节点、对象 |
+| **边(Edge)** | 顶点之间的连接 | 关系表示 | 连接、关联 |
+| **度(Degree)** | 与顶点相连的边数 | 中心性 | 社交网络 |
+| **路径(Path)** | 顶点序列 | 可达性 | 路由规划 |
+| **环(Cycle)** | 起点和终点相同的路径 | 检测循环 | 依赖分析 |
+
+### 图的分类
+
+```python
+def graph_classification():
+    """
+    图的主要分类
+    """
+    classifications = {
+        "有向图 vs 无向图": "边是否有方向",
+        "有权图 vs 无权图": "边是否有权重",
+        "简单图 vs 多重图": "是否有重边和自环",
+        "连通图 vs 非连通图": "是否所有顶点可达",
+        "稀疏图 vs 稠密图": "边数与顶点数的关系",
+        "有环图 vs 无环图": "是否包含环",
+        "二分图": "顶点可分为两个独立集合"
+    }
+
+    print("图分类：")
+    for category, description in classifications.items():
+        print(f"• {category}: {description}")
+```
+
+## 🔧 图的表示方法
+
+### 1. 邻接矩阵
+
+```python
+class AdjacencyMatrix:
+    """
+    邻接矩阵表示图
+    空间复杂度: O(V²)
+    时间复杂度:
+    - 检查边存在: O(1)
+    - 获取邻居: O(V)
+    - 添加/删除边: O(1)
+    """
+    def __init__(self, num_vertices, directed=False):
+        self.num_vertices = num_vertices
+        self.directed = directed
+        self.matrix = [[0] * num_vertices for _ in range(num_vertices)]
+
+    def add_edge(self, v1, v2, weight=1):
+        """添加边"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            self.matrix[v1][v2] = weight
+            if not self.directed:
+                self.matrix[v2][v1] = weight
+
+    def remove_edge(self, v1, v2):
+        """删除边"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            self.matrix[v1][v2] = 0
+            if not self.directed:
+                self.matrix[v2][v1] = 0
+
+    def has_edge(self, v1, v2):
+        """检查边是否存在"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            return self.matrix[v1][v2] != 0
+        return False
+
+    def get_neighbors(self, vertex):
+        """获取顶点的邻居"""
+        if 0 <= vertex < self.num_vertices:
+            neighbors = []
+            for i, weight in enumerate(self.matrix[vertex]):
+                if weight != 0:
+                    neighbors.append((i, weight))
+            return neighbors
+        return []
+
+    def get_degree(self, vertex):
+        """获取顶点的度"""
+        if 0 <= vertex < self.num_vertices:
+            if self.directed:
+                # 有向图：计算入度和出度
+                in_degree = sum(1 for row in self.matrix if row[vertex] != 0)
+                out_degree = sum(1 for weight in self.matrix[vertex] if weight != 0)
+                return in_degree, out_degree
+            else:
+                # 无向图
+                return sum(1 for weight in self.matrix[vertex] if weight != 0)
+        return 0
+
+    def __str__(self):
+        """字符串表示"""
+        result = "  " + " ".join(f"{i:2}" for i in range(self.num_vertices)) + "\n"
+        for i, row in enumerate(self.matrix):
+            result += f"{i:2} " + " ".join(f"{w:2}" for w in row) + "\n"
+        return result
+
+# 优点：边存在性检查O(1)，适合稠密图
+# 缺点：空间复杂度高，获取邻居效率低
+```
+
+### 2. 邻接表
+
+```python
+class AdjacencyList:
+    """
+    邻接表表示图
+    空间复杂度: O(V + E)
+    时间复杂度:
+    - 检查边存在: O(degree)
+    - 获取邻居: O(degree)
+    - 添加边: O(1)
+    """
+    def __init__(self, num_vertices, directed=False):
+        self.num_vertices = num_vertices
+        self.directed = directed
+        self.adj_list = [[] for _ in range(num_vertices)]
+
+    def add_edge(self, v1, v2, weight=1):
+        """添加边"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            self.adj_list[v1].append((v2, weight))
+            if not self.directed:
+                self.adj_list[v2].append((v1, weight))
+
+    def remove_edge(self, v1, v2):
+        """删除边"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            self.adj_list[v1] = [(v, w) for v, w in self.adj_list[v1] if v != v2]
+            if not self.directed:
+                self.adj_list[v2] = [(v, w) for v, w in self.adj_list[v2] if v != v1]
+
+    def has_edge(self, v1, v2):
+        """检查边是否存在"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            return any(v == v2 for v, _ in self.adj_list[v1])
+        return False
+
+    def get_neighbors(self, vertex):
+        """获取顶点的邻居"""
+        if 0 <= vertex < self.num_vertices:
+            return self.adj_list[vertex].copy()
+        return []
+
+    def get_degree(self, vertex):
+        """获取顶点的度"""
+        if 0 <= vertex < self.num_vertices:
+            return len(self.adj_list[vertex])
+        return 0
+
+    def __str__(self):
+        """字符串表示"""
+        result = ""
+        for i, neighbors in enumerate(self.adj_list):
+            result += f"{i}: {neighbors}\n"
+        return result
+
+# 优点：空间效率高，适合稀疏图
+# 缺点：边存在性检查较慢
+```
+
+### 3. 边列表
+
+```python
+class EdgeList:
+    """
+    边列表表示图
+    适合需要遍历所有边的算法
+    """
+    def __init__(self, num_vertices, directed=False):
+        self.num_vertices = num_vertices
+        self.directed = directed
+        self.edges = []
+
+    def add_edge(self, v1, v2, weight=1):
+        """添加边"""
+        if 0 <= v1 < self.num_vertices and 0 <= v2 < self.num_vertices:
+            self.edges.append((v1, v2, weight))
+            if not self.directed and v1 != v2:
+                self.edges.append((v2, v1, weight))
+
+    def remove_edge(self, v1, v2):
+        """删除边"""
+        self.edges = [(e1, e2, w) for e1, e2, w in self.edges
+                     if not (e1 == v1 and e2 == v2)]
+        if not self.directed:
+            self.edges = [(e1, e2, w) for e1, e2, w in self.edges
+                         if not (e1 == v2 and e2 == v1)]
+
+    def get_all_edges(self):
+        """获取所有边"""
+        return self.edges.copy()
+
+    def get_neighbors(self, vertex):
+        """获取顶点的邻居"""
+        neighbors = []
+        for v1, v2, weight in self.edges:
+            if v1 == vertex:
+                neighbors.append((v2, weight))
+        return neighbors
+
+# 优点：节省空间，适合需要遍历所有边的算法
+# 缺点：邻接查询效率低
+```
+
+<ExerciseBlock
+  title="图表示选择"
+  question:"对于包含1000个顶点和10万条边的社交网络图，应该选择哪种表示方法？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "邻接矩阵",
+      correct: false,
+      explanation: "1000个顶点的邻接矩阵需要100万空间，而只有10万条边，浪费空间"
+    },
+    {
+      id: "b",
+      text: "邻接表",
+      correct: true,
+      explanation: "正确！邻接表的空间复杂度是O(V+E)，适合稀疏图"
+    },
+    {
+      id: "c",
+      text: "边列表",
+      correct: false,
+      explanation: "边列表的邻接查询效率低，不适合需要频繁查询邻居的场景"
+    },
+    {
+      id: "d",
+      text: "三种方法效果相同",
+      correct: false,
+      explanation: "不同表示方法在不同操作上有明显差异"
+    }
+  ]}
+  hint="考虑图的稀疏程度和主要操作类型"
+/>
+
+## 🔍 图的遍历算法
+
+### 1. 广度优先搜索 (BFS)
+
+```python
+from collections import deque
+from typing import List, Set, Dict, Tuple
+
+class BFSTraversal:
+    """
+    广度优先搜索
+    时间复杂度: O(V + E)
+    空间复杂度: O(V)
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def bfs(self, start_vertex):
+        """标准BFS遍历"""
+        if start_vertex >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        queue = deque([start_vertex])
+        visited[start_vertex] = True
+        traversal_order = []
+
+        while queue:
+            current = queue.popleft()
+            traversal_order.append(current)
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+
+        return traversal_order
+
+    def bfs_shortest_path(self, start, end):
+        """BFS求最短路径（无权图）"""
+        if start >= self.graph.num_vertices or end >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        queue = deque([(start, [start])])
+        visited[start] = True
+
+        while queue:
+            current, path = queue.popleft()
+
+            if current == end:
+                return path
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    new_path = path + [neighbor]
+                    queue.append((neighbor, new_path))
+
+        return []  # 没有路径
+
+    def bfs_levels(self, start):
+        """BFS按层遍历"""
+        if start >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        queue = deque([(start, 0)])  # (vertex, level)
+        visited[start] = True
+        levels = []
+
+        while queue:
+            current, level = queue.popleft()
+
+            if level >= len(levels):
+                levels.append([])
+
+            levels[level].append(current)
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append((neighbor, level + 1))
+
+        return levels
+
+    def bfs_connected_components(self):
+        """使用BFS找连通分量"""
+        visited = [False] * self.graph.num_vertices
+        components = []
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                component = []
+                queue = deque([vertex])
+                visited[vertex] = True
+
+                while queue:
+                    current = queue.popleft()
+                    component.append(current)
+
+                    for neighbor, _ in self.graph.get_neighbors(current):
+                        if not visited[neighbor]:
+                            visited[neighbor] = True
+                            queue.append(neighbor)
+
+                components.append(component)
+
+        return components
+```
+
+### 2. 深度优先搜索 (DFS)
+
+```python
+class DFSTraversal:
+    """
+    深度优先搜索
+    时间复杂度: O(V + E)
+    空间复杂度: O(V)
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def dfs_recursive(self, start_vertex):
+        """递归DFS"""
+        if start_vertex >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        traversal_order = []
+
+        def dfs_helper(vertex):
+            visited[vertex] = True
+            traversal_order.append(vertex)
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if not visited[neighbor]:
+                    dfs_helper(neighbor)
+
+        dfs_helper(start_vertex)
+        return traversal_order
+
+    def dfs_iterative(self, start_vertex):
+        """迭代DFS"""
+        if start_vertex >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        stack = [start_vertex]
+        traversal_order = []
+
+        while stack:
+            current = stack.pop()
+
+            if not visited[current]:
+                visited[current] = True
+                traversal_order.append(current)
+
+                # 将邻居按相反顺序压栈（保持递归顺序）
+                for neighbor, _ in reversed(self.graph.get_neighbors(current)):
+                    if not visited[neighbor]:
+                        stack.append(neighbor)
+
+        return traversal_order
+
+    def dfs_find_path(self, start, end):
+        """DFS查找路径"""
+        if start >= self.graph.num_vertices or end >= self.graph.num_vertices:
+            return []
+
+        visited = [False] * self.graph.num_vertices
+        path = []
+
+        def dfs_helper(current):
+            visited[current] = True
+            path.append(current)
+
+            if current == end:
+                return True
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    if dfs_helper(neighbor):
+                        return True
+
+            path.pop()
+            return False
+
+        if dfs_helper(start):
+            return path
+        return []
+
+    def dfs_connected_components(self):
+        """使用DFS找连通分量"""
+        visited = [False] * self.graph.num_vertices
+        components = []
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                component = []
+                stack = [vertex]
+                visited[vertex] = True
+
+                while stack:
+                    current = stack.pop()
+                    component.append(current)
+
+                    for neighbor, _ in self.graph.get_neighbors(current):
+                        if not visited[neighbor]:
+                            visited[neighbor] = True
+                            stack.append(neighbor)
+
+                components.append(component)
+
+        return components
+
+    def dfs_topological_sort(self):
+        """DFS拓扑排序（有向无环图）"""
+        visited = [False] * self.graph.num_vertices
+        temp_visited = [False] * self.graph.num_vertices  # 检测环
+        result = []
+
+        def dfs_helper(vertex):
+            temp_visited[vertex] = True
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if temp_visited[neighbor]:
+                    raise ValueError("图中存在环，无法进行拓扑排序")
+                if not visited[neighbor]:
+                    dfs_helper(neighbor)
+
+            temp_visited[vertex] = False
+            visited[vertex] = True
+            result.append(vertex)
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                dfs_helper(vertex)
+
+        return result[::-1]  # 反转得到拓扑排序
+```
+
+### 3. BFS vs DFS 对比
+
+```python
+def bfs_vs_dfs_comparison():
+    """
+    BFS和DFS的比较
+    """
+    comparison = {
+        "BFS": {
+            "数据结构": "队列",
+            "内存使用": "O(w)，w是最大宽度",
+            "找到的路径": "最短路径（无权图）",
+            "适用场景": "最短路径、层次遍历",
+            "实现复杂度": "简单"
+        },
+        "DFS": {
+            "数据结构": "栈",
+            "内存使用": "O(h)，h是最大深度",
+            "找到的路径": "任意路径，不一定最短",
+            "适用场景": "拓扑排序、连通性、回溯",
+            "实现复杂度": "递归简单，迭代稍复杂"
+        }
+    }
+
+    print("BFS vs DFS 比较：")
+    for algorithm, properties in comparison.items():
+        print(f"\n{algorithm}:")
+        for prop, value in properties.items():
+            print(f"  {prop}: {value}")
+
+# 应用场景示例
+class GraphApplications:
+    """图算法应用"""
+    def __init__(self, graph):
+        self.graph = graph
+
+    def social_network_analysis(self):
+        """社交网络分析"""
+        # 使用BFS计算最短路径距离
+        # 使用DFS找社交圈
+
+    def web_crawler(self, start_url):
+        """网络爬虫"""
+        # 使用BFS广度优先爬取网页
+        # 使用DFS深度优先探索链接
+
+    def maze_solver(self, maze, start, end):
+        """迷宫求解"""
+        # 使用BFS找最短路径
+        # 使用DFS找所有可能路径
+
+    def dependency_resolution(self):
+        """依赖解析"""
+        # 使用DFS拓扑排序
+        # 检测循环依赖
+```
+
+<ExerciseBlock
+  title="遍历算法选择"
+  question:"在什么情况下应该选择BFS而不是DFS？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "当需要找最短路径时",
+      correct: true,
+      explanation: "正确！BFS在无权图中保证找到最短路径"
+    },
+    {
+      id: "b",
+      text: "当需要拓扑排序时",
+      correct: false,
+      explanation: "拓扑排序通常使用DFS"
+    },
+    {
+      id: "c",
+      text: "当图很深但很窄时",
+      correct: false,
+      explanation: "DFS在这种情况内存效率更高"
+    },
+    {
+      id: "d",
+      text: "当需要检测环时",
+      correct: false,
+      explanation: "BFS和DFS都可以检测环"
+    }
+  ]}
+  hint="考虑BFS的特性：层次遍历和最短路径"
+/>
+
+## 🎯 连通性分析
+
+### 1. 无向图的连通性
+
+```python
+class ConnectivityAnalyzer:
+    """
+    连通性分析器
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def is_connected(self):
+        """检查图是否连通"""
+        if self.graph.num_vertices == 0:
+            return True
+
+        # 使用BFS或DFS从一个顶点开始遍历
+        visited = set()
+        stack = [0]
+        visited.add(0)
+
+        while stack:
+            current = stack.pop()
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+
+        return len(visited) == self.graph.num_vertices
+
+    def get_connected_components(self):
+        """获取所有连通分量"""
+        visited = [False] * self.graph.num_vertices
+        components = []
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                component = self._dfs_component(vertex, visited)
+                components.append(component)
+
+        return components
+
+    def _dfs_component(self, start, visited):
+        """DFS获取连通分量"""
+        component = []
+        stack = [start]
+        visited[start] = True
+
+        while stack:
+            current = stack.pop()
+            component.append(current)
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    stack.append(neighbor)
+
+        return component
+
+    def find_bridges(self):
+        """找到所有的桥（割边）"""
+        if self.graph.directed:
+            raise ValueError("桥的定义仅适用于无向图")
+
+        discovery_time = [-1] * self.graph.num_vertices
+        low = [-1] * self.graph.num_vertices
+        parent = [-1] * self.graph.num_vertices
+        bridges = []
+        time = [0]
+
+        def dfs_bridges(vertex):
+            discovery_time[vertex] = time[0]
+            low[vertex] = time[0]
+            time[0] += 1
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if discovery_time[neighbor] == -1:  # 未访问
+                    parent[neighbor] = vertex
+                    dfs_bridges(neighbor)
+
+                    low[vertex] = min(low[vertex], low[neighbor])
+
+                    # 检查是否是桥
+                    if low[neighbor] > discovery_time[vertex]:
+                        bridges.append((vertex, neighbor))
+
+                elif neighbor != parent[vertex]:  # 已访问且不是父节点
+                    low[vertex] = min(low[vertex], discovery_time[neighbor])
+
+        for vertex in range(self.graph.num_vertices):
+            if discovery_time[vertex] == -1:
+                dfs_bridges(vertex)
+
+        return bridges
+
+    def find_articulation_points(self):
+        """找到所有的割点"""
+        if self.graph.directed:
+            raise ValueError("割点的定义仅适用于无向图")
+
+        discovery_time = [-1] * self.graph.num_vertices
+        low = [-1] * self.graph.num_vertices
+        parent = [-1] * self.graph.num_vertices
+        articulation_points = set()
+        time = [0]
+
+        def dfs_articulation_points(vertex):
+            discovery_time[vertex] = time[0]
+            low[vertex] = time[0]
+            time[0] += 1
+            children = 0
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if discovery_time[neighbor] == -1:  # 未访问
+                    parent[neighbor] = vertex
+                    children += 1
+                    dfs_articulation_points(neighbor)
+
+                    low[vertex] = min(low[vertex], low[neighbor])
+
+                    # 检查是否是割点
+                    # 条件1：根节点且有多个子树
+                    if parent[vertex] == -1 and children > 1:
+                        articulation_points.add(vertex)
+
+                    # 条件2：非根节点且low[neighbor] >= discovery_time[vertex]
+                    if parent[vertex] != -1 and low[neighbor] >= discovery_time[vertex]:
+                        articulation_points.add(vertex)
+
+                elif neighbor != parent[vertex]:  # 已访问且不是父节点
+                    low[vertex] = min(low[vertex], discovery_time[neighbor])
+
+        for vertex in range(self.graph.num_vertices):
+            if discovery_time[vertex] == -1:
+                dfs_articulation_points(vertex)
+
+        return list(articulation_points)
+```
+
+### 2. 有向图的强连通性
+
+```python
+class StrongConnectivityAnalyzer:
+    """
+    强连通性分析
+    """
+    def __init__(self, graph):
+        self.graph = graph
+        if not graph.directed:
+            raise ValueError("强连通性仅适用于有向图")
+
+    def kosaraju_scc(self):
+        """
+        Kosaraju算法找强连通分量
+        时间复杂度: O(V + E)
+        """
+        # 第一次DFS：计算完成时间
+        visited = [False] * self.graph.num_vertices
+        finish_order = []
+
+        def first_dfs(vertex):
+            visited[vertex] = True
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if not visited[neighbor]:
+                    first_dfs(neighbor)
+            finish_order.append(vertex)
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                first_dfs(vertex)
+
+        # 转置图
+        reversed_graph = self._transpose_graph()
+
+        # 第二次DFS：按完成时间逆序遍历
+        visited = [False] * self.graph.num_vertices
+        sccs = []
+
+        finish_order.reverse()  # 按完成时间降序
+
+        for vertex in finish_order:
+            if not visited[vertex]:
+                scc = []
+                stack = [vertex]
+                visited[vertex] = True
+
+                while stack:
+                    current = stack.pop()
+                    scc.append(current)
+
+                    # 在转置图中遍历
+                    for neighbor, _ in reversed_graph.get_neighbors(current):
+                        if not visited[neighbor]:
+                            visited[neighbor] = True
+                            stack.append(neighbor)
+
+                sccs.append(scc)
+
+        return sccs
+
+    def _transpose_graph(self):
+        """构建转置图"""
+        transposed = AdjacencyList(self.graph.num_vertices, directed=True)
+
+        for vertex in range(self.graph.num_vertices):
+            for neighbor, weight in self.graph.get_neighbors(vertex):
+                transposed.add_edge(neighbor, vertex, weight)
+
+        return transposed
+
+    def tarjan_scc(self):
+        """
+        Tarjan算法找强连通分量
+        单次DFS实现
+        """
+        index = [0]  # 当前DFS索引
+        indices = [-1] * self.graph.num_vertices  # 顶点索引
+        low_link = [-1] * self.graph.num_vertices  # 低链接值
+        on_stack = [False] * self.graph.num_vertices  # 是否在栈中
+        stack = []
+        sccs = []
+
+        def strongconnect(vertex):
+            indices[vertex] = index[0]
+            low_link[vertex] = index[0]
+            index[0] += 1
+            stack.append(vertex)
+            on_stack[vertex] = True
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if indices[neighbor] == -1:  # 未访问
+                    strongconnect(neighbor)
+                    low_link[vertex] = min(low_link[vertex], low_link[neighbor])
+                elif on_stack[neighbor]:  # 已访问且在栈中
+                    low_link[vertex] = min(low_link[vertex], indices[neighbor])
+
+            # 如果是强连通分量的根
+            if low_link[vertex] == indices[vertex]:
+                scc = []
+                while True:
+                    w = stack.pop()
+                    on_stack[w] = False
+                    scc.append(w)
+                    if w == vertex:
+                        break
+                sccs.append(scc)
+
+        for vertex in range(self.graph.num_vertices):
+            if indices[vertex] == -1:
+                strongconnect(vertex)
+
+        return sccs
+
+    def is_strongly_connected(self):
+        """检查图是否强连通"""
+        if self.graph.num_vertices == 0:
+            return True
+
+        # 使用Kosaraju算法
+        sccs = self.kosaraju_scc()
+        return len(sccs) == 1
+```
+
+## 🎯 实际应用场景
+
+### 1. 社交网络分析
+
+```python
+class SocialNetworkAnalyzer:
+    """
+    社交网络分析工具
+    """
+    def __init__(self):
+        self.graph = AdjacencyList(directed=False)  # 无向图
+
+    def add_friendship(self, user1, user2):
+        """添加好友关系"""
+        self.graph.add_edge(user1, user2)
+
+    def find_mutual_friends(self, user1, user2):
+        """找到共同好友"""
+        friends1 = set(n for n, _ in self.graph.get_neighbors(user1))
+        friends2 = set(n for n, _ in self.graph.get_neighbors(user2))
+        return friends1 & friends2
+
+    def find_friend_suggestions(self, user, max_suggestions=5):
+        """好友推荐"""
+        # 基于共同好友数量推荐
+        suggestions = {}
+        friends = set(n for n, _ in self.graph.get_neighbors(user))
+
+        for friend in friends:
+            for friend_of_friend, _ in self.graph.get_neighbors(friend):
+                if friend_of_friend != user and friend_of_friend not in friends:
+                    suggestions[friend_of_friend] = suggestions.get(friend_of_friend, 0) + 1
+
+        # 排序并返回前N个建议
+        sorted_suggestions = sorted(suggestions.items(), key=lambda x: x[1], reverse=True)
+        return [user for user, count in sorted_suggestions[:max_suggestions]]
+
+    def find_shortest_friend_chain(self, user1, user2):
+        """找到最短好友链"""
+        bfs = BFSTraversal(self.graph)
+        return bfs.bfs_shortest_path(user1, user2)
+
+    def analyze_social_circles(self):
+        """分析社交圈（连通分量）"""
+        analyzer = ConnectivityAnalyzer(self.graph)
+        return analyzer.get_connected_components()
+
+    def find_influential_users(self):
+        """找到有影响力的用户（高中心性）"""
+        degrees = []
+        for vertex in range(self.graph.num_vertices):
+            degree = self.graph.get_degree(vertex)
+            degrees.append((vertex, degree))
+
+        # 按度数排序
+        return sorted(degrees, key=lambda x: x[1], reverse=True)
+```
+
+### 2. 网络路由分析
+
+```python
+class NetworkRouter:
+    """
+    网络路由分析
+    """
+    def __init__(self):
+        self.graph = AdjacencyList(directed=True)  # 有向图
+        self.routers = {}  # 路由器信息
+
+    def add_router(self, router_id, location):
+        """添加路由器"""
+        self.routers[router_id] = {"location": location}
+
+    def add_connection(self, router1, router2, latency=1):
+        """添加连接"""
+        self.graph.add_edge(router1, router2, latency)
+
+    def find_path_with_min_hops(self, source, destination):
+        """找到跳数最少的路径"""
+        bfs = BFSTraversal(self.graph)
+        return bfs.bfs_shortest_path(source, destination)
+
+    def find_all_paths(self, source, destination, max_hops=10):
+        """找到所有可能的路径（DFS）"""
+        dfs = DFSTraversal(self.graph)
+        paths = []
+        visited = [False] * self.graph.num_vertices
+
+        def dfs_find_paths(current, path, hops):
+            if hops > max_hops:
+                return
+
+            if current == destination:
+                paths.append(path.copy())
+                return
+
+            visited[current] = True
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if not visited[neighbor]:
+                    path.append(neighbor)
+                    dfs_find_paths(neighbor, path, hops + 1)
+                    path.pop()
+
+            visited[current] = False
+
+        visited[source] = True
+        dfs_find_paths(source, [source], 0)
+
+        return paths
+
+    def detect_cycles(self):
+        """检测网络中的环"""
+        visited = [False] * self.graph.num_vertices
+        recursion_stack = [False] * self.graph.num_vertices
+        cycles = []
+
+        def dfs_cycle(vertex, path):
+            visited[vertex] = True
+            recursion_stack[vertex] = True
+            path.append(vertex)
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if not visited[neighbor]:
+                    if dfs_cycle(neighbor, path):
+                        return True
+                elif recursion_stack[neighbor]:
+                    # 找到环
+                    cycle_start = path.index(neighbor)
+                    cycle = path[cycle_start:] + [neighbor]
+                    cycles.append(cycle)
+                    return True
+
+            path.pop()
+            recursion_stack[vertex] = False
+            return False
+
+        for vertex in range(self.graph.num_vertices):
+            if not visited[vertex]:
+                dfs_cycle(vertex, [])
+
+        return cycles
+
+    def find_bottlenecks(self):
+        """找到网络瓶颈（割点）"""
+        analyzer = ConnectivityAnalyzer(self.graph)
+        return analyzer.find_articulation_points()
+```
+
+### 3. 依赖解析系统
+
+```python
+class DependencyResolver:
+    """
+    依赖解析系统
+    """
+    def __init__(self):
+        self.graph = AdjacencyList(directed=True)
+        self.components = {}  # 组件信息
+
+    def add_component(self, component_id, component_info):
+        """添加组件"""
+        self.components[component_id] = component_info
+
+    def add_dependency(self, component_id, depends_on):
+        """添加依赖关系"""
+        self.graph.add_edge(depends_on, component_id)
+
+    def resolve_build_order(self):
+        """解析构建顺序（拓扑排序）"""
+        dfs = DFSTraversal(self.graph)
+        try:
+            return dfs.dfs_topological_sort()
+        except ValueError as e:
+            print(f"依赖错误: {e}")
+            return None
+
+    def detect_circular_dependencies(self):
+        """检测循环依赖"""
+        try:
+            self.resolve_build_order()
+            return []
+        except ValueError:
+            # 使用DFS找到具体环
+            visited = [False] * self.graph.num_vertices
+            recursion_stack = [False] * self.graph.num_vertices
+            cycles = []
+
+            def find_cycle(vertex, path):
+                visited[vertex] = True
+                recursion_stack[vertex] = True
+                path.append(vertex)
+
+                for neighbor, _ in self.graph.get_neighbors(vertex):
+                    if not visited[neighbor]:
+                        if find_cycle(neighbor, path):
+                            return True
+                    elif recursion_stack[neighbor]:
+                        cycle_start = path.index(neighbor)
+                        cycle = path[cycle_start:] + [neighbor]
+                        cycles.append(cycle)
+                        return True
+
+                path.pop()
+                recursion_stack[vertex] = False
+                return False
+
+            for vertex in range(self.graph.num_vertices):
+                if not visited[vertex]:
+                    find_cycle(vertex, [])
+
+            return cycles
+
+    def find_affected_components(self, changed_component):
+        """找到受影响的组件"""
+        # 使用BFS找到所有依赖该组件的组件
+        bfs = BFSTraversal(self.graph)
+        affected = bfs.bfs(changed_component)
+        return affected[1:]  # 排除组件本身
+
+    def get_component_info(self, component_id):
+        """获取组件详细信息"""
+        if component_id in self.components:
+            info = self.components[component_id].copy()
+            dependencies = [n for n, _ in self.graph.get_neighbors(component_id)]
+            dependents = []
+            for v in range(self.graph.num_vertices):
+                if any(n == component_id for n, _ in self.graph.get_neighbors(v)):
+                    dependents.append(v)
+
+            info.update({
+                "dependencies": dependencies,
+                "dependents": dependents
+            })
+            return info
+        return None
+```
+
+<ExerciseBlock
+  title="实际应用"
+  question:"在一个大型软件项目中，需要分析模块间的依赖关系来确定编译顺序。应该使用什么图算法？"
+  type="multiple-choice"
+  difficulty="medium"
+  options={[
+    {
+      id: "a",
+      text: "BFS求最短路径",
+      correct: false,
+      explanation: "我们需要编译顺序，不是最短路径"
+    },
+    {
+      id: "b",
+      text: "DFS拓扑排序",
+      correct: true,
+      explanation: "正确！拓扑排序可以确定依赖关系和编译顺序"
+    },
+    {
+      id: "c",
+      text: "强连通分量",
+      correct: false,
+      explanation: "强连通分量用于分析相互依赖的模块组"
+    },
+    {
+      id: "d",
+      text: "最小生成树",
+      correct: false,
+      explanation: "最小生成树用于优化连接成本"
+    }
+  ]}
+  hint="考虑依赖关系的有向性和编译顺序要求"
+/>
+
+## 📊 性能分析与优化
+
+### 图算法性能对比
+
+```python
+def graph_algorithm_performance():
+    """
+    图算法性能分析
+    """
+    performance_data = {
+        "BFS": {
+            "time_complexity": "O(V + E)",
+            "space_complexity": "O(V)",
+            "best_for": "最短路径、层次遍历",
+            "worst_case": "稀疏图内存使用较多"
+        },
+        "DFS": {
+            "time_complexity": "O(V + E)",
+            "space_complexity": "O(V)",
+            "best_for": "拓扑排序、连通性检测",
+            "worst_case": "深度很大的图可能导致栈溢出"
+        },
+        "Kosaraju": {
+            "time_complexity": "O(V + E)",
+            "space_complexity": "O(V)",
+            "best_for": "强连通分量",
+            "worst_case": "需要两次DFS和转置图"
+        },
+        "Tarjan": {
+            "time_complexity": "O(V + E)",
+            "space_complexity": "O(V)",
+            "best_for": "强连通分量（单次DFS）",
+            "worst_case": "实现较复杂"
+        }
+    }
+
+    return performance_data
+
+# 性能测试示例
+performance_data = [
+    {"n": 1000, "time": 0.01, "algorithm": "BFS"},
+    {"n": 10000, "time": 0.12, "algorithm": "BFS"},
+    {"n": 100000, "time": 1.45, "algorithm": "BFS"},
+    {"n": 1000000, "time": 15.8, "algorithm": "BFS"}
+]
+```
+
+<ComplexityAnalyzer
+  title="BFS性能分析"
+  algorithm="广度优先搜索"
+  theoreticalComplexity="O(V + E)"
+  data={performance_data}
+  color="rgb(59, 130, 246)"
+/>
+
+### 优化策略
+
+```python
+class OptimizedGraphAlgorithms:
+    """
+    优化的图算法实现
+    """
+    def __init__(self, graph):
+        self.graph = graph
+
+    def bfs_bidirectional(self, start, end):
+        """
+        双向BFS - 更快的最短路径查找
+        时间复杂度: O(b^(d/2))，其中b是分支因子，d是距离
+        """
+        if start == end:
+            return [start]
+
+        # 正向搜索
+        forward_queue = deque([(start, [start])])
+        forward_visited = {start: [start]}
+
+        # 反向搜索
+        backward_queue = deque([(end, [end])])
+        backward_visited = {end: [end]}
+
+        while forward_queue and backward_queue:
+            # 正向搜索一步
+            if len(forward_queue) <= len(backward_queue):
+                current, path = forward_queue.popleft()
+
+                for neighbor, _ in self.graph.get_neighbors(current):
+                    if neighbor not in forward_visited:
+                        new_path = path + [neighbor]
+                        forward_visited[neighbor] = new_path
+                        forward_queue.append((neighbor, new_path))
+
+                        # 检查是否在反向搜索中访问过
+                        if neighbor in backward_visited:
+                            return new_path[:-1] + backward_visited[neighbor]
+
+            # 反向搜索一步
+            else:
+                current, path = backward_queue.popleft()
+
+                for neighbor, _ in self.graph.get_neighbors(current):
+                    if neighbor not in backward_visited:
+                        new_path = [neighbor] + path
+                        backward_visited[neighbor] = new_path
+                        backward_queue.append((neighbor, new_path))
+
+                        # 检查是否在正向搜索中访问过
+                        if neighbor in forward_visited:
+                            return forward_visited[neighbor] + new_path[1:]
+
+        return []  # 没有路径
+
+    def dfs_iterative_deepening(self, start, goal, max_depth):
+        """
+        迭代加深DFS - 结合BFS和DFS的优点
+        空间复杂度: O(d)，其中d是深度
+        """
+        def depth_limited_search(vertex, depth, path, visited):
+            if depth == 0:
+                if vertex == goal:
+                    return path
+                return None
+
+            visited.add(vertex)
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if neighbor not in visited:
+                    result = depth_limited_search(neighbor, depth - 1, path + [neighbor], visited.copy())
+                    if result:
+                        return result
+
+            return None
+
+        for depth in range(1, max_depth + 1):
+            result = depth_limited_search(start, depth, [start], set())
+            if result:
+                return result
+
+        return None
+
+    def a_star_search(self, start, goal, heuristic):
+        """
+        A*搜索算法 - 启发式搜索
+        """
+        import heapq
+
+        def heuristic_distance(node1, node2):
+            """启发式函数"""
+            return heuristic(node1, node2)
+
+        open_set = [(0, start)]
+        came_from = {}
+        g_score = {start: 0}
+        f_score = {start: heuristic_distance(start, goal)}
+
+        while open_set:
+            current_f, current = heapq.heappop(open_set)
+
+            if current == goal:
+                # 重建路径
+                path = []
+                while current in came_from:
+                    path.append(current)
+                    current = came_from[current]
+                path.append(start)
+                return path[::-1]
+
+            for neighbor, weight in self.graph.get_neighbors(current):
+                tentative_g = g_score[current] + weight
+
+                if neighbor not in g_score or tentative_g < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score[neighbor] = tentative_g + heuristic_distance(neighbor, goal)
+                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+
+        return []  # 没有找到路径
+```
+
+<ExerciseBlock
+  title="性能优化"
+  question:"在一个非常大的社交网络中，要找到两个用户之间的最短路径，哪种算法最合适？"
+  type="multiple-choice"
+  difficulty="hard"
+  options={[
+    {
+      id: "a",
+      text: "标准BFS",
+      correct: false,
+      explanation: "对大图来说内存消耗太大"
+    },
+    {
+      id: "b",
+      text: "双向BFS",
+      correct: true,
+      explanation: "正确！双向BFS可以大幅减少搜索空间"
+    },
+    {
+      id: "c",
+      text: "DFS",
+      correct: false,
+      explanation: "DFS不一定找到最短路径"
+    },
+    {
+      id: "d",
+      text: "A*算法",
+      correct: false,
+      explanation: "A*需要好的启发式函数，社交网络很难定义"
+    }
+  ]}
+  hint="考虑搜索空间的减少和内存效率"
+/>
+
+## 📝 总结与最佳实践
+
+### 关键要点
+
+1. **图表示选择**：
+   - 稠密图：邻接矩阵
+   - 稀疏图：邻接表
+   - 边遍历：边列表
+
+2. **遍历算法选择**：
+   - 最短路径：BFS
+   - 拓扑排序：DFS
+   - 连通性：BFS或DFS
+   - 强连通性：Kosaraju或Tarjan
+
+3. **性能优化**：
+   - 双向搜索减少搜索空间
+   - 迭代加深控制内存使用
+   - 启发式搜索提高效率
+
+### 实际应用建议
+
+```python
+def graph_algorithm_recommendation(problem_type: str) -> str:
+    """
+    根据问题类型推荐图算法
+    """
+    recommendations = {
+        "shortest_path_unweighted": "BFS",
+        "shortest_path_weighted": "Dijkstra",
+        "negative_weights": "Bellman-Ford",
+        "all_pairs_shortest": "Floyd-Warshall",
+        "topological_sort": "DFS",
+        "connected_components": "BFS/DFS",
+        "strongly_connected": "Kosaraju/Tarjan",
+        "cycle_detection": "DFS",
+        "minimum_spanning_tree": "Kruskal/Prim",
+        "network_flow": "Ford-Fulkerson",
+        "bipartite_matching": "Hopcroft-Karp",
+        "graph_coloring": "回溯算法"
+    }
+
+    return recommendations.get(problem_type, "根据具体需求分析")
+```
+
+### 图算法设计模式
+
+```python
+class GraphAlgorithmPatterns:
+    """图算法设计模式"""
+    def __init__(self, graph):
+        self.graph = graph
+
+    def multi_source_bfs(self, sources):
+        """多源BFS"""
+        queue = deque([(source, 0) for source in sources])
+        visited = {source: 0 for source in sources}
+
+        while queue:
+            vertex, distance = queue.popleft()
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if neighbor not in visited:
+                    visited[neighbor] = distance + 1
+                    queue.append((neighbor, distance + 1))
+
+        return visited
+
+    def bfs_with_levels(self, start):
+        """带层次信息的BFS"""
+        from collections import defaultdict
+        levels = defaultdict(list)
+        queue = deque([(start, 0)])
+        visited = {start}
+
+        while queue:
+            vertex, level = queue.popleft()
+            levels[level].append(vertex)
+
+            for neighbor, _ in self.graph.get_neighbors(vertex):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, level + 1))
+
+        return dict(levels)
+
+    def dfs_with_path_tracking(self, start, goal):
+        """带路径跟踪的DFS"""
+        def dfs_helper(current, path, visited):
+            if current == goal:
+                return path.copy()
+
+            visited.add(current)
+
+            for neighbor, _ in self.graph.get_neighbors(current):
+                if neighbor not in visited:
+                    path.append(neighbor)
+                    result = dfs_helper(neighbor, path, visited)
+                    if result:
+                        return result
+                    path.pop()
+
+            return None
+
+        return dfs_helper(start, [start], set())
+```
+
+<ExerciseBlock
+  title="章节测验"
+  question:"在一个无向图中，如何判断是否存在从顶点A到顶点B的路径？"
+  type="multiple-choice"
+  difficulty="easy"
+  options={[
+    {
+      id: "a",
+      text: "使用BFS或DFS从A开始搜索",
+      correct: true,
+      explanation: "正确！BFS或DFS都可以判断连通性"
+    },
+    {
+      id: "b",
+      text: "计算A和B的度数",
+      correct: false,
+      explanation: "度数不能直接判断连通性"
+    },
+    {
+      id: "c",
+      text: "检查A和B是否在同一个连通分量中",
+      correct: true,
+      explanation: "正确！这是判断连通性的正式方法"
+    },
+    {
+      id: "d",
+      text: "使用拓扑排序",
+      correct: false,
+      explanation: "拓扑排序适用于有向无环图"
+    }
+  ]}
+  hint="考虑连通性的定义和判断方法"
+/>
+
+---
+
+## 🚀 课后练习
+
+1. **基础练习**：实现各种图表示方法和遍历算法
+2. **进阶练习**：实现强连通分量和割点检测算法
+3. **实战练习**：构建社交网络分析工具
+4. **项目练习**：设计网络路由分析系统
+
+**记住**：图算法是解决复杂关系问题的强大工具，掌握它们将大大提升你的问题解决能力！🌐

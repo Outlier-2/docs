@@ -1,0 +1,3122 @@
+---
+title: "Lecture 17: 消息队列 - 分布式异步通信与事件驱动架构"
+description: "深入理解消息队列的设计原理、实现技术和应用模式，构建高可用、可扩展的分布式通信系统"
+---
+
+# Lecture 17: 消息队列 - 分布式异步通信与事件驱动架构
+
+## 本周内容
+
+- **消息队列模型**：点对点、发布订阅、请求回复模式的深入原理
+- **可靠消息传递**：持久化、重试、死信队列、事务消息
+- **系统实现**：Kafka、RabbitMQ、NSQ、Pulsar的内部机制
+- **应用模式**：事件驱动架构、CQRS、事件溯源、流处理
+- **实践项目**：构建高吞吐量消息处理系统
+
+## 课程视频
+
+<iframe width="560" height="315" src="https://www.youtube.com/embed/G_0z4bB7x2U" title="分布式消息队列系统" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 核心概念
+
+### 消息队列概述
+
+消息队列是分布式系统中实现异步通信的关键组件，通过解耦生产者和消费者，提高系统的可扩展性和可靠性。
+
+**消息队列的作用**
+```
+Producer → Message Queue → Consumer
+    ↑            ↓            ↓
+解耦        缓冲         异步处理
+可靠性       限流         负载均衡
+```
+
+**核心特性**
+- **异步通信**：生产者和消费者无需同步等待
+- **解耦**：降低系统组件间的依赖关系
+- **缓冲**：平滑流量峰值，提供背压机制
+- **可靠传递**：确保消息不丢失，支持重试机制
+- **可扩展性**：支持水平扩展，提高吞吐量
+
+### 消息队列模型详解
+
+#### 1. 点对点模型 (Point-to-Point)
+
+```go
+// 点对点模型实现
+type P2PQueue struct {
+    queue      chan *Message
+    consumers  []*Consumer
+    persistent Storage
+    mutex      sync.RWMutex
+}
+
+type Message struct {
+    ID        string
+    Content   []byte
+    Timestamp time.Time
+    Attempts  int
+    Headers   map[string]string
+}
+
+type Consumer struct {
+    ID       string
+    Handler  func(*Message) error
+    Active   bool
+    LastSeen time.Time
+}
+
+// 创建点对点队列
+func NewP2PQueue(size int, persistent Storage) *P2PQueue {
+    return &P2PQueue{
+        queue:     make(chan *Message, size),
+        consumers: make([]*Consumer, 0),
+        persistent: persistent,
+    }
+}
+
+// 发送消息
+func (p2p *P2PQueue) Send(content []byte, headers map[string]string) (string, error) {
+    msg := &Message{
+        ID:        generateID(),
+        Content:   content,
+        Timestamp: time.Now(),
+        Headers:   headers,
+    }
+
+    // 持久化消息
+    if err := p2p.persistent.Save(msg); err != nil {
+        return "", err
+    }
+
+    // 发送到队列
+    select {
+    case p2p.queue <- msg:
+        return msg.ID, nil
+    default:
+        return "", fmt.Errorf("queue is full")
+    }
+}
+
+// 消费消息
+func (p2p *P2PQueue) Start() {
+    go func() {
+        for msg := range p2p.queue {
+            p2p.deliverMessage(msg)
+        }
+    }()
+}
+
+// 传递消息给消费者
+func (p2p *P2PQueue) deliverMessage(msg *Message) {
+    p2p.mutex.RLock()
+    defer p2p.mutex.RUnlock()
+
+    for _, consumer := range p2p.consumers {
+        if consumer.Active {
+            go func(c *Consumer, m *Message) {
+                err := c.Handler(m)
+                if err != nil {
+                    p2p.handleDeliveryError(m, err)
+                } else {
+                    p2p.persistent.Delete(m.ID)
+                }
+            }(consumer, msg)
+            return // 点对点模式只有一个消费者处理
+        }
+    }
+
+    // 没有活跃消费者，重新入队
+    p2p.queue <- msg
+}
+
+// 处理投递错误
+func (p2p *P2PQueue) handleDeliveryError(msg *Message, err error) {
+    msg.Attempts++
+    if msg.Attempts < 3 {
+        // 重试
+        go func() {
+            time.Sleep(time.Second * time.Duration(msg.Attempts))
+            p2p.queue <- msg
+        }()
+    } else {
+        // 移到死信队列
+        p2p.moveToDeadLetter(msg)
+    }
+}
+
+// 注册消费者
+func (p2p *P2PQueue) RegisterConsumer(id string, handler func(*Message) error) {
+    p2p.mutex.Lock()
+    defer p2p.mutex.Unlock()
+
+    consumer := &Consumer{
+        ID:       id,
+        Handler:  handler,
+        Active:   true,
+        LastSeen: time.Now(),
+    }
+
+    p2p.consumers = append(p2p.consumers, consumer)
+}
+```
+
+#### 2. 发布订阅模型 (Publish-Subscribe)
+
+```go
+// 发布订阅模型实现
+type PubSub struct {
+    topics     map[string]*Topic
+    mutex      sync.RWMutex
+    persistent Storage
+}
+
+type Topic struct {
+    Name      string
+    Queue     *P2PQueue
+    Subscribers []*Subscriber
+    mutex      sync.RWMutex
+}
+
+type Subscriber struct {
+    ID       string
+    Topic    string
+    Handler  func(*Message) error
+    Filter   func(*Message) bool
+    Active   bool
+}
+
+// 创建发布订阅系统
+func NewPubSub(persistent Storage) *PubSub {
+    return &PubSub{
+        topics:     make(map[string]*Topic),
+        persistent: persistent,
+    }
+}
+
+// 创建主题
+func (ps *PubSub) CreateTopic(name string, queueSize int) error {
+    ps.mutex.Lock()
+    defer ps.mutex.Unlock()
+
+    if _, exists := ps.topics[name]; exists {
+        return fmt.Errorf("topic already exists")
+    }
+
+    topic := &Topic{
+        Name:       name,
+        Queue:      NewP2PQueue(queueSize, ps.persistent),
+        Subscribers: make([]*Subscriber, 0),
+    }
+
+    ps.topics[name] = topic
+    topic.Queue.Start()
+
+    return nil
+}
+
+// 发布消息
+func (ps *PubSub) Publish(topic string, content []byte, headers map[string]string) (string, error) {
+    ps.mutex.RLock()
+    defer ps.mutex.RUnlock()
+
+    t, exists := ps.topics[topic]
+    if !exists {
+        return "", fmt.Errorf("topic not found")
+    }
+
+    return t.Queue.Send(content, headers)
+}
+
+// 订阅主题
+func (ps *PubSub) Subscribe(topic, subscriberID string, handler func(*Message) error, filter func(*Message) bool) error {
+    ps.mutex.Lock()
+    defer ps.mutex.Unlock()
+
+    t, exists := ps.topics[topic]
+    if !exists {
+        return fmt.Errorf("topic not found")
+    }
+
+    subscriber := &Subscriber{
+        ID:      subscriberID,
+        Topic:   topic,
+        Handler: handler,
+        Filter:  filter,
+        Active:  true,
+    }
+
+    t.mutex.Lock()
+    t.Subscribers = append(t.Subscribers, subscriber)
+    t.mutex.Unlock()
+
+    return nil
+}
+
+// 主题消息分发
+func (ps *PubSub) deliverTopicMessage(topic *Topic, msg *Message) {
+    topic.mutex.RLock()
+    defer topic.mutex.RUnlock()
+
+    var wg sync.WaitGroup
+
+    for _, subscriber := range topic.Subscribers {
+        if subscriber.Active && (subscriber.Filter == nil || subscriber.Filter(msg)) {
+            wg.Add(1)
+            go func(s *Subscriber, m *Message) {
+                defer wg.Done()
+                err := s.Handler(m)
+                if err != nil {
+                    ps.handleSubscriberError(s, m, err)
+                }
+            }(subscriber, msg)
+        }
+    }
+
+    wg.Wait()
+}
+
+// 处理订阅者错误
+func (ps *PubSub) handleSubscriberError(subscriber *Subscriber, msg *Message, err error) {
+    // 记录错误日志
+    log.Printf("Subscriber %s error: %v", subscriber.ID, err)
+
+    // 可以实现重试逻辑或者错误处理策略
+}
+```
+
+#### 3. 请求回复模型 (Request-Reply)
+
+```go
+// 请求回复模型实现
+type RequestReply struct {
+    requestQueue *P2PQueue
+    replyQueues map[string]*P2PQueue
+    timeouts    map[string]*time.Timer
+    mutex       sync.RWMutex
+    timeout     time.Duration
+}
+
+type Request struct {
+    ID      string
+    Content []byte
+    Headers map[string]string
+}
+
+type Reply struct {
+    RequestID string
+    Content  []byte
+    Error    string
+    Success  bool
+}
+
+// 创建请求回复系统
+func NewRequestReply(timeout time.Duration) *RequestReply {
+    return &RequestReply{
+        requestQueue: NewP2PQueue(1000, NewMemoryStorage()),
+        replyQueues: make(map[string]*P2PQueue),
+        timeouts:    make(map[string]*time.Timer),
+        timeout:     timeout,
+    }
+}
+
+// 发送请求
+func (rr *RequestReply) SendRequest(content []byte, headers map[string]string) (string, <-chan *Reply, error) {
+    requestID := generateID()
+
+    // 创建回复队列
+    replyQueue := NewP2PQueue(1, NewMemoryStorage())
+    rr.mutex.Lock()
+    rr.replyQueues[requestID] = replyQueue
+    rr.mutex.Unlock()
+
+    // 设置超时
+    timer := time.AfterFunc(rr.timeout, func() {
+        rr.cleanupRequest(requestID)
+    })
+    rr.timeouts[requestID] = timer
+
+    // 创建请求消息
+    request := &Request{
+        ID:      requestID,
+        Content: content,
+        Headers: headers,
+    }
+
+    requestMsg := &Message{
+        ID:      requestID,
+        Content: marshalRequest(request),
+        Headers: headers,
+    }
+
+    // 发送请求
+    if _, err := rr.requestQueue.Send(requestMsg.Content, requestMsg.Headers); err != nil {
+        rr.cleanupRequest(requestID)
+        return "", nil, err
+    }
+
+    // 创建回复通道
+    replyChan := make(chan *Reply, 1)
+    go func() {
+        msg := <-replyQueue.queue
+        reply := unmarshalReply(msg.Content)
+        replyChan <- reply
+        rr.cleanupRequest(requestID)
+    }()
+
+    return requestID, replyChan, nil
+}
+
+// 处理请求
+func (rr *RequestReply) HandleRequest(handler func(*Request) *Reply) {
+    rr.requestQueue.RegisterConsumer("request-handler", func(msg *Message) error {
+        request := unmarshalRequest(msg.Content)
+        reply := handler(request)
+
+        rr.sendReply(request.ID, reply)
+        return nil
+    })
+
+    rr.requestQueue.Start()
+}
+
+// 发送回复
+func (rr *RequestReply) sendReply(requestID string, reply *Reply) {
+    rr.mutex.RLock()
+    replyQueue, exists := rr.replyQueues[requestID]
+    rr.mutex.RUnlock()
+
+    if !exists {
+        return
+    }
+
+    replyMsg := &Message{
+        ID:      requestID,
+        Content: marshalReply(reply),
+        Headers: map[string]string{"type": "reply"},
+    }
+
+    replyQueue.Send(replyMsg.Content, replyMsg.Headers)
+}
+
+// 清理请求
+func (rr *RequestReply) cleanupRequest(requestID string) {
+    rr.mutex.Lock()
+    defer rr.mutex.Unlock()
+
+    if queue, exists := rr.replyQueues[requestID]; exists {
+        close(queue.queue)
+        delete(rr.replyQueues, requestID)
+    }
+
+    if timer, exists := rr.timeouts[requestID]; exists {
+        timer.Stop()
+        delete(rr.timeouts, requestID)
+    }
+}
+
+// 序列化/反序列化辅助函数
+func marshalRequest(req *Request) []byte {
+    data, _ := json.Marshal(req)
+    return data
+}
+
+func unmarshalRequest(data []byte) *Request {
+    var req Request
+    json.Unmarshal(data, &req)
+    return &req
+}
+
+func marshalReply(reply *Reply) []byte {
+    data, _ := json.Marshal(reply)
+    return data
+}
+
+func unmarshalReply(data []byte) *Reply {
+    var reply Reply
+    json.Unmarshal(data, &reply)
+    return &reply
+}
+```
+
+### 可靠消息传递机制
+
+#### 1. 消息持久化
+
+```go
+// 持久化存储接口
+type Storage interface {
+    Save(msg *Message) error
+    Delete(id string) error
+    Get(id string) (*Message, error)
+    List(offset, limit int) ([]*Message, error)
+}
+
+// 文件存储实现
+type FileStorage struct {
+    dir       string
+    indexFile *os.File
+    dataFile  *os.File
+    index     map[string]int64
+    mutex     sync.RWMutex
+}
+
+func NewFileStorage(dir string) (*FileStorage, error) {
+    if err := os.MkdirAll(dir, 0755); err != nil {
+        return nil, err
+    }
+
+    indexFile, err := os.OpenFile(filepath.Join(dir, "index"), os.O_CREATE|os.O_RDWR, 0644)
+    if err != nil {
+        return nil, err
+    }
+
+    dataFile, err := os.OpenFile(filepath.Join(dir, "data"), os.O_CREATE|os.O_RDWR, 0644)
+    if err != nil {
+        indexFile.Close()
+        return nil, err
+    }
+
+    fs := &FileStorage{
+        dir:       dir,
+        indexFile: indexFile,
+        dataFile:  dataFile,
+        index:     make(map[string]int64),
+    }
+
+    // 加载索引
+    if err := fs.loadIndex(); err != nil {
+        fs.Close()
+        return nil, err
+    }
+
+    return fs, nil
+}
+
+// 保存消息
+func (fs *FileStorage) Save(msg *Message) error {
+    fs.mutex.Lock()
+    defer fs.mutex.Unlock()
+
+    // 序列化消息
+    data, err := json.Marshal(msg)
+    if err != nil {
+        return err
+    }
+
+    // 写入数据文件
+    offset, err := fs.dataFile.Seek(0, 2)
+    if err != nil {
+        return err
+    }
+
+    if _, err := fs.dataFile.Write(data); err != nil {
+        return err
+    }
+
+    // 更新索引
+    fs.index[msg.ID] = offset
+
+    // 同步索引到文件
+    return fs.syncIndex()
+}
+
+// 删除消息
+func (fs *FileStorage) Delete(id string) error {
+    fs.mutex.Lock()
+    defer fs.mutex.Unlock()
+
+    delete(fs.index, id)
+    return fs.syncIndex()
+}
+
+// 获取消息
+func (fs *FileStorage) Get(id string) (*Message, error) {
+    fs.mutex.RLock()
+    offset, exists := fs.index[id]
+    fs.mutex.RUnlock()
+
+    if !exists {
+        return nil, fmt.Errorf("message not found")
+    }
+
+    // 读取消息数据
+    _, err := fs.dataFile.Seek(offset, 0)
+    if err != nil {
+        return nil, err
+    }
+
+    var msg Message
+    decoder := json.NewDecoder(fs.dataFile)
+    if err := decoder.Decode(&msg); err != nil {
+        return nil, err
+    }
+
+    return &msg, nil
+}
+
+// 列表消息
+func (fs *FileStorage) List(offset, limit int) ([]*Message, error) {
+    fs.mutex.RLock()
+    defer fs.mutex.RUnlock()
+
+    var messages []*Message
+    count := 0
+
+    for _, offset := range fs.index {
+        if count >= offset {
+            continue
+        }
+
+        if len(messages) >= limit {
+            break
+        }
+
+        msg, err := fs.GetByIDOffset(offset)
+        if err != nil {
+            continue
+        }
+
+        messages = append(messages, msg)
+        count++
+    }
+
+    return messages, nil
+}
+
+// 按偏移获取消息
+func (fs *FileStorage) GetByIDOffset(offset int64) (*Message, error) {
+    _, err := fs.dataFile.Seek(offset, 0)
+    if err != nil {
+        return nil, err
+    }
+
+    var msg Message
+    decoder := json.NewDecoder(fs.dataFile)
+    if err := decoder.Decode(&msg); err != nil {
+        return nil, err
+    }
+
+    return &msg, nil
+}
+
+// 加载索引
+func (fs *FileStorage) loadIndex() error {
+    decoder := json.NewDecoder(fs.indexFile)
+    return decoder.Decode(&fs.index)
+}
+
+// 同步索引
+func (fs *FileStorage) syncIndex() error {
+    fs.indexFile.Seek(0, 0)
+    fs.indexFile.Truncate(0)
+    encoder := json.NewEncoder(fs.indexFile)
+    return encoder.Encode(fs.index)
+}
+
+// 关闭存储
+func (fs *FileStorage) Close() error {
+    var errs []error
+
+    if err := fs.indexFile.Close(); err != nil {
+        errs = append(errs, err)
+    }
+
+    if err := fs.dataFile.Close(); err != nil {
+        errs = append(errs, err)
+    }
+
+    if len(errs) > 0 {
+        return fmt.Errorf("multiple errors: %v", errs)
+    }
+
+    return nil
+}
+```
+
+#### 2. 事务消息
+
+```go
+// 事务消息实现
+type TransactionalQueue struct {
+    queue     *P2PQueue
+    txManager *TransactionManager
+    storage   Storage
+}
+
+type Transaction struct {
+    ID        string
+    Status    string // "pending", "committed", "rolledback"
+    Messages  []*Message
+    CreatedAt time.Time
+    mutex     sync.RWMutex
+}
+
+type TransactionManager struct {
+    transactions map[string]*Transaction
+    storage      Storage
+    timeout      time.Duration
+    mutex        sync.RWMutex
+}
+
+// 创建事务队列
+func NewTransactionalQueue(queue *P2PQueue, storage Storage, timeout time.Duration) *TransactionalQueue {
+    return &TransactionalQueue{
+        queue:     queue,
+        txManager: NewTransactionManager(storage, timeout),
+        storage:   storage,
+    }
+}
+
+// 开始事务
+func (tq *TransactionalQueue) BeginTransaction() *Transaction {
+    return tq.txManager.Begin()
+}
+
+// 提交事务
+func (tq *TransactionalQueue) CommitTransaction(txID string) error {
+    tx := tq.txManager.GetTransaction(txID)
+    if tx == nil {
+        return fmt.Errorf("transaction not found")
+    }
+
+    // 批量发送消息
+    for _, msg := range tx.Messages {
+        if _, err := tq.queue.Send(msg.Content, msg.Headers); err != nil {
+            return err
+        }
+    }
+
+    return tq.txManager.Commit(txID)
+}
+
+// 回滚事务
+func (tq *TransactionalQueue) RollbackTransaction(txID string) error {
+    return tq.txManager.Rollback(txID)
+}
+
+// 发送事务消息
+func (tq *TransactionalQueue) SendTransactional(txID string, content []byte, headers map[string]string) error {
+    tx := tq.txManager.GetTransaction(txID)
+    if tx == nil {
+        return fmt.Errorf("transaction not found")
+    }
+
+    msg := &Message{
+        ID:        generateID(),
+        Content:   content,
+        Timestamp: time.Now(),
+        Headers:   headers,
+    }
+
+    tx.mutex.Lock()
+    tx.Messages = append(tx.Messages, msg)
+    tx.mutex.Unlock()
+
+    return nil
+}
+
+// 事务管理器实现
+func NewTransactionManager(storage Storage, timeout time.Duration) *TransactionManager {
+    tm := &TransactionManager{
+        transactions: make(map[string]*Transaction),
+        storage:      storage,
+        timeout:      timeout,
+    }
+
+    // 启动超时检查
+    go tm.checkTimeouts()
+
+    return tm
+}
+
+func (tm *TransactionManager) Begin() *Transaction {
+    tx := &Transaction{
+        ID:        generateID(),
+        Status:    "pending",
+        Messages:  make([]*Message, 0),
+        CreatedAt: time.Now(),
+    }
+
+    tm.mutex.Lock()
+    tm.transactions[tx.ID] = tx
+    tm.mutex.Unlock()
+
+    return tx
+}
+
+func (tm *TransactionManager) Commit(txID string) error {
+    tm.mutex.Lock()
+    defer tm.mutex.Unlock()
+
+    tx, exists := tm.transactions[txID]
+    if !exists {
+        return fmt.Errorf("transaction not found")
+    }
+
+    tx.mutex.Lock()
+    tx.Status = "committed"
+    tx.mutex.Unlock()
+
+    delete(tm.transactions, txID)
+    return nil
+}
+
+func (tm *TransactionManager) Rollback(txID string) error {
+    tm.mutex.Lock()
+    defer tm.mutex.Unlock()
+
+    tx, exists := tm.transactions[txID]
+    if !exists {
+        return fmt.Errorf("transaction not found")
+    }
+
+    tx.mutex.Lock()
+    tx.Status = "rolledback"
+    tx.mutex.Unlock()
+
+    delete(tm.transactions, txID)
+    return nil
+}
+
+func (tm *TransactionManager) GetTransaction(txID string) *Transaction {
+    tm.mutex.RLock()
+    defer tm.mutex.RUnlock()
+
+    return tm.transactions[txID]
+}
+
+// 检查超时
+func (tm *TransactionManager) checkTimeouts() {
+    ticker := time.NewTicker(time.Minute)
+
+    for range ticker.C {
+        tm.mutex.Lock()
+        now := time.Now()
+
+        var timeoutTx []string
+        for id, tx := range tm.transactions {
+            if now.Sub(tx.CreatedAt) > tm.timeout {
+                timeoutTx = append(timeoutTx, id)
+            }
+        }
+
+        for _, id := range timeoutTx {
+            tx := tm.transactions[id]
+            tx.mutex.Lock()
+            tx.Status = "timeout"
+            tx.mutex.Unlock()
+            delete(tm.transactions, id)
+        }
+
+        tm.mutex.Unlock()
+    }
+}
+```
+
+#### 3. 死信队列
+
+```go
+// 死信队列实现
+type DeadLetterQueue struct {
+    mainQueue  *P2PQueue
+    dlq        *P2PQueue
+    maxRetries int
+    handlers   map[string]func(*Message) error
+    mutex      sync.RWMutex
+}
+
+// 创建死信队列
+func NewDeadLetterQueue(mainQueue *P2PQueue, maxRetries int) *DeadLetterQueue {
+    dlq := &DeadLetterQueue{
+        mainQueue:  mainQueue,
+        dlq:        NewP2PQueue(1000, NewMemoryStorage()),
+        maxRetries: maxRetries,
+        handlers:   make(map[string]func(*Message) error),
+    }
+
+    // 包装主队列的消息处理
+    dlq.wrapMainQueueHandler()
+
+    return dlq
+}
+
+// 包装主队列处理器
+func (dlq *DeadLetterQueue) wrapMainQueueHandler() {
+    // 保存原始消费者列表
+    originalConsumers := make([]*Consumer, len(dlq.mainQueue.consumers))
+    copy(originalConsumers, dlq.mainQueue.consumers)
+
+    // 清空消费者列表
+    dlq.mainQueue.consumers = dlq.mainQueue.consumers[:0]
+
+    // 注册新的处理器
+    dlq.mainQueue.RegisterConsumer("dlq-wrapper", func(msg *Message) error {
+        return dlq.handleMessageWithRetry(msg, originalConsumers)
+    })
+}
+
+// 处理消息（带重试）
+func (dlq *DeadLetterQueue) handleMessageWithRetry(msg *Message, consumers []*Consumer) error {
+    var lastErr error
+
+    for i := 0; i < dlq.maxRetries; i++ {
+        for _, consumer := range consumers {
+            if consumer.Active {
+                err := consumer.Handler(msg)
+                if err == nil {
+                    return nil
+                }
+                lastErr = err
+                log.Printf("Message %s attempt %d failed: %v", msg.ID, i+1, err)
+            }
+        }
+
+        // 等待重试间隔
+        if i < dlq.maxRetries-1 {
+            time.Sleep(time.Second * time.Duration(i+1))
+        }
+    }
+
+    // 所有重试都失败，移到死信队列
+    log.Printf("Message %s moved to dead letter queue after %d attempts", msg.ID, dlq.maxRetries)
+    return dlq.moveToDeadLetter(msg, lastErr)
+}
+
+// 移到死信队列
+func (dlq *DeadLetterQueue) moveToDeadLetter(msg *Message, originalError error) error {
+    // 添加错误信息到消息头
+    if msg.Headers == nil {
+        msg.Headers = make(map[string]string)
+    }
+    msg.Headers["original-error"] = originalError.Error()
+    msg.Headers["retry-count"] = fmt.Sprintf("%d", dlq.maxRetries)
+    msg.Headers["failed-at"] = time.Now().Format(time.RFC3339)
+
+    // 发送到死信队列
+    _, err := dlq.dlq.Send(msg.Content, msg.Headers)
+    return err
+}
+
+// 注册死信处理器
+func (dlq *DeadLetterQueue) RegisterDeadLetterHandler(name string, handler func(*Message) error) {
+    dlq.mutex.Lock()
+    defer dlq.mutex.Unlock()
+
+    dlq.handlers[name] = handler
+
+    // 如果是第一个处理器，启动死信队列
+    if len(dlq.handlers) == 1 {
+        dlq.dlq.RegisterConsumer(name, handler)
+        dlq.dlq.Start()
+    }
+}
+
+// 监控死信队列
+func (dlq *DeadLetterQueue) Monitor() {
+    ticker := time.NewTicker(5 * time.Minute)
+
+    for range ticker.C {
+        dlq.checkDeadLetterQueue()
+    }
+}
+
+// 检查死信队列状态
+func (dlq *DeadLetterQueue) checkDeadLetterQueue() {
+    // 这里可以实现监控逻辑，如告警、自动重试等
+    size := len(dlq.dlq.queue)
+    if size > 100 {
+        log.Printf("Dead letter queue size is large: %d", size)
+    }
+}
+```
+
+### 消息队列系统实现
+
+#### 1. Kafka 风格实现
+
+```go
+// Kafka风格消息系统
+type KafkaSystem struct {
+    brokers      []*Broker
+    topics       map[string]*Topic
+    consumerGroups map[string]*ConsumerGroup
+    replication  int
+    mutex        sync.RWMutex
+}
+
+type Broker struct {
+    ID       string
+    Address  string
+    Topics   map[string]*Partition
+    Active   bool
+}
+
+type Partition struct {
+    ID          int
+    Leader      string
+    Replicas    []string
+    ISR         []string
+    Log         *LogSegment
+    Offset      int64
+    HighWatermark int64
+}
+
+type LogSegment struct {
+    Messages   []*Message
+    BaseOffset int64
+    File       *os.File
+}
+
+type ConsumerGroup struct {
+    ID       string
+    Topic    string
+    Members  []*ConsumerMember
+    Strategy string // "range", "roundrobin", "sticky"
+}
+
+type ConsumerMember struct {
+    ID          string
+    Partitions  []int
+    LastOffset  map[int]int64
+    Active      bool
+}
+
+// 创建Kafka系统
+func NewKafkaSystem(brokers []string, replication int) *KafkaSystem {
+    ks := &KafkaSystem{
+        brokers:       make([]*Broker, len(brokers)),
+        topics:        make(map[string]*Topic),
+        consumerGroups: make(map[string]*ConsumerGroup),
+        replication:   replication,
+    }
+
+    // 初始化broker
+    for i, addr := range brokers {
+        ks.brokers[i] = &Broker{
+            ID:      fmt.Sprintf("broker-%d", i),
+            Address: addr,
+            Topics:  make(map[string]*Partition),
+            Active:  true,
+        }
+    }
+
+    return ks
+}
+
+// 创建主题
+func (ks *KafkaSystem) CreateTopic(name string, partitions int) error {
+    ks.mutex.Lock()
+    defer ks.mutex.Unlock()
+
+    if _, exists := ks.topics[name]; exists {
+        return fmt.Errorf("topic already exists")
+    }
+
+    topic := &Topic{
+        Name:       name,
+        Partitions: make(map[int]*Partition),
+        Replication: ks.replication,
+    }
+
+    // 分配分区到broker
+    for i := 0; i < partitions; i++ {
+        leader := ks.brokers[i%len(ks.brokers)]
+        replicas := ks.selectReplicas(leader.ID)
+
+        partition := &Partition{
+            ID:     i,
+            Leader: leader.ID,
+            Replicas: replicas,
+            ISR:    replicas,
+            Log:    NewLogSegment(i, 0),
+            Offset:  0,
+        }
+
+        topic.Partitions[i] = partition
+        leader.Topics[name] = partition
+    }
+
+    ks.topics[name] = topic
+    return nil
+}
+
+// 选择副本
+func (ks *KafkaSystem) selectReplicas(exclude string) []string {
+    var replicas []string
+    for _, broker := range ks.brokers {
+        if broker.ID != exclude && broker.Active {
+            replicas = append(replicas, broker.ID)
+            if len(replicas) >= ks.replication-1 {
+                break
+            }
+        }
+    }
+    return replicas
+}
+
+// 发送消息
+func (ks *KafkaSystem) SendMessage(topic string, message []byte, key []byte) (int64, int, error) {
+    ks.mutex.RLock()
+    defer ks.mutex.RUnlock()
+
+    t, exists := ks.topics[topic]
+    if !exists {
+        return 0, 0, fmt.Errorf("topic not found")
+    }
+
+    // 选择分区
+    partitionID := ks.selectPartition(t, key)
+    partition := t.Partitions[partitionID]
+
+    // 创建消息
+    msg := &Message{
+        ID:        generateID(),
+        Content:   message,
+        Timestamp: time.Now(),
+        Headers:   make(map[string]string),
+    }
+
+    // 添加key
+    if len(key) > 0 {
+        msg.Headers["key"] = string(key)
+    }
+
+    // 写入日志
+    offset, err := partition.Log.Append(msg)
+    if err != nil {
+        return 0, 0, err
+    }
+
+    partition.Offset = offset + 1
+
+    // 复制到follower
+    go ks.replicateMessage(topic, partitionID, msg, offset)
+
+    return offset, partitionID, nil
+}
+
+// 选择分区
+func (ks *KafkaSystem) selectPartition(topic *Topic, key []byte) int {
+    if len(key) == 0 {
+        // 轮询选择
+        return int(time.Now().UnixNano()) % len(topic.Partitions)
+    }
+
+    // 基于key哈希
+    hash := fnv.New32a()
+    hash.Write(key)
+    return int(hash.Sum32()) % len(topic.Partitions)
+}
+
+// 复制消息
+func (ks *KafkaSystem) replicateMessage(topic string, partitionID int, msg *Message, offset int64) {
+    t := ks.topics[topic]
+    partition := t.Partitions[partitionID]
+
+    for _, replicaID := range partition.Replicas {
+        if replicaID == partition.Leader {
+            continue
+        }
+
+        broker := ks.findBroker(replicaID)
+        if broker != nil && broker.Active {
+            go func(b *Broker) {
+                // 异步复制
+                err := b.ReplicateMessage(topic, partitionID, msg, offset)
+                if err != nil {
+                    log.Printf("Failed to replicate to broker %s: %v", b.ID, err)
+                }
+            }(broker)
+        }
+    }
+}
+
+// 查找broker
+func (ks *KafkaSystem) findBroker(id string) *Broker {
+    for _, broker := range ks.brokers {
+        if broker.ID == id {
+            return broker
+        }
+    }
+    return nil
+}
+
+// 日志段实现
+func NewLogSegment(partition int, baseOffset int64) *LogSegment {
+    return &LogSegment{
+        Messages:   make([]*Message, 0),
+        BaseOffset: baseOffset,
+    }
+}
+
+// 追加消息
+func (ls *LogSegment) Append(msg *Message) (int64, error) {
+    offset := ls.BaseOffset + int64(len(ls.Messages))
+    ls.Messages = append(ls.Messages, msg)
+    return offset, nil
+}
+
+// Broker复制消息
+func (b *Broker) ReplicateMessage(topic string, partitionID int, msg *Message, offset int64) error {
+    partition, exists := b.Topics[topic]
+    if !exists {
+        return fmt.Errorf("topic not found on broker")
+    }
+
+    if partition.ID != partitionID {
+        return fmt.Errorf("partition mismatch")
+    }
+
+    // 追加到本地日志
+    _, err := partition.Log.Append(msg)
+    if err == nil {
+        partition.Offset = offset + 1
+    }
+
+    return err
+}
+```
+
+#### 2. RabbitMQ 风格实现
+
+```go
+// RabbitMQ风格消息系统
+type RabbitMQSystem struct {
+    exchanges  map[string]*Exchange
+    queues     map[string]*Queue
+    bindings   map[string][]*Binding
+    channels   map[string]*Channel
+    vhosts     map[string]*VirtualHost
+    mutex      sync.RWMutex
+}
+
+type Exchange struct {
+    Name     string
+    Type     string // "direct", "topic", "fanout", "headers"
+    Bindings []*Binding
+    Durable  bool
+}
+
+type Queue struct {
+    Name       string
+    Messages   chan *Message
+    Consumers  []*Consumer
+    Durable    bool
+    Exclusive  bool
+    AutoDelete bool
+    Arguments  map[string]interface{}
+}
+
+type Binding struct {
+    Source      string
+    Destination string
+    RoutingKey  string
+    Headers     map[string]interface{}
+}
+
+type Channel struct {
+    ID         string
+    Confirm    bool
+    Publisher  chan *PublishCommand
+    Consumer   chan *ConsumeCommand
+    Returns    chan *ReturnMessage
+    Acks       chan uint64
+}
+
+type PublishCommand struct {
+    Exchange   string
+    RoutingKey string
+    Message    *Message
+    Mandatory  bool
+    Immediate  bool
+}
+
+type ConsumeCommand struct {
+    Queue     string
+    Consumer  string
+    AutoAck   bool
+    Exclusive bool
+}
+
+type ReturnMessage struct {
+    Message    *Message
+    ReplyCode  int
+    ReplyText  string
+    Exchange   string
+    RoutingKey string
+}
+
+// 创建RabbitMQ系统
+func NewRabbitMQSystem() *RabbitMQSystem {
+    return &RabbitMQSystem{
+        exchanges: make(map[string]*Exchange),
+        queues:    make(map[string]*Queue),
+        bindings:  make(map[string][]*Binding),
+        channels:  make(map[string]*Channel),
+        vhosts:    make(map[string]*VirtualHost),
+    }
+}
+
+// 创建交换机
+func (rms *RabbitMQSystem) DeclareExchange(name, exchangeType string, durable bool) error {
+    rms.mutex.Lock()
+    defer rms.mutex.Unlock()
+
+    if _, exists := rms.exchanges[name]; exists {
+        return fmt.Errorf("exchange already exists")
+    }
+
+    exchange := &Exchange{
+        Name:     name,
+        Type:     exchangeType,
+        Bindings: make([]*Binding, 0),
+        Durable:  durable,
+    }
+
+    rms.exchanges[name] = exchange
+    return nil
+}
+
+// 创建队列
+func (rms *RabbitMQSystem) DeclareQueue(name string, durable, exclusive, autoDelete bool, args map[string]interface{}) error {
+    rms.mutex.Lock()
+    defer rms.mutex.Unlock()
+
+    if _, exists := rms.queues[name]; exists {
+        return fmt.Errorf("queue already exists")
+    }
+
+    queue := &Queue{
+        Name:       name,
+        Messages:   make(chan *Message, 1000),
+        Consumers:  make([]*Consumer, 0),
+        Durable:    durable,
+        Exclusive:  exclusive,
+        AutoDelete: autoDelete,
+        Arguments:  args,
+    }
+
+    rms.queues[name] = queue
+
+    // 启动队列处理
+    go rms.processQueue(queue)
+
+    return nil
+}
+
+// 绑定队列到交换机
+func (rms *RabbitMQSystem) BindQueue(queueName, exchangeName, routingKey string, headers map[string]interface{}) error {
+    rms.mutex.Lock()
+    defer rms.mutex.Unlock()
+
+    exchange, exists := rms.exchanges[exchangeName]
+    if !exists {
+        return fmt.Errorf("exchange not found")
+    }
+
+    queue, exists := rms.queues[queueName]
+    if !exists {
+        return fmt.Errorf("queue not found")
+    }
+
+    binding := &Binding{
+        Source:      exchangeName,
+        Destination: queueName,
+        RoutingKey:  routingKey,
+        Headers:     headers,
+    }
+
+    exchange.Bindings = append(exchange.Bindings, binding)
+    rms.bindings[exchangeName] = append(rms.bindings[exchangeName], binding)
+
+    return nil
+}
+
+// 发布消息
+func (rms *RabbitMQSystem) Publish(exchangeName, routingKey string, message *Message, mandatory, immediate bool) error {
+    rms.mutex.RLock()
+    defer rms.mutex.RUnlock()
+
+    exchange, exists := rms.exchanges[exchangeName]
+    if !exists {
+        return fmt.Errorf("exchange not found")
+    }
+
+    // 根据交换机类型路由消息
+    switch exchange.Type {
+    case "direct":
+        return rms.routeDirect(exchange, routingKey, message)
+    case "topic":
+        return rms.routeTopic(exchange, routingKey, message)
+    case "fanout":
+        return rms.routeFanout(exchange, message)
+    case "headers":
+        return rms.routeHeaders(exchange, message)
+    default:
+        return fmt.Errorf("unknown exchange type: %s", exchange.Type)
+    }
+}
+
+// Direct交换机路由
+func (rms *RabbitMQSystem) routeDirect(exchange *Exchange, routingKey string, message *Message) error {
+    routed := false
+
+    for _, binding := range exchange.Bindings {
+        if binding.RoutingKey == routingKey {
+            queue := rms.queues[binding.Destination]
+            if queue != nil {
+                queue.Messages <- message
+                routed = true
+            }
+        }
+    }
+
+    if !routed {
+        return fmt.Errorf("no route found for routing key: %s", routingKey)
+    }
+
+    return nil
+}
+
+// Topic交换机路由
+func (rms *RabbitMQSystem) routeTopic(exchange *Exchange, routingKey string, message *Message) error {
+    routed := false
+
+    for _, binding := range exchange.Bindings {
+        if matchTopic(binding.RoutingKey, routingKey) {
+            queue := rms.queues[binding.Destination]
+            if queue != nil {
+                queue.Messages <- message
+                routed = true
+            }
+        }
+    }
+
+    if !routed {
+        return fmt.Errorf("no route found for routing key: %s", routingKey)
+    }
+
+    return nil
+}
+
+// Fanout交换机路由
+func (rms *RabbitMQSystem) routeFanout(exchange *Exchange, message *Message) error {
+    routed := false
+
+    for _, binding := range exchange.Bindings {
+        queue := rms.queues[binding.Destination]
+        if queue != nil {
+            queue.Messages <- message
+            routed = true
+        }
+    }
+
+    if !routed {
+        return fmt.Errorf("no queues bound to exchange")
+    }
+
+    return nil
+}
+
+// Headers交换机路由
+func (rms *RabbitMQSystem) routeHeaders(exchange *Exchange, message *Message) error {
+    routed := false
+
+    for _, binding := range exchange.Bindings {
+        if matchHeaders(binding.Headers, message.Headers) {
+            queue := rms.queues[binding.Destination]
+            if queue != nil {
+                queue.Messages <- message
+                routed = true
+            }
+        }
+    }
+
+    if !routed {
+        return fmt.Errorf("no matching headers found")
+    }
+
+    return nil
+}
+
+// Topic匹配
+func matchTopic(pattern, key string) bool {
+    patternParts := strings.Split(pattern, ".")
+    keyParts := strings.Split(key, ".")
+
+    if len(patternParts) != len(keyParts) {
+        return false
+    }
+
+    for i := 0; i < len(patternParts); i++ {
+        if patternParts[i] == "#" {
+            return true // 通配符匹配
+        }
+        if patternParts[i] != "*" && patternParts[i] != keyParts[i] {
+            return false
+        }
+    }
+
+    return true
+}
+
+// Headers匹配
+func matchHeaders(bindingHeaders, messageHeaders map[string]interface{}) bool {
+    for key, value := range bindingHeaders {
+        msgValue, exists := messageHeaders[key]
+        if !exists || msgValue != value {
+            return false
+        }
+    }
+    return true
+}
+
+// 处理队列消息
+func (rms *RabbitMQSystem) processQueue(queue *Queue) {
+    for msg := range queue.Messages {
+        rms.deliverToConsumers(queue, msg)
+    }
+}
+
+// 传递消息给消费者
+func (rms *RabbitMQSystem) deliverToConsumers(queue *Queue, msg *Message) {
+    for _, consumer := range queue.Consumers {
+        if consumer.Active {
+            go func(c *Consumer, m *Message) {
+                err := c.Handler(m)
+                if err != nil {
+                    log.Printf("Consumer %s error: %v", c.ID, err)
+                    // 处理错误，如重试或死信队列
+                }
+            }(consumer, msg)
+            return // 一个消息只给一个消费者
+        }
+    }
+
+    // 没有消费者，消息留在队列
+}
+```
+
+### 应用模式与架构
+
+#### 1. 事件驱动架构
+
+```go
+// 事件驱动架构实现
+type EventDrivenSystem struct {
+    eventBus    *EventBus
+    eventStore  *EventStore
+    projections map[string]*Projection
+    sagas       map[string]*Saga
+    mutex       sync.RWMutex
+}
+
+type Event struct {
+    ID        string
+    Type      string
+    Data      interface{}
+    Timestamp time.Time
+    Version   int
+    Metadata  map[string]interface{}
+}
+
+type EventHandler interface {
+    Handle(event *Event) error
+    EventType() string
+}
+
+type Projection struct {
+    Name      string
+    Handler   func(*Event) error
+    State     interface{}
+    Position  int64
+}
+
+type Saga struct {
+    ID         string
+    Steps      []*SagaStep
+    CurrentStep int
+    State      map[string]interface{}
+    Data       interface{}
+}
+
+type SagaStep struct {
+    Name        string
+    Action      func() error
+    Compensation func() error
+    EventType   string
+}
+
+// 创建事件驱动系统
+func NewEventDrivenSystem() *EventDrivenSystem {
+    return &EventDrivenSystem{
+        eventBus:    NewEventBus(),
+        eventStore:  NewEventStore(),
+        projections: make(map[string]*Projection),
+        sagas:       make(map[string]*Saga),
+    }
+}
+
+// 发布事件
+func (eds *EventDrivenSystem) PublishEvent(eventType string, data interface{}, metadata map[string]interface{}) error {
+    event := &Event{
+        ID:        generateID(),
+        Type:      eventType,
+        Data:      data,
+        Timestamp: time.Now(),
+        Version:   1,
+        Metadata:  metadata,
+    }
+
+    // 保存到事件存储
+    if err := eds.eventStore.Append(event); err != nil {
+        return err
+    }
+
+    // 发布到事件总线
+    return eds.eventBus.Publish(event)
+}
+
+// 注册事件处理器
+func (eds *EventDrivenSystem) RegisterHandler(handler EventHandler) {
+    eds.eventBus.Subscribe(handler.EventType(), handler.Handle)
+}
+
+// 注册投影
+func (eds *EventDrivenSystem) RegisterProjection(name string, handler func(*Event) error, initialState interface{}) {
+    eds.mutex.Lock()
+    defer eds.mutex.Unlock()
+
+    projection := &Projection{
+        Name:    name,
+        Handler: handler,
+        State:   initialState,
+        Position: 0,
+    }
+
+    eds.projections[name] = projection
+
+    // 启动投影更新
+    go eds.updateProjection(projection)
+}
+
+// 更新投影
+func (eds *EventDrivenSystem) updateProjection(projection *Projection) {
+    ticker := time.NewTicker(time.Second)
+
+    for range ticker.C {
+        events, err := eds.eventStore.GetEvents(projection.Position)
+        if err != nil {
+            log.Printf("Failed to get events for projection %s: %v", projection.Name, err)
+            continue
+        }
+
+        for _, event := range events {
+            if err := projection.Handler(event); err != nil {
+                log.Printf("Projection %s error: %v", projection.Name, err)
+                continue
+            }
+            projection.Position++
+        }
+    }
+}
+
+// 启动Saga
+func (eds *EventDrivenSystem) StartSaga(sagaID string, data interface{}) error {
+    eds.mutex.Lock()
+    defer eds.mutex.Unlock()
+
+    saga, exists := eds.sagas[sagaID]
+    if !exists {
+        return fmt.Errorf("saga not found")
+    }
+
+    saga.Data = data
+    saga.CurrentStep = 0
+
+    // 执行第一步
+    return eds.executeSagaStep(saga)
+}
+
+// 执行Saga步骤
+func (eds *EventDrivenSystem) executeSagaStep(saga *Saga) error {
+    if saga.CurrentStep >= len(saga.Steps) {
+        return nil // Saga完成
+    }
+
+    step := saga.Steps[saga.CurrentStep]
+    err := step.Action()
+    if err != nil {
+        // 执行补偿
+        return eds.compensateSaga(saga)
+    }
+
+    saga.CurrentStep++
+    return nil
+}
+
+// 补偿Saga
+func (eds *EventDrivenSystem) compensateSaga(saga *Saga) error {
+    for i := saga.CurrentStep - 1; i >= 0; i-- {
+        step := saga.Steps[i]
+        if err := step.Compensation(); err != nil {
+            log.Printf("Saga compensation failed at step %d: %v", i, err)
+            return err
+        }
+    }
+    return nil
+}
+
+// 事件总线实现
+type EventBus struct {
+    handlers map[string][]func(*Event) error
+    mutex    sync.RWMutex
+}
+
+func NewEventBus() *EventBus {
+    return &EventBus{
+        handlers: make(map[string][]func(*Event) error),
+    }
+}
+
+func (eb *EventBus) Subscribe(eventType string, handler func(*Event) error) {
+    eb.mutex.Lock()
+    defer eb.mutex.Unlock()
+
+    eb.handlers[eventType] = append(eb.handlers[eventType], handler)
+}
+
+func (eb *EventBus) Publish(event *Event) error {
+    eb.mutex.RLock()
+    defer eb.mutex.RUnlock()
+
+    handlers, exists := eb.handlers[event.Type]
+    if !exists {
+        return nil
+    }
+
+    var wg sync.WaitGroup
+    for _, handler := range handlers {
+        wg.Add(1)
+        go func(h func(*Event) error) {
+            defer wg.Done()
+            if err := h(event); err != nil {
+                log.Printf("Event handler error: %v", err)
+            }
+        }(handler)
+    }
+
+    wg.Wait()
+    return nil
+}
+
+// 事件存储实现
+type EventStore struct {
+    events []*Event
+    mutex  sync.RWMutex
+}
+
+func NewEventStore() *EventStore {
+    return &EventStore{
+        events: make([]*Event, 0),
+    }
+}
+
+func (es *EventStore) Append(event *Event) error {
+    es.mutex.Lock()
+    defer es.mutex.Unlock()
+
+    event.Version = int64(len(es.events)) + 1
+    es.events = append(es.events, event)
+    return nil
+}
+
+func (es *EventStore) GetEvents(position int64) ([]*Event, error) {
+    es.mutex.RLock()
+    defer es.mutex.RUnlock()
+
+    if position >= int64(len(es.events)) {
+        return nil, nil
+    }
+
+    return es.events[position:], nil
+}
+```
+
+#### 2. CQRS 模式
+
+```go
+// CQRS模式实现
+type CQRSSystem struct {
+    commandBus  *CommandBus
+    queryBus    *QueryBus
+    readStore   *ReadStore
+    writeStore  *WriteStore
+    projections map[string]*Projection
+}
+
+type Command struct {
+    ID      string
+    Type    string
+    Data    interface{}
+    Version int
+}
+
+type Query struct {
+    Type  string
+    Data  interface{}
+}
+
+type Result struct {
+    Success bool
+    Data    interface{}
+    Error   string
+}
+
+type CommandHandler interface {
+    Handle(command *Command) error
+    CommandType() string
+}
+
+type QueryHandler interface {
+    Handle(query *Query) (interface{}, error)
+    QueryType() string
+}
+
+// 创建CQRS系统
+func NewCQRSSystem() *CQRSSystem {
+    return &CQRSSystem{
+        commandBus:  NewCommandBus(),
+        queryBus:    NewQueryBus(),
+        readStore:   NewReadStore(),
+        writeStore:  NewWriteStore(),
+        projections: make(map[string]*Projection),
+    }
+}
+
+// 执行命令
+func (cqrs *CQRSSystem) ExecuteCommand(commandType string, data interface{}) error {
+    command := &Command{
+        ID:      generateID(),
+        Type:    commandType,
+        Data:    data,
+        Version: 1,
+    }
+
+    return cqrs.commandBus.Send(command)
+}
+
+// 执行查询
+func (cqrs *CQRSSystem) ExecuteQuery(queryType string, data interface{}) (interface{}, error) {
+    query := &Query{
+        Type: queryType,
+        Data: data,
+    }
+
+    return cqrs.queryBus.Query(query)
+}
+
+// 命令总线实现
+type CommandBus struct {
+    handlers map[string]CommandHandler
+    mutex    sync.RWMutex
+}
+
+func NewCommandBus() *CommandBus {
+    return &CommandBus{
+        handlers: make(map[string]CommandHandler),
+    }
+}
+
+func (cb *CommandBus) Register(handler CommandHandler) {
+    cb.mutex.Lock()
+    defer cb.mutex.Unlock()
+
+    cb.handlers[handler.CommandType()] = handler
+}
+
+func (cb *CommandBus) Send(command *Command) error {
+    cb.mutex.RLock()
+    defer cb.mutex.RUnlock()
+
+    handler, exists := cb.handlers[command.Type]
+    if !exists {
+        return fmt.Errorf("command handler not found: %s", command.Type)
+    }
+
+    return handler.Handle(command)
+}
+
+// 查询总线实现
+type QueryBus struct {
+    handlers map[string]QueryHandler
+    mutex    sync.RWMutex
+}
+
+func NewQueryBus() *QueryBus {
+    return &QueryBus{
+        handlers: make(map[string]QueryHandler),
+    }
+}
+
+func (qb *QueryBus) Register(handler QueryHandler) {
+    qb.mutex.Lock()
+    defer qb.mutex.Unlock()
+
+    qb.handlers[handler.QueryType()] = handler
+}
+
+func (qb *QueryBus) Query(query *Query) (interface{}, error) {
+    qb.mutex.RLock()
+    defer qb.mutex.RUnlock()
+
+    handler, exists := qb.handlers[query.Type]
+    if !exists {
+        return nil, fmt.Errorf("query handler not found: %s", query.Type)
+    }
+
+    return handler.Handle(query)
+}
+
+// 读取存储实现
+type ReadStore struct {
+    data map[string]interface{}
+    mutex sync.RWMutex
+}
+
+func NewReadStore() *ReadStore {
+    return &ReadStore{
+        data: make(map[string]interface{}),
+    }
+}
+
+func (rs *ReadStore) Get(key string) (interface{}, error) {
+    rs.mutex.RLock()
+    defer rs.mutex.RUnlock()
+
+    value, exists := rs.data[key]
+    if !exists {
+        return nil, fmt.Errorf("key not found: %s", key)
+    }
+
+    return value, nil
+}
+
+func (rs *ReadStore) Set(key string, value interface{}) {
+    rs.mutex.Lock()
+    defer rs.mutex.Unlock()
+
+    rs.data[key] = value
+}
+
+func (rs *ReadStore) Query(filter func(interface{}) bool) []interface{} {
+    rs.mutex.RLock()
+    defer rs.mutex.RUnlock()
+
+    var results []interface{}
+    for _, value := range rs.data {
+        if filter(value) {
+            results = append(results, value)
+        }
+    }
+
+    return results
+}
+
+// 写入存储实现
+type WriteStore struct {
+    events []*Event
+    state  map[string]interface{}
+    mutex  sync.RWMutex
+}
+
+func NewWriteStore() *WriteStore {
+    return &WriteStore{
+        events: make([]*Event, 0),
+        state:  make(map[string]interface{}),
+    }
+}
+
+func (ws *WriteStore) ApplyEvent(event *Event) error {
+    ws.mutex.Lock()
+    defer ws.mutex.Unlock()
+
+    // 应用事件到状态
+    switch event.Type {
+    case "UserCreated":
+        ws.state["user:"+event.ID] = event.Data
+    case "UserUpdated":
+        ws.state["user:"+event.ID] = event.Data
+    case "UserDeleted":
+        delete(ws.state, "user:"+event.ID)
+    }
+
+    // 保存事件
+    ws.events = append(ws.events, event)
+    return nil
+}
+
+func (ws *WriteStore) GetState(key string) (interface{}, error) {
+    ws.mutex.RLock()
+    defer ws.mutex.RUnlock()
+
+    value, exists := ws.state[key]
+    if !exists {
+        return nil, fmt.Errorf("key not found: %s", key)
+    }
+
+    return value, nil
+}
+```
+
+### 完整的消息队列系统
+
+```go
+// 完整的消息队列系统
+type MessageQueueSystem struct {
+    queues       map[string]*MessageQueue
+    exchanges    map[string]*Exchange
+    consumers    map[string]*Consumer
+    producers    map[string]*Producer
+    monitor      *Monitor
+    config       *Config
+    logger       *log.Logger
+    mutex        sync.RWMutex
+}
+
+type MessageQueue struct {
+    Name         string
+    Type         string // "queue", "topic"
+    Messages     []*Message
+    Consumers    []*Consumer
+    Durable      bool
+    Exclusive    bool
+    AutoDelete   bool
+    MaxSize      int
+    Retention    time.Duration
+    CreatedAt    time.Time
+    mutex        sync.RWMutex
+}
+
+type Producer struct {
+    ID          string
+    Queue       string
+    Exchange    string
+    Confirm     bool
+    MessageCount int64
+    ErrorCount  int64
+    LastUsed    time.Time
+}
+
+type Consumer struct {
+    ID          string
+    Queue       string
+    Handler     func(*Message) error
+    Prefetch    int
+    AutoAck     bool
+    Exclusive   bool
+    MessageCount int64
+    ErrorCount  int64
+    LastUsed    time.Time
+    Active      bool
+}
+
+type Monitor struct {
+    metrics     *Metrics
+    alerts      []*Alert
+    notifiers   []Notifier
+    running     bool
+}
+
+type Metrics struct {
+    MessageCount    int64
+    MessageRate     float64
+    ConsumerCount   int64
+    ProducerCount   int64
+    QueueSize       map[string]int64
+    ErrorRate       float64
+    LastUpdated     time.Time
+    mutex           sync.RWMutex
+}
+
+type Config struct {
+    DefaultQueueSize   int
+    MaxMessageSize     int64
+    RetentionPeriod   time.Duration
+    MonitorInterval   time.Duration
+    AlertThresholds   map[string]float64
+}
+
+// 创建消息队列系统
+func NewMessageQueueSystem(config *Config) *MessageQueueSystem {
+    mqs := &MessageQueueSystem{
+        queues:    make(map[string]*MessageQueue),
+        exchanges: make(map[string]*Exchange),
+        consumers: make(map[string]*Consumer),
+        producers: make(map[string]*Producer),
+        monitor:   NewMonitor(),
+        config:    config,
+        logger:    log.New(os.Stdout, "[MessageQueue] ", log.LstdFlags),
+    }
+
+    // 启动监控
+    go mqs.startMonitoring()
+
+    return mqs
+}
+
+// 创建队列
+func (mqs *MessageQueueSystem) CreateQueue(name, queueType string, durable, exclusive, autoDelete bool) error {
+    mqs.mutex.Lock()
+    defer mqs.mutex.Unlock()
+
+    if _, exists := mqs.queues[name]; exists {
+        return fmt.Errorf("queue already exists")
+    }
+
+    queue := &MessageQueue{
+        Name:       name,
+        Type:       queueType,
+        Messages:   make([]*Message, 0),
+        Consumers:  make([]*Consumer, 0),
+        Durable:    durable,
+        Exclusive:  exclusive,
+        AutoDelete: autoDelete,
+        MaxSize:    mqs.config.DefaultQueueSize,
+        Retention:  mqs.config.RetentionPeriod,
+        CreatedAt:  time.Now(),
+    }
+
+    mqs.queues[name] = queue
+
+    // 启动队列处理
+    go mqs.processQueue(queue)
+
+    return nil
+}
+
+// 发送消息
+func (mqs *MessageQueueSystem) SendMessage(queueName string, content []byte, headers map[string]string) (string, error) {
+    mqs.mutex.RLock()
+    queue, exists := mqs.queues[queueName]
+    mqs.mutex.RUnlock()
+
+    if !exists {
+        return "", fmt.Errorf("queue not found")
+    }
+
+    message := &Message{
+        ID:        generateID(),
+        Content:   content,
+        Timestamp: time.Now(),
+        Headers:   headers,
+        Attempts:  0,
+    }
+
+    // 检查队列大小限制
+    if len(queue.Messages) >= queue.MaxSize {
+        return "", fmt.Errorf("queue is full")
+    }
+
+    // 添加到队列
+    queue.mutex.Lock()
+    queue.Messages = append(queue.Messages, message)
+    queue.mutex.Unlock()
+
+    // 更新指标
+    mqs.monitor.metrics.mutex.Lock()
+    mqs.monitor.metrics.MessageCount++
+    mqs.monitor.metrics.QueueSize[queueName]++
+    mqs.monitor.metrics.mutex.Unlock()
+
+    return message.ID, nil
+}
+
+// 注册消费者
+func (mqs *MessageQueueSystem) RegisterConsumer(queueName, consumerID string, handler func(*Message) error, prefetch int, autoAck, exclusive bool) error {
+    mqs.mutex.Lock()
+    defer mqs.mutex.Unlock()
+
+    queue, exists := mqs.queues[queueName]
+    if !exists {
+        return fmt.Errorf("queue not found")
+    }
+
+    // 检查独占性
+    if exclusive {
+        for _, consumer := range queue.Consumers {
+            if consumer.Exclusive {
+                return fmt.Errorf("queue already has exclusive consumer")
+            }
+        }
+    }
+
+    consumer := &Consumer{
+        ID:        consumerID,
+        Queue:     queueName,
+        Handler:   handler,
+        Prefetch:  prefetch,
+        AutoAck:   autoAck,
+        Exclusive: exclusive,
+        Active:    true,
+        LastUsed:  time.Now(),
+    }
+
+    queue.Consumers = append(queue.Consumers, consumer)
+    mqs.consumers[consumerID] = consumer
+
+    // 更新指标
+    mqs.monitor.metrics.mutex.Lock()
+    mqs.monitor.metrics.ConsumerCount++
+    mqs.monitor.metrics.mutex.Unlock()
+
+    return nil
+}
+
+// 处理队列消息
+func (mqs *MessageQueueSystem) processQueue(queue *MessageQueue) {
+    ticker := time.NewTicker(time.Millisecond * 100)
+
+    for range ticker.C {
+        mqs.deliverMessages(queue)
+        mqs.cleanupMessages(queue)
+    }
+}
+
+// 传递消息给消费者
+func (mqs *MessageQueueSystem) deliverMessages(queue *MessageQueue) {
+    queue.mutex.Lock()
+    defer queue.mutex.Unlock()
+
+    if len(queue.Messages) == 0 {
+        return
+    }
+
+    for _, consumer := range queue.Consumers {
+        if !consumer.Active {
+            continue
+        }
+
+        // 检查prefetch限制
+        deliveredCount := 0
+        var messagesToDeliver []*Message
+
+        for i := 0; i < len(queue.Messages) && deliveredCount < consumer.Prefetch; i++ {
+            if queue.Messages[i] != nil {
+                messagesToDeliver = append(messagesToDeliver, queue.Messages[i])
+                deliveredCount++
+            }
+        }
+
+        // 异步传递消息
+        for _, msg := range messagesToDeliver {
+            go func(c *Consumer, m *Message) {
+                err := c.Handler(m)
+                mqs.handleDeliveryResult(queue, c, m, err)
+            }(consumer, msg)
+        }
+
+        // 如果有消息被传递，从队列中移除
+        if len(messagesToDeliver) > 0 {
+            mqs.removeMessages(queue, messagesToDeliver)
+        }
+    }
+}
+
+// 处理传递结果
+func (mqs *MessageQueueSystem) handleDeliveryResult(queue *MessageQueue, consumer *Consumer, message *Message, err error) {
+    consumer.LastUsed = time.Now()
+
+    if err == nil {
+        consumer.MessageCount++
+        // 如果自动确认，消息处理成功
+        if consumer.AutoAck {
+            // 消息已经从队列中移除
+        }
+    } else {
+        consumer.ErrorCount++
+        mqs.logger.Printf("Consumer %s error: %v", consumer.ID, err)
+
+        // 重试逻辑
+        message.Attempts++
+        if message.Attempts < 3 {
+            // 重新入队
+            queue.mutex.Lock()
+            queue.Messages = append(queue.Messages, message)
+            queue.mutex.Unlock()
+        } else {
+            // 移到死信队列
+            mqs.moveToDeadLetter(message)
+        }
+    }
+}
+
+// 从队列中移除消息
+func (mqs *MessageQueueSystem) removeMessages(queue *MessageQueue, messages []*Message) {
+    newMessages := make([]*Message, 0)
+    messageMap := make(map[string]bool)
+
+    for _, msg := range messages {
+        messageMap[msg.ID] = true
+    }
+
+    for _, msg := range queue.Messages {
+        if !messageMap[msg.ID] {
+            newMessages = append(newMessages, msg)
+        }
+    }
+
+    queue.Messages = newMessages
+
+    // 更新指标
+    mqs.monitor.metrics.mutex.Lock()
+    mqs.monitor.metrics.QueueSize[queue.Name] = int64(len(queue.Messages))
+    mqs.monitor.metrics.mutex.Unlock()
+}
+
+// 清理过期消息
+func (mqs *MessageQueueSystem) cleanupMessages(queue *MessageQueue) {
+    if queue.Retention == 0 {
+        return
+    }
+
+    queue.mutex.Lock()
+    defer queue.mutex.Unlock()
+
+    now := time.Now()
+    var newMessages []*Message
+
+    for _, msg := range queue.Messages {
+        if now.Sub(msg.Timestamp) <= queue.Retention {
+            newMessages = append(newMessages, msg)
+        }
+    }
+
+    removed := len(queue.Messages) - len(newMessages)
+    if removed > 0 {
+        queue.Messages = newMessages
+        mqs.logger.Printf("Cleaned up %d expired messages from queue %s", removed, queue.Name)
+    }
+}
+
+// 移到死信队列
+func (mqs *MessageQueueSystem) moveToDeadLetter(message *Message) {
+    // 实现死信队列逻辑
+    mqs.logger.Printf("Message %s moved to dead letter queue", message.ID)
+}
+
+// 启动监控
+func (mqs *MessageQueueSystem) startMonitoring() {
+    ticker := time.NewTicker(mqs.config.MonitorInterval)
+
+    for range ticker.C {
+        mqs.collectMetrics()
+        mqs.checkAlerts()
+    }
+}
+
+// 收集指标
+func (mqs *MessageQueueSystem) collectMetrics() {
+    metrics := mqs.monitor.metrics
+
+    metrics.mutex.Lock()
+    defer metrics.mutex.Unlock()
+
+    // 更新队列大小
+    metrics.QueueSize = make(map[string]int64)
+    for name, queue := range mqs.queues {
+        queue.mutex.RLock()
+        metrics.QueueSize[name] = int64(len(queue.Messages))
+        queue.mutex.RUnlock()
+    }
+
+    // 计算消息速率
+    now := time.Now()
+    if !metrics.LastUpdated.IsZero() {
+        duration := now.Sub(metrics.LastUpdated).Seconds()
+        if duration > 0 {
+            metrics.MessageRate = float64(metrics.MessageCount) / duration
+        }
+    }
+
+    metrics.LastUpdated = now
+}
+
+// 检查告警
+func (mqs *MessageQueueSystem) checkAlerts() {
+    metrics := mqs.monitor.metrics
+    metrics.mutex.RLock()
+    defer metrics.mutex.RUnlock()
+
+    // 检查队列大小告警
+    if threshold, exists := mqs.config.AlertThresholds["queue_size"]; exists {
+        for name, size := range metrics.QueueSize {
+            if float64(size) > threshold {
+                alert := &Alert{
+                    Type:      "queue_size",
+                    Message:   fmt.Sprintf("Queue %s size %d exceeds threshold %.0f", name, size, threshold),
+                    Severity:  SeverityWarning,
+                    Timestamp: time.Now(),
+                }
+                mqs.monitor.TriggerAlert(alert)
+            }
+        }
+    }
+
+    // 检查错误率告警
+    if threshold, exists := mqs.config.AlertThresholds["error_rate"]; exists {
+        if metrics.ErrorRate > threshold {
+            alert := &Alert{
+                Type:      "error_rate",
+                Message:   fmt.Sprintf("Error rate %.2f exceeds threshold %.2f", metrics.ErrorRate, threshold),
+                Severity:  SeverityCritical,
+                Timestamp: time.Now(),
+            }
+            mqs.monitor.TriggerAlert(alert)
+        }
+    }
+}
+
+// 监控器实现
+func NewMonitor() *Monitor {
+    return &Monitor{
+        metrics: &Metrics{
+            QueueSize: make(map[string]int64),
+        },
+        alerts:    make([]*Alert, 0),
+        notifiers: make([]Notifier, 0),
+    }
+}
+
+func (m *Monitor) TriggerAlert(alert *Alert) {
+    m.alerts = append(m.alerts, alert)
+
+    // 发送通知
+    for _, notifier := range m.notifiers {
+        go func(n Notifier, a *Alert) {
+            if err := n.Send(a); err != nil {
+                log.Printf("Failed to send alert: %v", err)
+            }
+        }(notifier, alert)
+    }
+}
+
+// 辅助函数
+func generateID() string {
+    return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+```
+
+## 实践项目：构建高吞吐量消息处理系统
+
+### 项目概述
+
+构建一个完整的高吞吐量消息处理系统，支持多种消息模式、可靠性保证和监控功能。
+
+### 系统架构
+
+```
+生产者集群 → 消息代理集群 → 消费者集群
+    ↓           ↓              ↓
+负载均衡    高可用        水平扩展
+    ↓           ↓              ↓
+监控系统 → 指标收集 → 告警通知
+```
+
+### 核心功能实现
+
+```go
+package main
+
+import (
+    "context"
+    "flag"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+)
+
+func main() {
+    // 解析命令行参数
+    var (
+        configPath = flag.String("config", "config.yaml", "Configuration file path")
+        mode       = flag.String("mode", "broker", "Operation mode: broker, producer, consumer")
+        port       = flag.Int("port", 8080, "HTTP server port")
+    )
+    flag.Parse()
+
+    // 加载配置
+    config, err := LoadConfig(*configPath)
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    // 创建消息队列系统
+    mqs := NewMessageQueueSystem(&Config{
+        DefaultQueueSize: config.Queue.DefaultSize,
+        MaxMessageSize:   config.Queue.MaxMessageSize,
+        RetentionPeriod:  config.Queue.RetentionPeriod,
+        MonitorInterval:  config.Monitor.Interval,
+        AlertThresholds:  config.Monitor.Thresholds,
+    })
+
+    // 根据模式启动不同组件
+    switch *mode {
+    case "broker":
+        startBroker(mqs, *port, config)
+    case "producer":
+        startProducer(mqs, config)
+    case "consumer":
+        startConsumer(mqs, config)
+    default:
+        log.Fatalf("Unknown mode: %s", *mode)
+    }
+}
+
+// 启动代理服务
+func startBroker(mqs *MessageQueueSystem, port int, config *Config) {
+    // 创建默认队列
+    if err := mqs.CreateQueue("default", "queue", true, false, false); err != nil {
+        log.Fatalf("Failed to create default queue: %v", err)
+    }
+
+    // 创建HTTP服务器
+    server := &BrokerServer{
+        mqs:   mqs,
+        port:  port,
+        logger: log.New(os.Stdout, "[Broker] ", log.LstdFlags),
+    }
+
+    // 启动服务器
+    go func() {
+        log.Printf("Starting broker server on port %d", port)
+        if err := server.Start(); err != nil {
+            log.Fatalf("Server failed: %v", err)
+        }
+    }()
+
+    // 等待信号
+    waitForShutdown()
+    server.Stop()
+}
+
+// 启动生产者
+func startProducer(mqs *MessageQueueSystem, config *Config) {
+    producer := &Producer{
+        mqs:    mqs,
+        queue:  "default",
+        logger: log.New(os.Stdout, "[Producer] ", log.LstdFlags),
+    }
+
+    // 启动消息生成
+    go producer.Start(config.Producer.Rate)
+
+    // 等待信号
+    waitForShutdown()
+    producer.Stop()
+}
+
+// 启动消费者
+func startConsumer(mqs *MessageQueueSystem, config *Config) {
+    consumer := &Consumer{
+        mqs:    mqs,
+        queue:  "default",
+        logger: log.New(os.Stdout, "[Consumer] ", log.LstdFlags),
+    }
+
+    // 注册消费者
+    if err := mqs.RegisterConsumer("default", "consumer-1", consumer.Handle, 10, true, false); err != nil {
+        log.Fatalf("Failed to register consumer: %v", err)
+    }
+
+    // 等待信号
+    waitForShutdown()
+}
+
+// 等待关闭信号
+func waitForShutdown() {
+    quit := make(chan os.Signal, 1)
+    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+    <-quit
+    log.Println("Shutting down...")
+}
+
+// 代理服务器实现
+type BrokerServer struct {
+    mqs    *MessageQueueSystem
+    port   int
+    server *http.Server
+    logger *log.Logger
+}
+
+// 启动服务器
+func (bs *BrokerServer) Start() error {
+    mux := http.NewServeMux()
+
+    // 注册路由
+    mux.HandleFunc("/queues", bs.handleQueues)
+    mux.HandleFunc("/queues/create", bs.handleCreateQueue)
+    mux.HandleFunc("/queues/{name}/messages", bs.handleMessages)
+    mux.HandleFunc("/queues/{name}/consumers", bs.handleConsumers)
+    mux.HandleFunc("/metrics", bs.handleMetrics)
+
+    bs.server = &http.Server{
+        Addr:    fmt.Sprintf(":%d", bs.port),
+        Handler: bs.withLogging(mux),
+    }
+
+    return bs.server.ListenAndServe()
+}
+
+// 停止服务器
+func (bs *BrokerServer) Stop() {
+    if bs.server != nil {
+        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+        defer cancel()
+        bs.server.Shutdown(ctx)
+    }
+}
+
+// 日志中间件
+func (bs *BrokerServer) withLogging(handler http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        bs.logger.Printf("%s %s", r.Method, r.URL.Path)
+
+        handler.ServeHTTP(w, r)
+
+        duration := time.Since(start)
+        bs.logger.Printf("Request completed in %v", duration)
+    })
+}
+
+// 处理队列列表
+func (bs *BrokerServer) handleQueues(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    var queues []map[string]interface{}
+    for name, queue := range bs.mqs.queues {
+        queue.mutex.RLock()
+        queues = append(queues, map[string]interface{}{
+            "name":      name,
+            "type":      queue.Type,
+            "size":      len(queue.Messages),
+            "durable":   queue.Durable,
+            "consumers": len(queue.Consumers),
+        })
+        queue.mutex.RUnlock()
+    }
+
+    json.NewEncoder(w).Encode(queues)
+}
+
+// 处理创建队列
+func (bs *BrokerServer) handleCreateQueue(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    var req struct {
+        Name       string `json:"name"`
+        Type       string `json:"type"`
+        Durable    bool   `json:"durable"`
+        Exclusive  bool   `json:"exclusive"`
+        AutoDelete bool   `json:"auto_delete"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+
+    if err := bs.mqs.CreateQueue(req.Name, req.Type, req.Durable, req.Exclusive, req.AutoDelete); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"status": "created"})
+}
+
+// 处理消息
+func (bs *BrokerServer) handleMessages(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    queueName := vars["name"]
+
+    switch r.Method {
+    case http.MethodPost:
+        bs.handleSendMessage(w, r, queueName)
+    case http.MethodGet:
+        bs.handleGetMessages(w, r, queueName)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+// 处理发送消息
+func (bs *BrokerServer) handleSendMessage(w http.ResponseWriter, r *http.Request, queueName string) {
+    var req struct {
+        Content []byte            `json:"content"`
+        Headers map[string]string `json:"headers"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+
+    messageID, err := bs.mqs.SendMessage(queueName, req.Content, req.Headers)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    json.NewEncoder(w).Encode(map[string]string{"message_id": messageID})
+}
+
+// 处理获取消息
+func (bs *BrokerServer) handleGetMessages(w http.ResponseWriter, r *http.Request, queueName string) {
+    // 实现获取消息的逻辑
+    json.NewEncoder(w).Encode([]string{})
+}
+
+// 处理消费者
+func (bs *BrokerServer) handleConsumers(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    queueName := vars["name"]
+
+    switch r.Method {
+    case http.MethodPost:
+        bs.handleRegisterConsumer(w, r, queueName)
+    default:
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+    }
+}
+
+// 处理注册消费者
+func (bs *BrokerServer) handleRegisterConsumer(w http.ResponseWriter, r *http.Request, queueName string) {
+    var req struct {
+        ConsumerID string `json:"consumer_id"`
+        Prefetch    int    `json:"prefetch"`
+        AutoAck     bool   `json:"auto_ack"`
+        Exclusive   bool   `json:"exclusive"`
+    }
+
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request body", http.StatusBadRequest)
+        return
+    }
+
+    handler := func(msg *Message) error {
+        // 这里可以实现消息处理逻辑
+        log.Printf("Processing message: %s", msg.ID)
+        return nil
+    }
+
+    if err := bs.mqs.RegisterConsumer(queueName, req.ConsumerID, handler, req.Prefetch, req.AutoAck, req.Exclusive); err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
+}
+
+// 处理指标
+func (bs *BrokerServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
+    metrics := bs.mqs.monitor.metrics
+    metrics.mutex.RLock()
+    defer metrics.mutex.RUnlock()
+
+    json.NewEncoder(w).Encode(metrics)
+}
+
+// 生产者实现
+type Producer struct {
+    mqs    *MessageQueueSystem
+    queue  string
+    stop   chan struct{}
+    logger *log.Logger
+}
+
+// 启动生产者
+func (p *Producer) Start(rate int) {
+    p.stop = make(chan struct{})
+    ticker := time.NewTicker(time.Second / time.Duration(rate))
+
+    for {
+        select {
+        case <-ticker.C:
+            p.produceMessage()
+        case <-p.stop:
+            ticker.Stop()
+            return
+        }
+    }
+}
+
+// 停止生产者
+func (p *Producer) Stop() {
+    close(p.stop)
+}
+
+// 生产消息
+func (p *Producer) produceMessage() {
+    message := fmt.Sprintf("Message at %s", time.Now().Format(time.RFC3339))
+    headers := map[string]string{
+        "producer":    "example-producer",
+        "timestamp":   time.Now().Format(time.RFC3339),
+        "message_id":  generateID(),
+    }
+
+    _, err := p.mqs.SendMessage(p.queue, []byte(message), headers)
+    if err != nil {
+        p.logger.Printf("Failed to send message: %v", err)
+    }
+}
+
+// 消费者实现
+type Consumer struct {
+    mqs    *MessageQueueSystem
+    queue  string
+    logger *log.Logger
+}
+
+// 处理消息
+func (c *Consumer) Handle(msg *Message) error {
+    c.logger.Printf("Received message: %s", string(msg.Content))
+    return nil
+}
+
+// 配置结构
+type Config struct {
+    Queue struct {
+        DefaultSize  int           `yaml:"default_size"`
+        MaxMessageSize int64      `yaml:"max_message_size"`
+        RetentionPeriod time.Duration `yaml:"retention_period"`
+    } `yaml:"queue"`
+
+    Producer struct {
+        Rate int `yaml:"rate"`
+    } `yaml:"producer"`
+
+    Monitor struct {
+        Interval     time.Duration        `yaml:"interval"`
+        Thresholds   map[string]float64 `yaml:"thresholds"`
+    } `yaml:"monitor"`
+}
+
+// 加载配置
+func LoadConfig(path string) (*Config, error) {
+    data, err := os.ReadFile(path)
+    if err != nil {
+        return nil, err
+    }
+
+    var config Config
+    if err := yaml.Unmarshal(data, &config); err != nil {
+        return nil, err
+    }
+
+    return &config, nil
+}
+```
+
+### 测试用例
+
+```go
+package mq
+
+import (
+    "testing"
+    "time"
+)
+
+func TestMessageQueueSystem(t *testing.T) {
+    config := &Config{
+        DefaultQueueSize: 1000,
+        MaxMessageSize:   1024 * 1024,
+        RetentionPeriod: time.Hour,
+        MonitorInterval: time.Second,
+        AlertThresholds: map[string]float64{
+            "queue_size": 1000,
+            "error_rate": 0.1,
+        },
+    }
+
+    mqs := NewMessageQueueSystem(config)
+
+    // 创建队列
+    err := mqs.CreateQueue("test", "queue", true, false, false)
+    if err != nil {
+        t.Errorf("Failed to create queue: %v", err)
+    }
+
+    // 发送消息
+    messageID, err := mqs.SendMessage("test", []byte("test message"), nil)
+    if err != nil {
+        t.Errorf("Failed to send message: %v", err)
+    }
+    if messageID == "" {
+        t.Error("Message ID should not be empty")
+    }
+
+    // 注册消费者
+    received := make(chan string, 1)
+    handler := func(msg *Message) error {
+        received <- string(msg.Content)
+        return nil
+    }
+
+    err = mqs.RegisterConsumer("test", "test-consumer", handler, 1, true, false)
+    if err != nil {
+        t.Errorf("Failed to register consumer: %v", err)
+    }
+
+    // 等待消息处理
+    select {
+    case content := <-received:
+        if content != "test message" {
+            t.Errorf("Expected 'test message', got '%s'", content)
+        }
+    case <-time.After(5 * time.Second):
+        t.Error("Timeout waiting for message")
+    }
+}
+
+func TestPubSubSystem(t *testing.T) {
+    pubSub := NewPubSub(NewMemoryStorage())
+
+    // 创建主题
+    err := pubSub.CreateTopic("test-topic", 100)
+    if err != nil {
+        t.Errorf("Failed to create topic: %v", err)
+    }
+
+    // 订阅主题
+    received := make(chan string, 1)
+    handler := func(msg *Message) error {
+        received <- string(msg.Content)
+        return nil
+    }
+
+    err = pubSub.Subscribe("test-topic", "test-subscriber", handler, nil)
+    if err != nil {
+        t.Errorf("Failed to subscribe: %v", err)
+    }
+
+    // 发布消息
+    _, err = pubSub.Publish("test-topic", []byte("test message"), nil)
+    if err != nil {
+        t.Errorf("Failed to publish message: %v", err)
+    }
+
+    // 等待消息
+    select {
+    case content := <-received:
+        if content != "test message" {
+            t.Errorf("Expected 'test message', got '%s'", content)
+        }
+    case <-time.After(5 * time.Second):
+        t.Error("Timeout waiting for message")
+    }
+}
+
+func TestEventDrivenSystem(t *testing.T) {
+    eds := NewEventDrivenSystem()
+
+    // 注册事件处理器
+    received := make(chan string, 1)
+    handler := func(event *Event) error {
+        received <- event.Type
+        return nil
+    }
+
+    eds.RegisterHandler(&TestEventHandler{handler: handler})
+
+    // 发布事件
+    err := eds.PublishEvent("test-event", "test-data", nil)
+    if err != nil {
+        t.Errorf("Failed to publish event: %v", err)
+    }
+
+    // 等待事件处理
+    select {
+    case eventType := <-received:
+        if eventType != "test-event" {
+            t.Errorf("Expected 'test-event', got '%s'", eventType)
+        }
+    case <-time.After(5 * time.Second):
+        t.Error("Timeout waiting for event")
+    }
+}
+
+// 测试事件处理器
+type TestEventHandler struct {
+    handler func(*Event) error
+}
+
+func (h *TestEventHandler) Handle(event *Event) error {
+    return h.handler(event)
+}
+
+func (h *TestEventHandler) EventType() string {
+    return "test-event"
+}
+
+func TestCQRSSystem(t *testing.T) {
+    cqrs := NewCQRSSystem()
+
+    // 注册命令处理器
+    cqrs.commandBus.Register(&TestCommandHandler{})
+
+    // 注册查询处理器
+    cqrs.queryBus.Register(&TestQueryHandler{})
+
+    // 执行命令
+    err := cqrs.ExecuteCommand("test-command", "test-data")
+    if err != nil {
+        t.Errorf("Failed to execute command: %v", err)
+    }
+
+    // 执行查询
+    result, err := cqrs.ExecuteQuery("test-query", "test-data")
+    if err != nil {
+        t.Errorf("Failed to execute query: %v", err)
+    }
+
+    if result != "test-result" {
+        t.Errorf("Expected 'test-result', got '%v'", result)
+    }
+}
+
+// 测试命令处理器
+type TestCommandHandler struct{}
+
+func (h *TestCommandHandler) Handle(command *Command) error {
+    return nil
+}
+
+func (h *TestCommandHandler) CommandType() string {
+    return "test-command"
+}
+
+// 测试查询处理器
+type TestQueryHandler struct{}
+
+func (h *TestQueryHandler) Handle(query *Query) (interface{}, error) {
+    return "test-result", nil
+}
+
+func (h *TestQueryHandler) QueryType() string {
+    return "test-query"
+}
+```
+
+## 练习题
+
+### 概念题
+
+1. **消息模式比较**：比较点对点、发布订阅和请求回复模式的区别和适用场景。
+
+2. **可靠性保证**：分析消息队列的可靠性机制，包括持久化、重试和死信队列。
+
+3. **事件驱动架构**：解释事件驱动架构的优势和挑战。
+
+4. **CQRS模式**：讨论CQRS模式在读写分离场景下的应用。
+
+### 编程题
+
+1. **实现Kafka消费者组**：完成支持消费者组的Kafka风格消费者实现。
+
+2. **构建事件溯源系统**：实现基于事件溯源的数据存储和查询系统。
+
+3. **实现消息路由**：构建支持复杂路由规则的消息路由器。
+
+4. **优化消息性能**：针对高吞吐量场景优化消息处理性能。
+
+### 设计题
+
+1. **大规模消息架构**：设计支持百万级QPS的消息系统架构。
+
+2. **跨地域消息同步**：设计支持跨地域部署的消息同步方案。
+
+3. **消息安全传输**：设计端到端加密的消息传输机制。
+
+4. **消息监控告警**：设计完整的消息系统监控和告警体系。
+
+## 常见问题
+
+### Q: 如何选择合适的消息队列模式？
+
+A: 根据业务需求选择：
+- **点对点**：需要负载均衡和任务分发
+- **发布订阅**：需要广播和事件通知
+- **请求回复**：需要同步响应和结果确认
+
+### Q: 消息队列如何保证 Exactly-Once 语义？
+
+A: 多种技术结合：
+- **幂等性**：消费者实现幂等处理
+- **去重机制**：基于消息ID去重
+- **事务消息**：保证生产者和消费者的一致性
+- **确认机制**：明确的消息确认和重试策略
+
+### Q: 如何处理消息积压问题？
+
+A: 多层次解决方案：
+- **消费者扩展**：增加消费者实例
+- **批量处理**：消费者批量处理消息
+- **优先级队列**：重要消息优先处理
+- **限流机制**：控制消息生产速率
+
+### Q: 消息队列的监控指标有哪些？
+
+A: 关键监控指标：
+- **吞吐量**：消息发送和接收速率
+- **延迟**：消息端到端延迟
+- **积压**：队列中未处理消息数量
+- **错误率**：消息处理失败率
+- **可用性**：系统健康状态
+
+## 扩展资源
+
+### 必读论文
+
+1. **[MapReduce: Simplified Data Processing on Large Clusters](https://research.google.com/archive/mapreduce.html)** - Google的分布式计算模型
+2. **[The Log-Structured Merge-Tree (LSM-Tree)](https://www.cs.umb.edu/~poneil/lsmtree.pdf)** - LSM树数据结构
+3. **[Time, Clocks, and the Ordering of Events in a Distributed System](https://lamport.azurewebsites.net/pubs/time-clocks.pdf)** - 分布式系统事件顺序
+
+### 实践项目
+
+1. **[Apache Kafka](https://kafka.apache.org/)** - 分布式流处理平台
+2. **[RabbitMQ](https://www.rabbitmq.com/)** - 企业级消息代理
+3. **[Apache Pulsar](https://pulsar.apache.org/)** - 云原生分布式消息平台
+4. **[NATS](https://nats.io/)** - 轻量级消息系统
+
+### 在线课程
+
+1. **[Distributed Messaging Systems](https://www.coursera.org/learn/distributed-messaging)** - 分布式消息系统课程
+2. **[Event-Driven Architecture](https://www.udacity.com/course/event-driven-architecture)** - 事件驱动架构
+3. **[Kafka Streams](https://kafka.apache.org/streams/)** - Kafka流处理教程
+
+## 下一步学习
+
+在完成本课程后，你应该继续：
+
+1. **深入研究**：特定消息队列系统的源码实现
+2. **流处理**：学习Kafka Streams、Flink等流处理框架
+3. **事件溯源**：深入理解事件溯源和CQRS模式
+4. **云原生**：学习Kubernetes上的消息系统部署
+
+---
+
+*消息队列是构建现代分布式系统的关键基础设施。通过掌握不同的消息模式、可靠性机制和应用架构，你可以设计出高性能、可扩展且可靠的消息系统，为企业的数字化转型提供强有力的支撑。*

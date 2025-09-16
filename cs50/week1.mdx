@@ -1,0 +1,526 @@
+---
+title: "Week 1 - C语言基础"
+description: "CS50第1周（2025版本）：学习C语言编程基础，包括变量、数据类型、条件语句、循环和函数"
+---
+
+# Week 1 - C语言基础
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/89cbCbWrM4U?screen=xYu0YclZ_hI" title="CS50 2025 - Week 1" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+
+## 本周内容
+
+- **C语言基础**：编译、运行、基本语法
+- **数据类型**：int, float, double, char, bool, string, long
+- **变量和常量**：声明、初始化、作用域
+- **输入输出**：printf, scanf, cs50.h库函数
+- **条件语句**：if-else, switch-case
+- **循环结构**：for, while, do-while
+- **函数**：定义、调用、参数、返回值
+- **代码风格**：注释、缩进、命名规范
+
+## C语言开发环境
+
+### 基本工作流程
+
+C语言开发的基本流程：
+1. **编写代码**：使用文本编辑器创建`.c`文件
+2. **编译代码**：使用`make`命令编译
+3. **运行程序**：使用`./程序名`执行
+
+**示例命令：**
+```bash
+code hello.c    # 使用VS Code编辑器打开文件
+make hello      # 编译hello.c文件
+./hello        # 运行编译后的程序
+```
+
+![VS Code IDE界面](https://cs50.harvard.edu/x/notes/1/cs50Week1Slide017.png)
+
+上图展示了完整的开发环境：文件浏览器、代码编辑器和终端窗口。
+
+## 核心概念
+
+### C语言简介
+
+**C语言特点**：
+- **结构化语言**：代码组织清晰
+- **高效性**：接近硬件的执行效率
+- **可移植性**：可以在不同平台上运行
+- **影响力**：很多现代语言都受C语言影响
+
+### 基本语法
+
+#### Hello World程序
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    // 输出 Hello, World!
+    printf("Hello, World!\n");
+
+    return 0;
+}
+```
+
+#### 程序结构解析
+
+```c
+#include <stdio.h>      // 包含标准输入输出库
+
+int main(void) {       // 主函数，程序入口点
+    printf("Hello!\n"); // 输出函数
+    return 0;          // 返回0表示程序成功执行
+}
+```
+
+### 变量和数据类型
+
+#### 基本数据类型
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    // 整数类型
+    int age = 20;
+    long big_number = 1234567890L;
+    short small_number = 123;
+
+    // 浮点数类型
+    float height = 175.5f;
+    double price = 19.99;
+
+    // 字符类型
+    char grade = 'A';
+    char initial = 'J';
+
+    // 输出变量
+    printf("年龄: %d 岁\n", age);
+    printf("身高: %.1f cm\n", height);
+    printf("成绩等级: %c\n", grade);
+
+    return 0;
+}
+```
+
+#### 格式化输出
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int score = 85;
+    float pi = 3.14159;
+    char name[] = "张三";
+
+    printf("%s 的成绩是 %d 分\n", name, score);
+    printf "圆周率约为 %.2f\n", pi);
+    printf("用科学计数法表示: %e\n", pi);
+
+    return 0;
+}
+```
+
+### 条件语句
+
+#### if-else语句
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int score = 85;
+
+    if (score >= 90) {
+        printf("优秀！\n");
+    } else if (score >= 80) {
+        printf("良好！\n");
+    } else if (score >= 60) {
+        printf("及格！\n");
+    } else {
+        printf("需要努力！\n");
+    }
+
+    return 0;
+}
+```
+
+#### switch语句
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    char grade = 'B';
+
+    switch (grade) {
+        case 'A':
+            printf("优秀\n");
+            break;
+        case 'B':
+            printf("良好\n");
+            break;
+        case 'C':
+            printf("及格\n");
+            break;
+        default:
+            printf("需要努力\n");
+    }
+
+    return 0;
+}
+```
+
+### 循环结构
+
+#### for循环
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    // 打印1到10
+    printf("使用for循环打印1-10:\n");
+    for (int i = 1; i <= 10; i++) {
+        printf("%d ", i);
+    }
+    printf("\n");
+
+    // 计算1到100的和
+    int sum = 0;
+    for (int i = 1; i <= 100; i++) {
+        sum += i;
+    }
+    printf("1到100的和是：%d\n", sum);
+
+    return 0;
+}
+```
+
+#### while循环
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    // 倒计时
+    int countdown = 5;
+
+    printf("倒计时开始:\n");
+    while (countdown > 0) {
+        printf("%d\n", countdown);
+        countdown--;
+    }
+    printf("发射！\n");
+
+    return 0;
+}
+```
+
+#### do-while循环
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int number;
+    int sum = 0;
+
+    do {
+        printf("请输入一个数字（输入0结束）: ");
+        scanf("%d", &number);
+        sum += number;
+    } while (number != 0);
+
+    printf("所有数字的和是：%d\n", sum);
+
+    return 0;
+}
+```
+
+### 综合示例
+
+#### Mario问题示例
+
+CS50课程中的经典案例：使用循环打印类似Mario游戏中的砖块图案。
+
+![Mario问号方块](https://cs50.harvard.edu/x/notes/1/cs50Week1Slide123.png)
+
+这是Mario游戏中的问号方块，我们需要用循环来模拟类似的图案。
+
+![Mario砖块](https://cs50.harvard.edu/x/notes/1/cs50Week1Slide125.png)
+
+垂直排列的砖块可以用简单的循环实现。
+
+![Mario网格](https://cs50.harvard.edu/x/notes/1/cs50Week1Slide127.png)
+
+二维网格则需要嵌套循环来实现。
+
+#### 简单计算器
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    char operator;
+    double num1, num2, result;
+
+    printf("请输入第一个数字: ");
+    scanf("%lf", &num1);
+
+    printf("请输入运算符 (+, -, *, /): ");
+    scanf(" %c", &operator);  // 注意空格，避免读取之前的回车
+
+    printf("请输入第二个数字: ");
+    scanf("%lf", &num2);
+
+    switch (operator) {
+        case '+':
+            result = num1 + num2;
+            printf("%.2lf + %.2lf = %.2lf\n", num1, num2, result);
+            break;
+        case '-':
+            result = num1 - num2;
+            printf("%.2lf - %.2lf = %.2lf\n", num1, num2, result);
+            break;
+        case '*':
+            result = num1 * num2;
+            printf("%.2lf * %.2lf = %.2lf\n", num1, num2, result);
+            break;
+        case '/':
+            if (num2 != 0) {
+                result = num1 / num2;
+                printf("%.2lf / %.2lf = %.2lf\n", num1, num2, result);
+            } else {
+                printf("错误：除数不能为0\n");
+            }
+            break;
+        default:
+            printf("错误：无效的运算符\n");
+    }
+
+    return 0;
+}
+```
+
+#### 成绩等级判断
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    int score;
+    char grade;
+
+    printf("请输入学生成绩 (0-100): ");
+    scanf("%d", &score);
+
+    if (score < 0 || score > 100) {
+        printf("错误：成绩必须在0-100之间\n");
+    } else {
+        if (score >= 90) {
+            grade = 'A';
+        } else if (score >= 80) {
+            grade = 'B';
+        } else if (score >= 70) {
+            grade = 'C';
+        } else if (score >= 60) {
+            grade = 'D';
+        } else {
+            grade = 'F';
+        }
+
+        printf("成绩等级: %c\n", grade);
+
+        switch (grade) {
+            case 'A':
+                printf("优秀！继续努力！\n");
+                break;
+            case 'B':
+                printf("良好！还有提升空间。\n");
+                break;
+            case 'C':
+                printf("及格。需要更多练习。\n");
+                break;
+            case 'D':
+                printf("勉强及格。要加油了！\n");
+                break;
+            case 'F':
+                printf("不及格。请寻求帮助。\n");
+                break;
+        }
+    }
+
+    return 0;
+}
+```
+
+## 练习题与答案
+
+### 1. 基础练习
+
+**问题：** 编写一个程序，打印九九乘法表。
+
+**答案：**
+```c
+#include <stdio.h>
+
+int main(void) {
+    printf("九九乘法表：\n");
+    printf("   ");
+    for (int i = 1; i <= 9; i++) {
+        printf("%4d", i);
+    }
+    printf("\n");
+
+    for (int i = 1; i <= 9; i++) {
+        printf("%2d ", i);
+        for (int j = 1; j <= 9; j++) {
+            printf("%4d", i * j);
+        }
+        printf("\n");
+    }
+
+    return 0;
+}
+```
+
+### 2. 循环练习
+
+**问题：** 编写一个程序，找出1-100之间的所有素数。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdbool.h>
+
+bool isPrime(int n) {
+    if (n <= 1) return false;
+    if (n == 2) return true;
+    if (n % 2 == 0) return false;
+
+    for (int i = 3; i * i <= n; i += 2) {
+        if (n % i == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int main(void) {
+    printf("1-100之间的素数有：\n");
+
+    for (int i = 2; i <= 100; i++) {
+        if (isPrime(i)) {
+            printf("%d ", i);
+        }
+    }
+    printf("\n");
+
+    return 0;
+}
+```
+
+### 3. 综合练习
+
+**问题：** 编写一个简单的猜数字游戏，电脑随机生成一个1-100的数字，用户来猜。
+
+**答案：**
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+int main(void) {
+    // 初始化随机数种子
+    srand(time(NULL));
+
+    // 生成1-100的随机数
+    int target = rand() % 100 + 1;
+    int guess;
+    int attempts = 0;
+
+    printf("猜数字游戏！我已经想好了一个1-100之间的数字。\n");
+
+    do {
+        printf("请输入你的猜测: ");
+        scanf("%d", &guess);
+        attempts++;
+
+        if (guess < target) {
+            printf("太小了！再试一次。\n");
+        } else if (guess > target) {
+            printf("太大了！再试一次。\n");
+        } else {
+            printf("恭喜你！你猜对了！\n");
+            printf("你用了%d次猜测。\n", attempts);
+        }
+    } while (guess != target);
+
+    return 0;
+}
+```
+
+### 4. 编程挑战
+
+**问题：** 使用循环打印一个由#号组成的三角形图案。
+
+**答案：**
+```c
+#include <stdio.h>
+
+int main(void) {
+    int size;
+
+    printf("请输入三角形的大小: ");
+    scanf("%d", &size);
+
+    for (int i = 1; i <= size; i++) {
+        // 打印空格
+        for (int j = 1; j <= size - i; j++) {
+            printf(" ");
+        }
+        // 打印#号
+        for (int j = 1; j <= 2 * i - 1; j++) {
+            printf("#");
+        }
+        printf("\n");
+    }
+
+    return 0;
+}
+```
+
+## 学习建议
+
+1. **理解概念**：确保理解变量、数据类型、条件语句和循环
+2. **动手编程**：使用在线编译器运行所有示例
+3. **练习编程**：完成所有练习题
+4. **调试技能**：学会查找和修复代码错误
+
+## 扩展资源
+
+- [C语言教程](https://www.runoob.com/cprogramming/c-tutorial.html)
+- [C语言参考手册](https://zh.cppreference.com/w/c)
+- [编程练习网站](https://www.hackerrank.com/domains/c)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Week 2: 数组和字符串" icon="arrow-right" href="./week2">
+    学习数组和字符串处理
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到CS50主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜你掌握了C语言的基础！现在你已经可以编写简单的程序了。下一周我们将学习更复杂的数据结构。*

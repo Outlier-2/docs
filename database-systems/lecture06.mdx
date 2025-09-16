@@ -1,0 +1,1144 @@
+---
+title: "Lecture 6: 内存管理"
+description: "CMU 15-445 Lecture 6 - 缓冲池管理、替换策略、内存分配、性能优化"
+---
+
+# Lecture 6: 内存管理
+
+## 缓冲池管理概述
+
+### 缓冲池的作用
+
+缓冲池是数据库系统中内存管理的核心组件，负责：
+
+1. **减少磁盘I/O**：将频繁访问的页面缓存在内存中
+2. **提高并发性**：支持多个事务同时访问不同页面
+3. **保证数据一致性**：管理脏页面的写回时机
+4. **优化内存使用**：智能地选择要替换的页面
+
+### 缓冲池架构
+```
+应用程序
+    ↓
+查询处理器
+    ↓
+缓冲池管理器 ──→ 缓冲池（页面数组）
+    │           ├── 脏页面队列
+    │           ├── LRU列表
+    │           └── 空闲列表
+    ↓
+磁盘管理器
+```
+
+## 高级缓冲池实现
+
+### 多缓冲池策略
+
+#### 分区缓冲池
+```cpp
+class PartitionedBufferPool {
+private:
+    struct BufferPoolPartition {
+        vector<Page*> pages;
+        unique_ptr<Replacer> replacer;
+        unordered_map<PageId, size_t> page_table;
+        mutex partition_mutex;
+    };
+
+    vector<unique_ptr<BufferPoolPartition>> partitions;
+    size_t partition_count;
+    HashFunction hash_function;
+
+public:
+    PartitionedBufferPool(size_t total_size, size_t partition_count)
+        : partition_count(partition_count) {
+        size_t partition_size = total_size / partition_count;
+
+        for (size_t i = 0; i < partition_count; i++) {
+            auto partition = make_unique<BufferPoolPartition>();
+            partition->pages.resize(partition_size);
+            partition->replacer = make_unique<LRUKReplacer>(partition_size, 2);
+            partitions.push_back(move(partition));
+        }
+    }
+
+    Page* fetch_page(PageId page_id) {
+        size_t partition_idx = get_partition_index(page_id);
+        BufferPoolPartition& partition = *partitions[partition_idx];
+
+        lock_guard<mutex> lock(partition.partition_mutex);
+
+        // 检查页面是否已在分区中
+        if (partition.page_table.find(page_id) != partition.page_table.end()) {
+            size_t frame_id = partition.page_table[page_id];
+            partition.replacer->pin(frame_id);
+            return partition.pages[frame_id];
+        }
+
+        // 页面不在分区中，需要从磁盘读取
+        size_t frame_id = find_free_frame(partition);
+        if (frame_id == INVALID_FRAME_ID) {
+            return nullptr;
+        }
+
+        // 从磁盘读取页面
+        disk_manager->read_page(page_id, partition.pages[frame_id]->data());
+
+        // 更新页面表和替换器
+        partition.page_table[page_id] = frame_id;
+        partition.replacer->pin(frame_id);
+
+        return partition.pages[frame_id];
+    }
+
+private:
+    size_t get_partition_index(PageId page_id) {
+        uint32_t hash = hash_function(page_id);
+        return hash % partition_count;
+    }
+
+    size_t find_free_frame(BufferPoolPartition& partition) {
+        // 查找空闲帧
+        for (size_t i = 0; i < partition.pages.size(); i++) {
+            if (partition.pages[i]->pin_count() == 0) {
+                return i;
+            }
+        }
+
+        // 没有空闲帧，尝试替换
+        size_t victim_frame;
+        if (partition.replacer->victim(&victim_frame)) {
+            // 检查是否需要写回磁盘
+            if (partition.pages[victim_frame]->is_dirty()) {
+                PageId old_page_id = find_page_id(partition, victim_frame);
+                disk_manager->write_page(old_page_id, partition.pages[victim_frame]->data());
+            }
+
+            // 从页面表中移除
+            remove_from_page_table(partition, victim_frame);
+
+            return victim_frame;
+        }
+
+        return INVALID_FRAME_ID;
+    }
+};
+```
+
+### 预取策略实现
+
+#### 顺序预取
+```cpp
+class SequentialPrefetcher {
+private:
+    struct PrefetchQueue {
+        queue<PageId> pages_to_prefetch;
+        mutex queue_mutex;
+        condition_variable cv;
+    };
+
+    PrefetchQueue prefetch_queue;
+    atomic<bool> should_stop;
+    thread prefetch_thread;
+    int prefetch_distance;
+    unordered_set<PageId> recently_prefetched;
+
+public:
+    SequentialPrefetcher(int distance = 4) : prefetch_distance(distance), should_stop(false) {
+        prefetch_thread = thread(&SequentialPrefetcher::prefetch_worker, this);
+    }
+
+    ~SequentialPrefetcher() {
+        should_stop = true;
+        prefetch_queue.cv.notify_all();
+        if (prefetch_thread.joinable()) {
+            prefetch_thread.join();
+        }
+    }
+
+    void on_page_access(PageId page_id) {
+        // 预测并预取后续页面
+        for (int i = 1; i <= prefetch_distance; i++) {
+            PageId next_page = predict_next_page(page_id, i);
+            if (should_prefetch(next_page)) {
+                add_to_prefetch_queue(next_page);
+            }
+        }
+    }
+
+private:
+    void prefetch_worker() {
+        while (!should_stop) {
+            unique_lock<mutex> lock(prefetch_queue.queue_mutex);
+            prefetch_queue.cv.wait(lock, [this] {
+                return !prefetch_queue.pages_to_prefetch.empty() || should_stop;
+            });
+
+            if (should_stop) break;
+
+            if (!prefetch_queue.pages_to_prefetch.empty()) {
+                PageId page_id = prefetch_queue.pages_to_prefetch.front();
+                prefetch_queue.pages_to_prefetch.pop();
+                lock.unlock();
+
+                execute_prefetch(page_id);
+
+                // 更新预取记录
+                lock.lock();
+                recently_prefetched.insert(page_id);
+                if (recently_prefetched.size() > 100) {
+                    // 限制记录大小
+                    recently_prefetched.erase(recently_prefetched.begin());
+                }
+                lock.unlock();
+            }
+        }
+    }
+
+    PageId predict_next_page(PageId current_page, int offset) {
+        // 简单的线性预测
+        return PageId(current_page.file_id, current_page.page_num + offset);
+    }
+
+    bool should_prefetch(PageId page_id) {
+        // 检查是否已经预取过
+        if (recently_prefetched.find(page_id) != recently_prefetched.end()) {
+            return false;
+        }
+
+        // 检查是否已经在缓冲池中
+        if (buffer_pool_manager->is_page_present(page_id)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    void add_to_prefetch_queue(PageId page_id) {
+        lock_guard<mutex> lock(prefetch_queue.queue_mutex);
+        prefetch_queue.pages_to_prefetch.push(page_id);
+        prefetch_queue.cv.notify_one();
+    }
+
+    void execute_prefetch(PageId page_id) {
+        // 异步预取页面
+        buffer_pool_manager->prefetch_page(page_id);
+    }
+};
+```
+
+## 替换算法优化
+
+### LRU-K替换算法
+
+#### LRU-K实现
+```cpp
+class LRUKReplacer {
+private:
+    struct HistoryEntry {
+        size_t last_k_accesses[8];  // 存储最后K次访问时间
+        size_t access_count;        // 访问次数
+        size_t current_index;       // 当前访问历史索引
+        bool is_pinned;             // 是否被固定
+    };
+
+    vector<HistoryEntry> history;
+    size_t k;                      // K值
+    size_t current_timestamp;       // 当前时间戳
+    size_t buffer_pool_size;       // 缓冲池大小
+
+public:
+    LRUKReplacer(size_t pool_size, size_t k_value)
+        : buffer_pool_size(pool_size), k(k_value), current_timestamp(0) {
+        history.resize(pool_size);
+        for (auto& entry : history) {
+            entry.access_count = 0;
+            entry.current_index = 0;
+            entry.is_pinned = false;
+        }
+    }
+
+    bool victim(size_t* frame_id) {
+        size_t oldest_timestamp = current_timestamp;
+        size_t victim_frame = INVALID_FRAME_ID;
+
+        for (size_t i = 0; i < buffer_pool_size; i++) {
+            if (history[i].is_pinned) {
+                continue;  // 跳过被固定的帧
+            }
+
+            if (history[i].access_count == 0) {
+                // 从未被访问过的页面优先被替换
+                *frame_id = i;
+                return true;
+            }
+
+            // 计算第K次访问的时间
+            size_t kth_access;
+            if (history[i].access_count >= k) {
+                kth_access = history[i].last_k_accesses[
+                    (history[i].current_index - 1) % k];
+            } else {
+                kth_access = 0;  // 访问次数不足K次的页面被认为较旧
+            }
+
+            if (kth_access < oldest_timestamp) {
+                oldest_timestamp = kth_access;
+                victim_frame = i;
+            }
+        }
+
+        if (victim_frame != INVALID_FRAME_ID) {
+            *frame_id = victim_frame;
+            return true;
+        }
+
+        return false;
+    }
+
+    void pin(size_t frame_id) {
+        if (frame_id >= buffer_pool_size) return;
+        history[frame_id].is_pinned = true;
+    }
+
+    void unpin(size_t frame_id) {
+        if (frame_id >= buffer_pool_size) return;
+
+        history[frame_id].is_pinned = false;
+        record_access(frame_id);
+    }
+
+    void record_access(size_t frame_id) {
+        if (frame_id >= buffer_pool_size) return;
+
+        auto& entry = history[frame_id];
+        current_timestamp++;
+
+        if (entry.access_count < k) {
+            entry.access_count++;
+        }
+
+        // 更新访问历史
+        entry.last_k_accesses[entry.current_index % k] = current_timestamp;
+        entry.current_index = (entry.current_index + 1) % k;
+    }
+
+    size_t get_kth_access_time(size_t frame_id) const {
+        if (frame_id >= buffer_pool_size) return 0;
+        const auto& entry = history[frame_id];
+
+        if (entry.access_count == 0) return 0;
+        if (entry.access_count < k) {
+            return entry.last_k_accesses[0];
+        }
+
+        size_t index = (entry.current_index - 1) % k;
+        return entry.last_k_accesses[index];
+    }
+};
+```
+
+### 自适应替换算法
+
+#### ARC (Adaptive Replacement Cache)
+```cpp
+class ARCReplacer {
+private:
+    struct ARCEntry {
+        PageId page_id;
+        bool is_dirty;
+        size_t access_count;
+    };
+
+    // 双链表实现
+    struct DoublyLinkedList {
+        vector<ARCEntry> entries;
+        vector<size_t> prev;
+        vector<size_t> next;
+        size_t head;
+        size_t tail;
+        size_t size;
+        size_t capacity;
+
+        DoublyLinkedList(size_t cap) : capacity(cap), size(0), head(-1), tail(-1) {
+            entries.reserve(cap);
+            prev.reserve(cap);
+            next.reserve(cap);
+        }
+
+        void push_front(const ARCEntry& entry) {
+            if (size >= capacity) {
+                pop_back();
+            }
+
+            size_t idx = entries.size();
+            entries.push_back(entry);
+            prev.push_back(-1);
+            next.push_back(head);
+
+            if (head != -1) {
+                prev[head] = idx;
+            } else {
+                tail = idx;
+            }
+            head = idx;
+            size++;
+        }
+
+        void pop_back() {
+            if (tail == -1) return;
+
+            size_t new_tail = prev[tail];
+            if (new_tail != -1) {
+                next[new_tail] = -1;
+            } else {
+                head = -1;
+            }
+            tail = new_tail;
+            size--;
+        }
+
+        void move_to_front(size_t idx) {
+            if (idx == head) return;
+
+            // 从当前位置移除
+            size_t p = prev[idx];
+            size_t n = next[idx];
+
+            if (p != -1) next[p] = n;
+            if (n != -1) prev[n] = p;
+            if (idx == tail) tail = p;
+
+            // 插入到头部
+            prev[idx] = -1;
+            next[idx] = head;
+            if (head != -1) prev[head] = idx;
+            head = idx;
+        }
+
+        bool contains(PageId page_id, size_t* idx) const {
+            for (size_t i = 0; i < size; i++) {
+                if (entries[i].page_id == page_id) {
+                    *idx = i;
+                    return true;
+                }
+            }
+            return false;
+        }
+    };
+
+    DoublyLinkedList t1;  // 最近访问一次的页面
+    DoublyLinkedList t2;  // 最近访问多次的页面
+    DoublyLinkedList b1;  // 最近只访问一次的页面
+    DoublyLinkedList b2;  // 最近访问多次的页面
+    size_t c;              // 缓冲池容量
+    size_t p;              // 调整参数
+
+public:
+    ARCReplacer(size_t capacity)
+        : t1(capacity), t2(capacity), b1(capacity), b2(capacity), c(capacity), p(0) {}
+
+    bool victim(PageId* page_id, bool* is_dirty) {
+        // 根据ARC算法选择牺牲者
+        if (t1.size > 0 && ((t1.size > p) || (b2.size > 0 && t1.size == p))) {
+            *page_id = t1.entries[t1.tail].page_id;
+            *is_dirty = t1.entries[t1.tail].is_dirty;
+            t1.pop_back();
+            return true;
+        } else if (t2.size > 0) {
+            *page_id = t2.entries[t2.tail].page_id;
+            *is_dirty = t2.entries[t2.tail].is_dirty;
+            t2.pop_back();
+            return true;
+        }
+
+        return false;
+    }
+
+    void on_page_access(PageId page_id, bool is_dirty) {
+        size_t idx;
+
+        // 检查页面是否在t1中
+        if (t1.contains(page_id, &idx)) {
+            t1.move_to_front(idx);
+            t1.entries[idx].access_count++;
+
+            // 移动到t2
+            ARCEntry entry = t1.entries[idx];
+            t1.entries.erase(t1.entries.begin() + idx);
+            t2.push_front(entry);
+            return;
+        }
+
+        // 检查页面是否在t2中
+        if (t2.contains(page_id, &idx)) {
+            t2.move_to_front(idx);
+            t2.entries[idx].access_count++;
+            return;
+        }
+
+        // 检查页面是否在b1中
+        if (b1.contains(page_id, &idx)) {
+            // 页面在b1中，调整p值
+            p = min(c, p + max(b2.size / b1.size, 1));
+            replace(page_id);
+            t2.push_front({page_id, is_dirty, 2});
+            return;
+        }
+
+        // 检查页面是否在b2中
+        if (b2.contains(page_id, &idx)) {
+            // 页面在b2中，调整p值
+            p = max(0, p - max(b1.size / b2.size, 1));
+            replace(page_id);
+            t2.push_front({page_id, is_dirty, 2});
+            return;
+        }
+
+        // 新页面，添加到t1
+        if (t1.size + b1.size >= c) {
+            if (t1.size < c) {
+                b1.pop_back();
+                replace(page_id);
+            } else {
+                t1.pop_back();
+            }
+        }
+
+        t1.push_front({page_id, is_dirty, 1});
+    }
+
+private:
+    void replace(PageId page_id) {
+        if (t1.size >= 1 && ((t1.size > p) || (t1.size == p && b2.size > 0))) {
+            // 从t1移除到b1
+            ARCEntry entry = t1.entries[t1.tail];
+            t1.pop_back();
+            b1.push_front(entry);
+        } else if (t2.size >= 1) {
+            // 从t2移除到b2
+            ARCEntry entry = t2.entries[t2.tail];
+            t2.pop_back();
+            b2.push_front(entry);
+        }
+    }
+};
+```
+
+## 内存分配优化
+
+### 内存池管理器
+
+#### 对象池实现
+```cpp
+template<typename T>
+class ObjectPool {
+private:
+    struct FreeList {
+        T* object;
+        FreeList* next;
+    };
+
+    vector<T*> memory_blocks;
+    FreeList* free_list;
+    size_t block_size;
+    size_t total_allocated;
+    mutex pool_mutex;
+
+public:
+    ObjectPool(size_t initial_size = 1024, size_t block_sz = 4096)
+        : block_size(block_sz), total_allocated(0), free_list(nullptr) {
+        expand_pool(initial_size);
+    }
+
+    ~ObjectPool() {
+        for (auto* block : memory_blocks) {
+            delete[] block;
+        }
+    }
+
+    T* allocate() {
+        lock_guard<mutex> lock(pool_mutex);
+
+        if (free_list == nullptr) {
+            expand_pool(block_size);
+        }
+
+        FreeList* entry = free_list;
+        free_list = free_list->next;
+
+        T* object = entry->object;
+        entry->~FreeList();  // 调用析构函数但不释放内存
+
+        return object;
+    }
+
+    void deallocate(T* object) {
+        lock_guard<mutex> lock(pool_mutex);
+
+        // 将对象重新加入空闲列表
+        FreeList* entry = new (object) FreeList();
+        entry->object = object;
+        entry->next = free_list;
+        free_list = entry;
+    }
+
+    size_t get_total_allocated() const {
+        return total_allocated;
+    }
+
+    size_t get_free_count() const {
+        size_t count = 0;
+        FreeList* current = free_list;
+        while (current != nullptr) {
+            count++;
+            current = current->next;
+        }
+        return count;
+    }
+
+private:
+    void expand_pool(size_t size) {
+        T* new_block = new T[size];
+        memory_blocks.push_back(new_block);
+
+        // 将新块中的所有对象加入空闲列表
+        for (size_t i = 0; i < size; i++) {
+            T* object = &new_block[i];
+            FreeList* entry = new (object) FreeList();
+            entry->object = object;
+            entry->next = free_list;
+            free_list = entry;
+        }
+
+        total_allocated += size;
+    }
+};
+```
+
+### 内存碎片整理
+
+#### 碎片整理器
+```cpp
+class MemoryDefragmenter {
+private:
+    struct MemoryBlock {
+        void* start_address;
+        size_t size;
+        bool is_allocated;
+        MemoryBlock* next;
+        MemoryBlock* prev;
+    };
+
+    MemoryBlock* memory_map;
+    size_t total_memory;
+    size_t allocated_memory;
+    mutex defrag_mutex;
+
+public:
+    MemoryDefragmenter(size_t total_size) : total_memory(total_size), allocated_memory(0) {
+        memory_map = new MemoryBlock{
+            malloc(total_size),
+            total_size,
+            false,
+            nullptr,
+            nullptr
+        };
+    }
+
+    ~MemoryDefragmenter() {
+        free(memory_map->start_address);
+        delete memory_map;
+    }
+
+    void* allocate(size_t size) {
+        lock_guard<mutex> lock(defrag_mutex);
+
+        // 首次适应算法
+        MemoryBlock* current = memory_map;
+        while (current != nullptr) {
+            if (!current->is_allocated && current->size >= size) {
+                // 找到合适的块
+                if (current->size > size + sizeof(MemoryBlock)) {
+                    // 分割块
+                    split_block(current, size);
+                }
+
+                current->is_allocated = true;
+                allocated_memory += size;
+                return current->start_address;
+            }
+            current = current->next;
+        }
+
+        // 没有找到合适的块，尝试整理碎片
+        if (defragment()) {
+            return allocate(size);  // 重试分配
+        }
+
+        return nullptr;  // 内存不足
+    }
+
+    void deallocate(void* ptr) {
+        lock_guard<mutex> lock(defrag_mutex);
+
+        MemoryBlock* current = memory_map;
+        while (current != nullptr) {
+            if (current->start_address == ptr) {
+                current->is_allocated = false;
+                allocated_memory -= current->size;
+
+                // 合并相邻的空闲块
+                merge_adjacent_free_blocks(current);
+                break;
+            }
+            current = current->next;
+        }
+    }
+
+    bool defragment() {
+        // 简单的碎片整理：将所有已分配的块移动到内存开头
+        vector<MemoryBlock*> allocated_blocks;
+        MemoryBlock* current = memory_map;
+
+        // 收集所有已分配的块
+        while (current != nullptr) {
+            if (current->is_allocated) {
+                allocated_blocks.push_back(current);
+            }
+            current = current->next;
+        }
+
+        if (allocated_blocks.empty()) {
+            return true;  // 没有需要整理的块
+        }
+
+        // 检查是否可以整理
+        size_t total_allocated_size = 0;
+        for (auto* block : allocated_blocks) {
+            total_allocated_size += block->size;
+        }
+
+        if (total_allocated_size > total_memory) {
+            return false;  // 无法整理
+        }
+
+        // 创建新的内存映射
+        void* new_memory = malloc(total_memory);
+        if (!new_memory) {
+            return false;
+        }
+
+        // 移动已分配的块
+        size_t current_offset = 0;
+        for (auto* block : allocated_blocks) {
+            memcpy(static_cast<char*>(new_memory) + current_offset,
+                   block->start_address, block->size);
+            block->start_address = static_cast<char*>(new_memory) + current_offset;
+            current_offset += block->size;
+        }
+
+        // 释放旧内存并更新映射
+        free(memory_map->start_address);
+        memory_map->start_address = new_memory;
+
+        // 重新构建空闲块
+        rebuild_free_blocks(current_offset);
+
+        return true;
+    }
+
+    double get_fragmentation_ratio() const {
+        if (allocated_memory == 0) return 0.0;
+
+        size_t total_free_space = total_memory - allocated_memory;
+        size_t largest_free_block = get_largest_free_block();
+
+        if (largest_free_block == 0) return 1.0;
+
+        return 1.0 - (static_cast<double>(largest_free_block) / total_free_space);
+    }
+
+private:
+    void split_block(MemoryBlock* block, size_t size) {
+        size_t remaining_size = block->size - size;
+        if (remaining_size < sizeof(MemoryBlock)) {
+            return;  // 剩余空间太小，不值得分割
+        }
+
+        // 创建新的空闲块
+        MemoryBlock* new_block = new MemoryBlock{
+            static_cast<char*>(block->start_address) + size,
+            remaining_size,
+            false,
+            block->next,
+            block
+        };
+
+        if (block->next != nullptr) {
+            block->next->prev = new_block;
+        }
+        block->next = new_block;
+        block->size = size;
+    }
+
+    void merge_adjacent_free_blocks(MemoryBlock* block) {
+        // 合并前面的空闲块
+        if (block->prev != nullptr && !block->prev->is_allocated) {
+            MemoryBlock* prev_block = block->prev;
+            prev_block->size += block->size;
+            prev_block->next = block->next;
+
+            if (block->next != nullptr) {
+                block->next->prev = prev_block;
+            }
+
+            block = prev_block;
+        }
+
+        // 合并后面的空闲块
+        if (block->next != nullptr && !block->next->is_allocated) {
+            MemoryBlock* next_block = block->next;
+            block->size += next_block->size;
+            block->next = next_block->next;
+
+            if (next_block->next != nullptr) {
+                next_block->next->prev = block;
+            }
+
+            delete next_block;
+        }
+    }
+
+    size_t get_largest_free_block() const {
+        size_t largest = 0;
+        MemoryBlock* current = memory_map;
+
+        while (current != nullptr) {
+            if (!current->is_allocated && current->size > largest) {
+                largest = current->size;
+            }
+            current = current->next;
+        }
+
+        return largest;
+    }
+
+    void rebuild_free_blocks(size_t allocated_end) {
+        // 清除旧的块结构
+        MemoryBlock* current = memory_map;
+        while (current != nullptr) {
+            MemoryBlock* next = current->next;
+            if (!current->is_allocated) {
+                delete current;
+            }
+            current = next;
+        }
+
+        // 创建新的空闲块
+        if (allocated_end < total_memory) {
+            MemoryBlock* free_block = new MemoryBlock{
+                static_cast<char*>(memory_map->start_address) + allocated_end,
+                total_memory - allocated_end,
+                false,
+                nullptr,
+                nullptr
+            };
+
+            // 找到最后一个已分配块并链接空闲块
+            current = memory_map;
+            while (current->next != nullptr) {
+                current = current->next;
+            }
+            current->next = free_block;
+            free_block->prev = current;
+        }
+    }
+};
+```
+
+## 性能监控与调优
+
+### 缓冲池监控
+
+#### 性能指标收集
+```cpp
+class BufferPoolMonitor {
+private:
+    struct PerformanceMetrics {
+        size_t total_requests;
+        size_t cache_hits;
+        size_t cache_misses;
+        size_t disk_reads;
+        size_t disk_writes;
+        size_t evictions;
+        double avg_access_time;
+        double hit_ratio;
+        size_t dirty_pages;
+        size_t pinned_pages;
+    };
+
+    PerformanceMetrics metrics;
+    mutex metrics_mutex;
+    atomic<bool> monitoring_enabled;
+
+public:
+    BufferPoolMonitor() : monitoring_enabled(false) {
+        reset_metrics();
+    }
+
+    void start_monitoring() {
+        monitoring_enabled = true;
+    }
+
+    void stop_monitoring() {
+        monitoring_enabled = false;
+    }
+
+    void record_cache_hit() {
+        if (!monitoring_enabled) return;
+
+        lock_guard<mutex> lock(metrics_mutex);
+        metrics.total_requests++;
+        metrics.cache_hits++;
+        update_hit_ratio();
+    }
+
+    void record_cache_miss() {
+        if (!monitoring_enabled) return;
+
+        lock_guard<mutex> lock(metrics_mutex);
+        metrics.total_requests++;
+        metrics.cache_misses++;
+        metrics.disk_reads++;
+        update_hit_ratio();
+    }
+
+    void record_eviction(bool was_dirty) {
+        if (!monitoring_enabled) return;
+
+        lock_guard<mutex> lock(metrics_mutex);
+        metrics.evictions++;
+        if (was_dirty) {
+            metrics.disk_writes++;
+        }
+    }
+
+    void record_dirty_page() {
+        if (!monitoring_enabled) return;
+
+        lock_guard<mutex> lock(metrics_mutex);
+        metrics.dirty_pages++;
+    }
+
+    void record_clean_page() {
+        if (!monitoring_enabled) return;
+
+        lock_guard<mutex> lock(metrics_mutex);
+        if (metrics.dirty_pages > 0) {
+            metrics.dirty_pages--;
+        }
+    }
+
+    PerformanceMetrics get_metrics() const {
+        lock_guard<mutex> lock(metrics_mutex);
+        return metrics;
+    }
+
+    string get_metrics_report() const {
+        PerformanceMetrics current = get_metrics();
+
+        stringstream report;
+        report << "Buffer Pool Performance Report:\n";
+        report << "--------------------------------\n";
+        report << "Total Requests: " << current.total_requests << "\n";
+        report << "Cache Hits: " << current.cache_hits << "\n";
+        report << "Cache Misses: " << current.cache_misses << "\n";
+        report << "Hit Ratio: " << (current.hit_ratio * 100) << "%\n";
+        report << "Disk Reads: " << current.disk_reads << "\n";
+        report << "Disk Writes: " << current.disk_writes << "\n";
+        report << "Evictions: " << current.evictions << "\n";
+        report << "Dirty Pages: " << current.dirty_pages << "\n";
+        report << "Pinned Pages: " << current.pinned_pages << "\n";
+
+        return report.str();
+    }
+
+    void reset_metrics() {
+        lock_guard<mutex> lock(metrics_mutex);
+        metrics = PerformanceMetrics{};
+    }
+
+private:
+    void update_hit_ratio() {
+        if (metrics.total_requests > 0) {
+            metrics.hit_ratio = static_cast<double>(metrics.cache_hits) / metrics.total_requests;
+        }
+    }
+};
+```
+
+### 自适应调优
+
+#### 自动参数调整
+```cpp
+class AutoTuner {
+private:
+    struct TuningParameters {
+        size_t buffer_pool_size;
+        int prefetch_distance;
+        size_t lru_k_value;
+        double flush_threshold;
+        size_t clean_threshold;
+    };
+
+    TuningParameters current_params;
+    BufferPoolMonitor* monitor;
+    WorkloadAnalyzer* workload_analyzer;
+
+public:
+    AutoTuner(BufferPoolMonitor* mon, WorkloadAnalyzer* analyzer)
+        : monitor(mon), workload_analyzer(analyzer) {
+        current_params = get_default_parameters();
+    }
+
+    void auto_tune() {
+        WorkloadCharacteristics workload = workload_analyzer->analyze();
+        PerformanceMetrics metrics = monitor->get_metrics();
+
+        // 基于工作负载特征调整参数
+        if (workload.is_read_intensive) {
+            if (metrics.hit_ratio < 0.8) {
+                // 增加缓冲池大小
+                current_params.buffer_pool_size = min(
+                    current_params.buffer_pool_size * 1.2,
+                    get_max_memory_size()
+                );
+            }
+        }
+
+        if (workload.has_sequential_access) {
+            // 调整预取距离
+            current_params.prefetch_distance = calculate_optimal_prefetch(workload);
+        }
+
+        if (workload.has_random_access) {
+            // 调整LRU-K的K值
+            current_params.lru_k_value = calculate_optimal_k(workload, metrics);
+        }
+
+        // 调整脏页面阈值
+        current_params.flush_threshold = calculate_flush_threshold(metrics);
+        current_params.clean_threshold = calculate_clean_threshold(metrics);
+
+        // 应用新参数
+        apply_parameters();
+    }
+
+    TuningParameters get_current_parameters() const {
+        return current_params;
+    }
+
+private:
+    TuningParameters get_default_parameters() {
+        TuningParameters params;
+        params.buffer_pool_size = 1024 * 1024 * 1024;  // 1GB
+        params.prefetch_distance = 4;
+        params.lru_k_value = 2;
+        params.flush_threshold = 0.7;
+        params.clean_threshold = 0.3;
+        return params;
+    }
+
+    int calculate_optimal_prefetch(const WorkloadCharacteristics& workload) {
+        if (workload.sequential_ratio > 0.8) {
+            return 8;  // 高度顺序访问，增加预取
+        } else if (workload.sequential_ratio > 0.5) {
+            return 4;  // 中等顺序访问
+        } else {
+            return 2;  // 较少顺序访问，减少预取
+        }
+    }
+
+    size_t calculate_optimal_k(const WorkloadCharacteristics& workload,
+                             const PerformanceMetrics& metrics) {
+        if (workload.locality_ratio > 0.7) {
+            return 1;  // 高局部性，使用标准LRU
+        } else if (workload.locality_ratio > 0.4) {
+            return 2;  // 中等局部性
+        } else {
+            return 3;  // 低局部性，使用LRU-3
+        }
+    }
+
+    double calculate_flush_threshold(const PerformanceMetrics& metrics) {
+        if (metrics.dirty_pages > current_params.buffer_pool_size * 0.8) {
+            return 0.5;  // 脏页面太多，降低阈值
+        } else {
+            return 0.7;  // 正常阈值
+        }
+    }
+
+    double calculate_clean_threshold(const PerformanceMetrics& metrics) {
+        if (metrics.evictions > metrics.total_requests * 0.1) {
+            return 0.2;  // 驱逐频繁，增加后台清理
+        } else {
+            return 0.3;  // 正常阈值
+        }
+    }
+
+    void apply_parameters() {
+        // 应用参数到缓冲池管理器
+        buffer_pool_manager->set_buffer_pool_size(current_params.buffer_pool_size);
+        prefetcher->set_distance(current_params.prefetch_distance);
+        replacer->set_k_value(current_params.lru_k_value);
+        flush_manager->set_thresholds(
+            current_params.flush_threshold,
+            current_params.clean_threshold
+        );
+    }
+
+    size_t get_max_memory_size() const {
+        // 获取系统最大可用内存
+        return get_system_memory() * 0.8;  // 使用80%的系统内存
+    }
+};
+```
+
+## 实践建议
+
+### 内存管理最佳实践
+1. **监控先行**：建立完善的性能监控体系
+2. **参数调优**：根据工作负载特征调整缓冲池参数
+3. **避免热点**：使用分区策略减少锁争用
+4. **预防性维护**：定期进行内存碎片整理
+
+### 性能优化策略
+1. **预取策略**：根据访问模式选择合适的预取算法
+2. **替换算法**：选择适合工作负载的替换策略
+3. **内存分配**：使用对象池减少内存分配开销
+4. **并发控制**：优化锁策略提高并发性
+
+## 课后练习
+
+### 编程题
+1. 实现一个支持LRU-2K的缓冲池管理器
+2. 设计并实现一个智能预取器，能够识别顺序和随机访问模式
+3. 实现内存碎片整理器，支持在线碎片整理
+
+### 思考题
+1. 分析不同替换算法在各种工作负载下的性能表现
+2. 讨论内存管理对数据库整体性能的影响
+3. 如何设计一个自适应的内存管理系统，能够根据工作负载动态调整策略？
+
+## 下节预告
+
+下一讲将开始**索引结构**部分，首先介绍：
+- 哈希表索引
+- 静态哈希与动态哈希
+- 哈希函数设计
+- 哈希冲突解决策略
+
+---
+
+**关键概念**：高效的内存管理是数据库性能的核心，合理的缓冲池策略和替换算法能够显著提升系统吞吐量！

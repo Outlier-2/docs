@@ -1,0 +1,704 @@
+---
+title: "Lecture 1: 介绍"
+description: "分布式系统设计入门：理解基础概念、挑战和MapReduce框架"
+---
+
+# Lecture 1: 介绍
+
+## 课程视频
+
+### 官方版本
+<iframe width="100%" height="400" src="https://video.cs50.io/mit-6.824/lecture-1" title="MIT 6.824 Lecture 1" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+## 本周内容
+
+- **分布式系统概述**：定义、特点和分类
+- **核心挑战**：并发、部分故障、网络延迟、可扩展性
+- **设计原则**：模块化、抽象化、容错性
+- **MapReduce框架**：大规模数据处理模型
+- **实践项目**：Lab 1 - MapReduce实现
+
+## 核心概念
+
+### 什么是分布式系统？
+
+**分布式系统**是多个独立计算机通过网络协作完成共同任务的系统。从用户角度看，它像一个单一的系统，但内部由多个组件组成。
+
+![分布式系统架构图](https://cs50.harvard.edu/x/notes/0/distributed-system-architecture.png)
+
+上图展示了典型的分布式系统架构，包含客户端、负载均衡器和多个服务器节点。
+
+#### 关键特征
+
+1. **组件独立性**
+   - 每个计算机有自己的内存和CPU
+   - 节点间通过网络通信
+   - 没有共享内存
+
+2. **透明性**
+   - 位置透明：用户不知道资源在哪里
+   - 复制透明：用户不知道有多少副本
+   - 故障透明：用户感知不到组件故障
+
+3. **可扩展性**
+   - 水平扩展：增加更多机器
+   - 垂直扩展：升级单个机器
+   - 弹性扩展：根据负载动态调整
+
+#### 分布式系统的例子
+
+```text
+传统单机系统：
+[应用程序] → [操作系统] → [硬件]
+
+分布式系统：
+[客户端] → [负载均衡器] → [服务器集群]
+                          ↙     ↓     ↘
+                    [服务器1] [服务器2] [服务器3]
+```
+
+### 分布式系统的分类
+
+#### 1. 按架构分类
+
+**客户端-服务器架构**
+```
+客户端1 → 服务器
+客户端2 ↗
+客户端3 ↗
+```
+
+**对等架构 (P2P)**
+```
+节点1 ⇄ 节点2
+ ↓  ↗   ↓
+节点4 ⇄ 节点3
+```
+
+**三层架构**
+```
+[Web客户端] → [应用服务器] → [数据库服务器]
+```
+
+#### 2. 按同步方式分类
+
+**同步系统**
+- 所有操作在确定时间内完成
+- 有全局时钟
+- 严格的时序保证
+
+**异步系统**
+- 操作时间不确定
+- 没有全局时钟
+- 更具现实性
+
+## 分布式系统的核心挑战
+
+### 1. 并发问题
+
+当多个用户同时访问系统时，需要确保数据一致性。
+
+```go
+// 竞态条件示例
+func incrementCounter() {
+    // 读取当前值
+    current := getCounter()
+    // 计算新值
+    newValue := current + 1
+    // 写回新值
+    setCounter(newValue)
+}
+
+// 多个goroutine同时调用时可能出错
+// 两个goroutine读到相同的current值
+```
+
+**解决方案：**
+- 互斥锁
+- 原子操作
+- 事务处理
+
+### 2. 部分故障 (Partial Failure)
+
+分布式系统中的故障是常态，而不是异常。
+
+```text
+单机系统：要么全部正常，要么全部故障
+分布式系统：部分节点正常，部分节点故障
+
+节点1 正常 ↗
+节点2 故障 → 系统部分可用
+节点3 正常 ↘
+```
+
+**故障类型：**
+- 节点崩溃
+- 网络分区
+- 消息丢失
+- 消息重复
+
+### 3. 网络延迟和不可靠性
+
+网络是分布式系统中最不可靠的组件。
+
+```text
+理想情况：            现实情况：
+A → B: 立即到达       A → B: 延迟、丢失、重复
+A ← B: 立即响应       A ← B: 延迟、丢失、重复
+```
+
+**网络特性：**
+- 延迟不确定
+- 带宽有限
+- 可能丢包
+- 可能乱序
+
+### 4. 可扩展性挑战
+
+系统需要能够处理增长的用户和数据量。
+
+```text
+可扩展性的三个维度：
+1. 规模可扩展性：支持更多用户和数据
+2. 地理可扩展性：支持地理分布
+3. 管理可扩展性：简化运维
+```
+
+## 分布式系统设计原则
+
+### 1. 模块化设计
+
+将系统分解为独立的模块，每个模块负责特定功能。
+
+```go
+// 模块化设计示例
+type StorageService interface {
+    Put(key string, value []byte) error
+    Get(key string) ([]byte, error)
+    Delete(key string) error
+}
+
+type CacheService interface {
+    Set(key string, value interface{}, ttl time.Duration) error
+    Get(key string) (interface{}, bool)
+}
+```
+
+### 2. 抽象化
+
+隐藏底层复杂性，提供简单的接口。
+
+```go
+// 分布式锁的抽象
+type DistributedLock interface {
+    Acquire() (bool, error)
+    Release() error
+    TryAcquire(timeout time.Duration) (bool, error)
+}
+
+// 用户不需要关心底层实现细节
+```
+
+### 3. 容错性设计
+
+系统应该能够优雅地处理故障。
+
+```go
+// 重试机制示例
+func withRetry(operation func() error, maxRetries int) error {
+    for i := 0; i < maxRetries; i++ {
+        err := operation()
+        if err == nil {
+            return nil
+        }
+        if i < maxRetries-1 {
+            time.Sleep(time.Second * time.Duration(i+1))
+        }
+    }
+    return fmt.Errorf("operation failed after %d retries", maxRetries)
+}
+```
+
+## MapReduce框架
+
+### MapReduce概述
+
+MapReduce是一个用于大规模数据处理的编程模型，由Google在2004年提出。
+
+#### 核心思想
+
+```text
+1. Map阶段：将输入数据分割成(key, value)对
+2. Shuffle阶段：按key分组
+3. Reduce阶段：对每个key的所有values进行处理
+```
+
+#### 工作流程
+
+```
+输入数据 → Map → [k1,v1], [k1,v2], [k2,v3], [k2,v4]
+                   ↓
+              Shuffle → k1: [v1,v2], k2: [v3,v4]
+                   ↓
+              Reduce → k1: result1, k2: result2
+                   ↓
+              输出结果
+```
+
+### MapReduce实例：词频统计
+
+```go
+// Map函数
+func Map(filename string, contents string) (map[string]int, error) {
+    result := make(map[string]int)
+    words := strings.Fields(contents)
+
+    for _, word := range words {
+        word = strings.ToLower(strings.Trim(word, ".,!?"))
+        if word != "" {
+            result[word]++
+        }
+    }
+
+    return result, nil
+}
+
+// Reduce函数
+func Reduce(key string, values []int) (int, error) {
+    sum := 0
+    for _, value := range values {
+        sum += value
+    }
+    return sum, nil
+}
+```
+
+### MapReduce的优势
+
+1. **自动并行化**
+   - 框架自动分配任务到多个节点
+   - 无需手动管理并行处理
+
+2. **容错性**
+   - 失败的任务自动重试
+   - 数据复制保证可靠性
+
+3. **可扩展性**
+   - 轻松添加更多节点
+   - 处理更大规模的数据
+
+4. **简单性**
+   - 开发者只需实现Map和Reduce函数
+   - 框架处理复杂的分布式问题
+
+### MapReduce的局限性
+
+1. **批处理限制**
+   - 不适合实时处理
+   - 延迟较高
+
+2. **迭代计算困难**
+   - 多个MapReduce作业需要串行
+   - 中间结果需要写入磁盘
+
+3. **复杂查询支持有限**
+   - 主要适合简单的数据处理
+   - 复杂的join操作较困难
+
+## 代码示例
+
+### 简单的分布式计数器
+
+```go
+package main
+
+import (
+    "fmt"
+    "sync"
+    "time"
+)
+
+// 分布式计数器接口
+type DistributedCounter interface {
+    Increment() error
+    Get() (int64, error)
+}
+
+// 基于Redis的实现
+type RedisCounter struct {
+    client *redis.Client
+    key    string
+}
+
+func (r *RedisCounter) Increment() error {
+    _, err := r.client.Incr(r.key).Result()
+    return err
+}
+
+func (r *RedisCounter) Get() (int64, error) {
+    return r.client.Get(r.key).Int64()
+}
+
+// 本地缓存版本
+type LocalCounter struct {
+    value int64
+    mu    sync.Mutex
+}
+
+func (l *LocalCounter) Increment() error {
+    l.mu.Lock()
+    defer l.mu.Unlock()
+    l.value++
+    return nil
+}
+
+func (l *LocalCounter) Get() (int64, error) {
+    l.mu.Lock()
+    defer l.mu.Unlock()
+    return l.value, nil
+}
+```
+
+### 简单的MapReduce框架
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "io/ioutil"
+    "os"
+    "path/filepath"
+)
+
+// MapReduce框架
+type MapReduce struct {
+    inputDir  string
+    outputDir string
+    mappers   int
+    reducers  int
+}
+
+type KeyValue struct {
+    Key   string `json:"key"`
+    Value string `json:"value"`
+}
+
+func (mr *MapReduce) Run() error {
+    // 1. 执行Map阶段
+    mapOutputs, err := mr.runMapPhase()
+    if err != nil {
+        return fmt.Errorf("map phase failed: %v", err)
+    }
+
+    // 2. 执行Shuffle阶段
+    shuffledData, err := mr.shuffle(mapOutputs)
+    if err != nil {
+        return fmt.Errorf("shuffle phase failed: %v", err)
+    }
+
+    // 3. 执行Reduce阶段
+    err = mr.runReducePhase(shuffledData)
+    if err != nil {
+        return fmt.Errorf("reduce phase failed: %v", err)
+    }
+
+    return nil
+}
+
+func (mr *MapReduce) runMapPhase() ([]string, error) {
+    files, err := ioutil.ReadDir(mr.inputDir)
+    if err != nil {
+        return nil, err
+    }
+
+    var outputs []string
+    for _, file := range files {
+        if file.IsDir() {
+            continue
+        }
+
+        inputPath := filepath.Join(mr.inputDir, file.Name())
+        data, err := ioutil.ReadFile(inputPath)
+        if err != nil {
+            return nil, err
+        }
+
+        // 执行Map函数
+        result, err := mr.Map(file.Name(), string(data))
+        if err != nil {
+            return nil, err
+        }
+
+        // 保存Map结果
+        outputPath := filepath.Join(mr.outputDir, "map_"+file.Name()+".json")
+        err = mr.saveKeyValuePairs(result, outputPath)
+        if err != nil {
+            return nil, err
+        }
+
+        outputs = append(outputs, outputPath)
+    }
+
+    return outputs, nil
+}
+
+// 需要用户实现的Map函数
+func (mr *MapReduce) Map(filename string, content string) ([]KeyValue, error) {
+    // 默认实现：简单的词频统计
+    words := strings.Fields(content)
+    var result []KeyValue
+
+    for _, word := range words {
+        word = strings.ToLower(strings.Trim(word, ".,!?"))
+        if word != "" {
+            result = append(result, KeyValue{Key: word, Value: "1"})
+        }
+    }
+
+    return result, nil
+}
+
+// 需要用户实现的Reduce函数
+func (mr *MapReduce) Reduce(key string, values []string) (string, error) {
+    // 默认实现：求和
+    sum := 0
+    for _, value := range values {
+        num, err := strconv.Atoi(value)
+        if err != nil {
+            continue
+        }
+        sum += num
+    }
+    return strconv.Itoa(sum), nil
+}
+
+func (mr *MapReduce) saveKeyValuePairs(pairs []KeyValue, path string) error {
+    file, err := os.Create(path)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+
+    encoder := json.NewEncoder(file)
+    for _, pair := range pairs {
+        err := encoder.Encode(pair)
+        if err != nil {
+            return err
+        }
+    }
+
+    return nil
+}
+```
+
+## 练习题与答案
+
+### 1. 分布式系统概念
+
+**问题：** 什么是分布式系统？它有哪些主要特点？
+
+**答案：**
+分布式系统是多个独立计算机通过网络协作完成共同任务的系统。主要特点包括：
+- **组件独立性**：每个计算机有自己的内存和CPU
+- **透明性**：用户感知不到系统的分布式特性
+- **并发性**：多个用户可以同时使用系统
+- **故障独立性**：部分组件故障不会导致整个系统崩溃
+- **可扩展性**：可以通过增加节点来提升系统性能
+
+### 2. 故障处理
+
+**问题：** 分布式系统中可能发生哪些类型的故障？如何处理？
+
+**答案：**
+故障类型：
+- **节点崩溃**：节点停止响应
+- **网络分区**：节点间无法通信
+- **消息丢失**：网络传输中数据丢失
+- **消息重复**：消息被多次发送
+- **消息乱序**：消息到达顺序与发送顺序不同
+
+处理方法：
+- **超时重试**：设置超时机制，失败后重试
+- **心跳检测**：定期检查节点状态
+- **消息确认**：确保消息被接收
+- **幂等操作**：确保重复操作不会产生副作用
+- **版本控制**：处理乱序消息
+
+### 3. MapReduce设计
+
+**问题：** 设计一个MapReduce程序来计算文档中每个单词的平均长度。
+
+**答案：**
+```go
+// Map函数
+func Map(filename string, content string) ([]KeyValue, error) {
+    words := strings.Fields(content)
+    var result []KeyValue
+
+    for _, word := range words {
+        word = strings.ToLower(strings.Trim(word, ".,!?"))
+        if word != "" {
+            // 输出 (word, length) 和 (word, 1) 用于计算平均长度
+            result = append(result, KeyValue{Key: word, Value: fmt.Sprintf("%d", len(word))})
+            result = append(result, KeyValue{Key: word, Value: "1"})
+        }
+    }
+
+    return result, nil
+}
+
+// Reduce函数
+func Reduce(key string, values []string) (string, error) {
+    var totalLength int
+    var count int
+
+    for _, value := range values {
+        if num, err := strconv.Atoi(value); err == nil {
+            totalLength += num
+            count++
+        }
+    }
+
+    if count == 0 {
+        return "0", nil
+    }
+
+    average := float64(totalLength) / float64(count)
+    return fmt.Sprintf("%.2f", average), nil
+}
+```
+
+### 4. 系统设计
+
+**问题：** 设计一个简单的分布式键值存储系统，考虑以下要求：
+- 支持基本的get/put操作
+- 实现数据复制以提高可用性
+- 处理节点故障
+
+**答案：**
+```go
+// 节点接口
+type Node interface {
+    Put(key string, value []byte) error
+    Get(key string) ([]byte, error)
+    HealthCheck() bool
+}
+
+// 协调器
+type Coordinator struct {
+    nodes    []Node
+    replicas int
+}
+
+func (c *Coordinator) Put(key string, value []byte) error {
+    // 向所有副本写入数据
+    successCount := 0
+    errors := make([]error, 0)
+
+    for i := 0; i < c.replicas && i < len(c.nodes); i++ {
+        err := c.nodes[i].Put(key, value)
+        if err == nil {
+            successCount++
+        } else {
+            errors = append(errors, err)
+        }
+    }
+
+    // 至少需要大多数副本成功
+    if successCount > c.replicas/2 {
+        return nil
+    }
+
+    return fmt.Errorf("failed to replicate data: %v", errors)
+}
+
+func (c *Coordinator) Get(key string) ([]byte, error) {
+    // 从可用的节点读取数据
+    for _, node := range c.nodes {
+        if node.HealthCheck() {
+            value, err := node.Get(key)
+            if err == nil {
+                return value, nil
+            }
+        }
+    }
+
+    return nil, fmt.Errorf("no available nodes for key: %s", key)
+}
+```
+
+### 5. 思考题
+
+**问题：** 为什么说在分布式系统中故障是常态而不是异常？
+
+**答案：**
+在分布式系统中，随着系统规模的增长，故障发生的概率大大增加：
+- **大规模系统**：成千上万的节点，即使每个节点的故障率很低，整体故障率也会很高
+- **网络复杂性**：网络连接可能因为各种原因中断
+- **硬件故障**：磁盘、内存、CPU等硬件会随时间老化
+- **软件故障**：软件bug、资源耗尽、配置错误等
+
+因此，分布式系统必须假设故障会经常发生，并设计相应的容错机制，而不是把故障当作罕见异常来处理。
+
+**问题：** CAP理论是什么？在实践中如何权衡？
+
+**答案：**
+CAP理论指出分布式系统不能同时满足以下三个特性：
+- **一致性(Consistency)**：所有节点在同一时间看到相同的数据
+- **可用性(Availability)**：每个请求都能收到响应
+- **分区容忍性(Partition tolerance)**：系统能在网络分区时继续运行
+
+实践中通常的权衡：
+- **CA系统**：传统关系数据库，不能处理网络分区
+- **CP系统**：如ZooKeeper，保证一致性但可能不可用
+- **AP系统**：如Cassandra，保证可用性但可能不一致
+
+大多数分布式系统选择AP或CP，根据业务需求来权衡。
+```
+
+## 学习建议
+
+1. **理解基础概念**：确保掌握分布式系统的基本概念和挑战
+2. **实践MapReduce**：实现一个简单的MapReduce框架
+3. **分析实际系统**：研究现有的分布式系统如GFS、BigTable
+4. **动手实验**：在多台机器上部署简单的分布式应用
+5. **阅读论文**：阅读MapReduce、GFS等经典论文
+
+## 扩展资源
+
+### 必读论文
+- [MapReduce: Simplified Data Processing on Large Clusters (2004)](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf)
+- [The Google File System (2003)](https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-sosp2003.pdf)
+- [Dynamo: Amazon's Highly Available Key-value Store (2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+
+### 学习工具
+- [Apache Hadoop](https://hadoop.apache.org/) - 开源MapReduce实现
+- [Go语言](https://golang.org/) - 分布式系统编程语言
+- [Docker](https://www.docker.com/) - 容器化部署工具
+
+### 在线课程
+- [MIT 6.824: Distributed Systems](https://pdos.csail.mit.edu/6.824/)
+- [Berkeley CS186: Introduction to Database Systems](https://inst.eecs.berkeley.edu/~cs186/spring20/)
+- [Stanford CS247: Distributed Systems](https://web.stanford.edu/class/cs247/)
+
+## 下一步
+
+<CardGroup>
+  <Card title="Lecture 2: RPC和线程" icon="arrow-right" href="./lecture-02">
+    学习分布式系统中的通信机制
+  </Card>
+
+  <Card title="Lab 1: MapReduce实现" icon="code" href="./lab-1">
+    开始实现MapReduce框架
+  </Card>
+
+  <Card title="返回课程概览" icon="home" href="./overview">
+    回到分布式系统课程主页
+  </Card>
+</CardGroup>
+
+---
+
+*恭喜完成第1讲！你已经了解了分布式系统的基本概念和MapReduce框架。下一讲我们将学习RPC和线程编程。*

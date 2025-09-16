@@ -1,0 +1,1938 @@
+---
+title: Distributed Databases I - Architectures
+desc: This lecture covers distributed database architectures, including shared-nothing, shared-memory, and shared-disk architectures, as well as partitioning strategies and data distribution techniques.
+---
+
+# 第21讲：分布式数据库 I - 架构设计
+
+## 课程概述
+
+本节课我们将深入探讨分布式数据库的架构设计，这是构建大规模、高可用数据库系统的基础。我们将学习不同的分布式架构模式、数据分区策略以及分布式查询处理的基本原理。
+
+## 学习目标
+
+- 理解分布式数据库的三种主要架构模式
+- 掌握数据分区和复制的基本策略
+- 学习分布式查询处理的基本原理
+- 了解分布式数据库的挑战和解决方案
+
+## 1. 分布式数据库架构
+
+### 1.1 架构类型
+
+```cpp
+#include <vector>
+#include <string>
+#include <memory>
+#include <unordered_map>
+
+namespace distributed_db {
+
+/**
+ * 分布式数据库节点类型枚举
+ * 定义不同的节点角色和职责
+ */
+enum class NodeType {
+    COORDINATOR,    // 协调节点
+    STORAGE,        // 存储节点
+    COMPUTE,        // 计算节点
+    HYBRID          // 混合节点
+};
+
+/**
+ * 分布式架构类型枚举
+ */
+enum class ArchitectureType {
+    SHARED_NOTHING,  // 无共享架构
+    SHARED_MEMORY,   // 共享内存架构
+    SHARED_DISK      // 共享磁盘架构
+};
+
+/**
+ * 节点基本信息
+ */
+struct NodeInfo {
+    int node_id;
+    NodeType type;
+    std::string host;
+    int port;
+    std::unordered_map<std::string, std::string> metadata;
+
+    NodeInfo(int id, NodeType t, const std::string& h, int p)
+        : node_id(id), type(t), host(h), port(p) {}
+};
+
+/**
+ * 分布式数据库集群抽象基类
+ */
+class DistributedCluster {
+public:
+    virtual ~DistributedCluster() = default;
+
+    /**
+     * 添加节点到集群
+     * @param node 节点信息
+     * @return 是否成功添加
+     */
+    virtual bool addNode(const NodeInfo& node) = 0;
+
+    /**
+     * 从集群移除节点
+     * @param node_id 节点ID
+     * @return 是否成功移除
+     */
+    virtual bool removeNode(int node_id) = 0;
+
+    /**
+     * 获取集群中的所有节点
+     * @return 节点列表
+     */
+    virtual std::vector<NodeInfo> getAllNodes() const = 0;
+
+    /**
+     * 根据数据键选择目标节点
+     * @param key 数据键
+     * @return 目标节点ID
+     */
+    virtual int selectNode(const std::string& key) = 0;
+
+    /**
+     * 获取集群架构类型
+     * @return 架构类型
+     */
+    virtual ArchitectureType getArchitectureType() const = 0;
+};
+
+}
+
+// 命名空间继续
+namespace distributed_db {
+
+/**
+ * 无共享架构实现
+ * 每个节点拥有独立的CPU、内存和磁盘
+ */
+class SharedNothingCluster : public DistributedCluster {
+private:
+    std::vector<NodeInfo> nodes;
+    std::unordered_map<int, std::vector<std::string>> node_partitions;
+    int virtual_nodes_per_node = 3;  // 一致性哈希的虚拟节点数
+
+public:
+    SharedNothingCluster() = default;
+
+    bool addNode(const NodeInfo& node) override {
+        nodes.push_back(node);
+
+        // 为新节点创建虚拟节点用于一致性哈希
+        for (int i = 0; i < virtual_nodes_per_node; ++i) {
+            std::string virtual_key = node.host + ":" + std::to_string(node.port) +
+                                     "#virtual" + std::to_string(i);
+            node_partitions[node.node_id].push_back(virtual_key);
+        }
+
+        return true;
+    }
+
+    bool removeNode(int node_id) override {
+        auto it = std::find_if(nodes.begin(), nodes.end(),
+                             [node_id](const NodeInfo& node) {
+                                 return node.node_id == node_id;
+                             });
+
+        if (it != nodes.end()) {
+            nodes.erase(it);
+            node_partitions.erase(node_id);
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<NodeInfo> getAllNodes() const override {
+        return nodes;
+    }
+
+    /**
+     * 使用一致性哈希选择节点
+     * 确保数据在节点增减时重新分布最小化
+     */
+    int selectNode(const std::string& key) override {
+        if (nodes.empty()) {
+            throw std::runtime_error("No nodes available in cluster");
+        }
+
+        // 简化的一致性哈希实现
+        // 实际系统中需要更复杂的哈希环实现
+        std::hash<std::string> hasher;
+        size_t hash_value = hasher(key);
+
+        // 选择节点
+        int selected_index = hash_value % nodes.size();
+        return nodes[selected_index].node_id;
+    }
+
+    ArchitectureType getArchitectureType() const override {
+        return ArchitectureType::SHARED_NOTHING;
+    }
+
+    /**
+     * 获取节点的数据分区信息
+     * @param node_id 节点ID
+     * @return 该节点负责的分区键列表
+     */
+    std::vector<std::string> getNodePartitions(int node_id) const {
+        auto it = node_partitions.find(node_id);
+        if (it != node_partitions.end()) {
+            return it->second;
+        }
+        return {};
+    }
+};
+
+/**
+ * 共享内存架构实现
+ * 所有节点共享内存，但拥有独立的CPU和磁盘
+ */
+class SharedMemoryCluster : public DistributedCluster {
+private:
+    std::vector<NodeInfo> nodes;
+    std::shared_ptr<void> shared_memory_region;  // 共享内存区域
+    size_t shared_memory_size;
+
+public:
+    SharedMemoryCluster(size_t mem_size)
+        : shared_memory_size(mem_size) {
+        // 初始化共享内存区域
+        // 在实际系统中，这里会使用特定的共享内存API
+    }
+
+    bool addNode(const NodeInfo& node) override {
+        nodes.push_back(node);
+        return true;
+    }
+
+    bool removeNode(int node_id) override {
+        auto it = std::find_if(nodes.begin(), nodes.end(),
+                             [node_id](const NodeInfo& node) {
+                                 return node.node_id == node_id;
+                             });
+
+        if (it != nodes.end()) {
+            nodes.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<NodeInfo> getAllNodes() const override {
+        return nodes;
+    }
+
+    /**
+     * 在共享内存架构中，节点选择基于负载均衡
+     */
+    int selectNode(const std::string& key) override {
+        if (nodes.empty()) {
+            throw std::runtime_error("No nodes available in cluster");
+        }
+
+        // 简单的轮询负载均衡
+        static int current_node = 0;
+        int selected_node = current_node;
+        current_node = (current_node + 1) % nodes.size();
+
+        return nodes[selected_node].node_id;
+    }
+
+    ArchitectureType getArchitectureType() const override {
+        return ArchitectureType::SHARED_MEMORY;
+    }
+
+    /**
+     * 访问共享内存区域
+     * @return 共享内存指针
+     */
+    void* getSharedMemory() const {
+        return shared_memory_region.get();
+    }
+
+    /**
+     * 获取共享内存大小
+     * @return 内存大小（字节）
+     */
+    size_t getSharedMemorySize() const {
+        return shared_memory_size;
+    }
+};
+
+/**
+ * 共享磁盘架构实现
+ * 所有节点共享磁盘存储，但拥有独立的CPU和内存
+ */
+class SharedDiskCluster : public DistributedCluster {
+private:
+    std::vector<NodeInfo> nodes;
+    std::string shared_storage_path;
+    std::unordered_map<std::string, int> file_locks;  // 文件锁管理
+
+public:
+    SharedDiskCluster(const std::string& storage_path)
+        : shared_storage_path(storage_path) {}
+
+    bool addNode(const NodeInfo& node) override {
+        nodes.push_back(node);
+        return true;
+    }
+
+    bool removeNode(int node_id) override {
+        auto it = std::find_if(nodes.begin(), nodes.end(),
+                             [node_id](const NodeInfo& node) {
+                                 return node.node_id == node_id;
+                             });
+
+        if (it != nodes.end()) {
+            nodes.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    std::vector<NodeInfo> getAllNodes() const override {
+        return nodes;
+    }
+
+    /**
+     * 在共享磁盘架构中，节点选择基于数据局部性
+     */
+    int selectNode(const std::string& key) override {
+        if (nodes.empty()) {
+            throw std::runtime_error("No nodes available in cluster");
+        }
+
+        // 检查数据是否已在某个节点的缓存中
+        // 简化实现：随机选择节点
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, nodes.size() - 1);
+
+        return nodes[dis(gen)].node_id;
+    }
+
+    ArchitectureType getArchitectureType() const override {
+        return ArchitectureType::SHARED_DISK;
+    }
+
+    /**
+     * 获取文件锁
+     * @param file_path 文件路径
+     * @param node_id 请求锁的节点ID
+     * @return 是否成功获取锁
+     */
+    bool acquireFileLock(const std::string& file_path, int node_id) {
+        auto it = file_locks.find(file_path);
+        if (it == file_locks.end() || it->second == node_id) {
+            file_locks[file_path] = node_id;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 释放文件锁
+     * @param file_path 文件路径
+     * @param node_id 释放锁的节点ID
+     * @return 是否成功释放锁
+     */
+    bool releaseFileLock(const std::string& file_path, int node_id) {
+        auto it = file_locks.find(file_path);
+        if (it != file_locks.end() && it->second == node_id) {
+            file_locks.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 获取共享存储路径
+     * @return 存储路径
+     */
+    std::string getSharedStoragePath() const {
+        return shared_storage_path;
+    }
+};
+
+}
+
+// 命名空间继续
+namespace distributed_db {
+
+/**
+ * 数据分区策略枚举
+ */
+enum class PartitionStrategy {
+    HASH_PARTITION,      // 哈希分区
+    RANGE_PARTITION,     // 范围分区
+    LIST_PARTITION,      // 列表分区
+    ROUND_ROBIN,         // 轮询分区
+    CONSISTENT_HASH      // 一致性哈希
+};
+
+/**
+ * 分区信息结构
+ */
+struct PartitionInfo {
+    int partition_id;
+    std::string range_start;
+    std::string range_end;
+    std::vector<int> node_ids;  // 副本节点ID列表
+    size_t size_bytes;
+    int row_count;
+
+    PartitionInfo(int id, const std::string& start, const std::string& end)
+        : partition_id(id), range_start(start), range_end(end),
+          size_bytes(0), row_count(0) {}
+};
+
+/**
+ * 分区管理器接口
+ */
+class PartitionManager {
+public:
+    virtual ~PartitionManager() = default;
+
+    /**
+     * 根据键获取目标分区
+     * @param key 数据键
+     * @return 分区信息
+     */
+    virtual PartitionInfo getPartition(const std::string& key) = 0;
+
+    /**
+     * 获取所有分区
+     * @return 分区列表
+     */
+    virtual std::vector<PartitionInfo> getAllPartitions() = 0;
+
+    /**
+     * 添加新分区
+     * @param partition 分区信息
+     * @return 是否成功添加
+     */
+    virtual bool addPartition(const PartitionInfo& partition) = 0;
+
+    /**
+     * 移除分区
+     * @param partition_id 分区ID
+     * @return 是否成功移除
+     */
+    virtual bool removePartition(int partition_id) = 0;
+
+    /**
+     * 重新平衡分区
+     * @return 重新平衡后的分区映射
+     */
+    virtual std::unordered_map<int, std::vector<PartitionInfo>> rebalance() = 0;
+};
+
+/**
+ * 哈希分区管理器
+ */
+class HashPartitionManager : public PartitionManager {
+private:
+    std::vector<PartitionInfo> partitions;
+    int partition_count;
+
+public:
+    HashPartitionManager(int count) : partition_count(count) {
+        // 初始化分区
+        for (int i = 0; i < partition_count; ++i) {
+            partitions.emplace_back(i, "", "");
+        }
+    }
+
+    PartitionInfo getPartition(const std::string& key) override {
+        std::hash<std::string> hasher;
+        size_t hash_value = hasher(key);
+        int partition_index = hash_value % partition_count;
+
+        return partitions[partition_index];
+    }
+
+    std::vector<PartitionInfo> getAllPartitions() override {
+        return partitions;
+    }
+
+    bool addPartition(const PartitionInfo& partition) override {
+        partitions.push_back(partition);
+        partition_count++;
+        return true;
+    }
+
+    bool removePartition(int partition_id) override {
+        auto it = std::find_if(partitions.begin(), partitions.end(),
+                             [partition_id](const PartitionInfo& p) {
+                                 return p.partition_id == partition_id;
+                             });
+
+        if (it != partitions.end()) {
+            partitions.erase(it);
+            partition_count--;
+            return true;
+        }
+        return false;
+    }
+
+    std::unordered_map<int, std::vector<PartitionInfo>> rebalance() override {
+        std::unordered_map<int, std::vector<PartitionInfo>> rebalanced;
+
+        // 简单的重新平衡算法
+        for (const auto& partition : partitions) {
+            if (!partition.node_ids.empty()) {
+                int primary_node = partition.node_ids[0];
+                rebalanced[primary_node].push_back(partition);
+            }
+        }
+
+        return rebalanced;
+    }
+};
+
+/**
+ * 范围分区管理器
+ */
+class RangePartitionManager : public PartitionManager {
+private:
+    std::vector<PartitionInfo> partitions;
+    std::map<std::string, int> range_to_partition;  // 范围到分区的映射
+
+public:
+    RangePartitionManager() = default;
+
+    PartitionInfo getPartition(const std::string& key) override {
+        // 找到包含该键的范围
+        auto it = range_to_partition.lower_bound(key);
+        if (it == range_to_partition.end()) {
+            // 键大于所有范围，返回最后一个分区
+            return partitions.back();
+        }
+
+        int partition_id = it->second;
+        return partitions[partition_id];
+    }
+
+    std::vector<PartitionInfo> getAllPartitions() override {
+        return partitions;
+    }
+
+    bool addPartition(const PartitionInfo& partition) override {
+        partitions.push_back(partition);
+        range_to_partition[partition.range_end] = partition.partition_id;
+        return true;
+    }
+
+    bool removePartition(int partition_id) override {
+        auto it = std::find_if(partitions.begin(), partitions.end(),
+                             [partition_id](const PartitionInfo& p) {
+                                 return p.partition_id == partition_id;
+                             });
+
+        if (it != partitions.end()) {
+            // 从范围映射中移除
+            range_to_partition.erase(it->range_end);
+            partitions.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    std::unordered_map<int, std::vector<PartitionInfo>> rebalance() override {
+        std::unordered_map<int, std::vector<PartitionInfo>> rebalanced;
+
+        // 分析分区大小分布
+        std::vector<size_t> sizes;
+        for (const auto& partition : partitions) {
+            sizes.push_back(partition.size_bytes);
+        }
+
+        // 计算平均大小
+        size_t total_size = std::accumulate(sizes.begin(), sizes.end(), 0);
+        size_t avg_size = total_size / partitions.size();
+
+        // 重新平衡策略：将大于平均大小的分区分裂
+        std::vector<PartitionInfo> new_partitions;
+        for (const auto& partition : partitions) {
+            if (partition.size_bytes > avg_size * 1.5) {
+                // 分裂分区
+                auto split_partitions = splitPartition(partition);
+                new_partitions.insert(new_partitions.end(),
+                                    split_partitions.begin(),
+                                    split_partitions.end());
+            } else {
+                new_partitions.push_back(partition);
+            }
+        }
+
+        partitions = new_partitions;
+
+        // 重新分配到节点
+        for (const auto& partition : partitions) {
+            if (!partition.node_ids.empty()) {
+                int primary_node = partition.node_ids[0];
+                rebalanced[primary_node].push_back(partition);
+            }
+        }
+
+        return rebalanced;
+    }
+
+private:
+    /**
+     * 分裂过大的分区
+     * @param partition 要分裂的分区
+     * @return 分裂后的分区列表
+     */
+    std::vector<PartitionInfo> splitPartition(const PartitionInfo& partition) {
+        std::vector<PartitionInfo> result;
+
+        // 简单的等量分裂
+        size_t split_size = partition.size_bytes / 2;
+
+        PartitionInfo first_part(partition.partition_id * 2,
+                               partition.range_start,
+                               "mid_" + std::to_string(partition.partition_id));
+        first_part.size_bytes = split_size;
+        first_part.row_count = partition.row_count / 2;
+        first_part.node_ids = partition.node_ids;
+
+        PartitionInfo second_part(partition.partition_id * 2 + 1,
+                                "mid_" + std::to_string(partition.partition_id),
+                                partition.range_end);
+        second_part.size_bytes = partition.size_bytes - split_size;
+        second_part.row_count = partition.row_count - partition.row_count / 2;
+        second_part.node_ids = partition.node_ids;
+
+        result.push_back(first_part);
+        result.push_back(second_part);
+
+        return result;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建无共享架构集群
+    SharedNothingCluster shared_nothing_cluster;
+
+    // 添加节点
+    shared_nothing_cluster.addNode(NodeInfo(1, NodeType::STORAGE, "node1.example.com", 5432));
+    shared_nothing_cluster.addNode(NodeInfo(2, NodeType::STORAGE, "node2.example.com", 5432));
+    shared_nothing_cluster.addNode(NodeInfo(3, NodeType::COORDINATOR, "coord.example.com", 5432));
+
+    // 测试节点选择
+    std::string test_key = "user:12345";
+    int selected_node = shared_nothing_cluster.selectNode(test_key);
+    std::cout << "Key '" << test_key << "' assigned to node " << selected_node << std::endl;
+
+    // 创建哈希分区管理器
+    HashPartitionManager hash_partitioner(4);
+
+    // 测试分区
+    PartitionInfo partition = hash_partitioner.getPartition(test_key);
+    std::cout << "Key '" << test_key << "' in partition " << partition.partition_id << std::endl;
+
+    // 创建范围分区管理器
+    RangePartitionManager range_partitioner;
+
+    // 添加范围分区
+    range_partitioner.addPartition(PartitionInfo(1, "", "1000"));
+    range_partitioner.addPartition(PartitionInfo(2, "1000", "5000"));
+    range_partitioner.addPartition(PartitionInfo(3, "5000", ""));
+
+    // 测试范围分区
+    PartitionInfo range_partition = range_partitioner.getPartition("2500");
+    std::cout << "Key '2500' in range partition " << range_partition.partition_id << std::endl;
+
+    // 演示重新平衡
+    auto rebalanced = hash_partitioner.rebalance();
+    std::cout << "Rebalanced partitions across " << rebalanced.size() << " nodes" << std::endl;
+
+    return 0;
+}
+```
+
+## 2. 数据分布策略
+
+### 2.1 水平分片 vs 垂直分片
+
+```cpp
+#include <vector>
+#include <string>
+#include <unordered_map>
+#include <memory>
+
+namespace distributed_db {
+
+/**
+ * 数据分片类型枚举
+ */
+enum class ShardingType {
+    HORIZONTAL,  // 水平分片：按行分片
+    VERTICAL     // 垂直分片：按列分片
+};
+
+/**
+ * 分片键定义
+ */
+struct ShardKey {
+    std::string column_name;
+    ShardingType type;
+    bool is_hash_based;
+    int shard_count;
+
+    ShardKey(const std::string& col, ShardingType t, bool hash, int count)
+        : column_name(col), type(t), is_hash_based(hash), shard_count(count) {}
+};
+
+/**
+ * 行数据结构
+ */
+struct RowData {
+    std::unordered_map<std::string, std::string> values;
+    std::string row_id;
+
+    RowData(const std::string& id) : row_id(id) {}
+
+    void setValue(const std::string& column, const std::string& value) {
+        values[column] = value;
+    }
+
+    std::string getValue(const std::string& column) const {
+        auto it = values.find(column);
+        return it != values.end() ? it->second : "";
+    }
+};
+
+/**
+ * 分片策略接口
+ */
+class ShardingStrategy {
+public:
+    virtual ~ShardingStrategy() = default;
+
+    /**
+     * 根据数据确定目标分片
+     * @param data 行数据
+     * @return 分片ID
+     */
+    virtual int getShardId(const RowData& data) = 0;
+
+    /**
+     * 获取分片数量
+     * @return 分片数量
+     */
+    virtual int getShardCount() const = 0;
+
+    /**
+     * 重新分片数据
+     * @param old_shard_count 旧分片数量
+     * @param new_shard_count 新分片数量
+     * @return 重新分片的映射关系
+     */
+    virtual std::unordered_map<int, int> reshard(int old_shard_count, int new_shard_count) = 0;
+};
+
+/**
+ * 水平哈希分片策略
+ */
+class HorizontalHashSharding : public ShardingStrategy {
+private:
+    std::string shard_key_column;
+    int shard_count;
+
+public:
+    HorizontalHashSharding(const std::string& key_column, int count)
+        : shard_key_column(key_column), shard_count(count) {}
+
+    int getShardId(const RowData& data) override {
+        std::string key_value = data.getValue(shard_key_column);
+        if (key_value.empty()) {
+            throw std::runtime_error("Shard key not found in data");
+        }
+
+        std::hash<std::string> hasher;
+        size_t hash_value = hasher(key_value);
+
+        return hash_value % shard_count;
+    }
+
+    int getShardCount() const override {
+        return shard_count;
+    }
+
+    std::unordered_map<int, int> reshard(int old_shard_count, int new_shard_count) override {
+        std::unordered_map<int, int> mapping;
+
+        for (int old_shard = 0; old_shard < old_shard_count; ++old_shard) {
+            // 计算每个旧分片的数据应该分配到哪些新分片
+            std::hash<std::string> hasher;
+
+            // 简化实现：均匀分配
+            int new_shard = (old_shard * new_shard_count) / old_shard_count;
+            mapping[old_shard] = new_shard;
+        }
+
+        return mapping;
+    }
+};
+
+/**
+ * 水平范围分片策略
+ */
+class HorizontalRangeSharding : public ShardingStrategy {
+private:
+    std::string shard_key_column;
+    std::vector<std::pair<std::string, std::string>> ranges;  // 范围列表
+
+public:
+    HorizontalRangeSharding(const std::string& key_column,
+                          const std::vector<std::pair<std::string, std::string>>& r)
+        : shard_key_column(key_column), ranges(r) {}
+
+    int getShardId(const RowData& data) override {
+        std::string key_value = data.getValue(shard_key_column);
+        if (key_value.empty()) {
+            throw std::runtime_error("Shard key not found in data");
+        }
+
+        // 查找包含该值的范围
+        for (size_t i = 0; i < ranges.size(); ++i) {
+            const auto& range = ranges[i];
+            if (key_value >= range.first && key_value < range.second) {
+                return i;
+            }
+        }
+
+        // 如果超出所有范围，返回最后一个分片
+        return ranges.size() - 1;
+    }
+
+    int getShardCount() const override {
+        return ranges.size();
+    }
+
+    std::unordered_map<int, int> reshard(int old_shard_count, int new_shard_count) override {
+        std::unordered_map<int, int> mapping;
+
+        // 范围分片的重新分片需要更复杂的逻辑
+        // 这里简化为均匀分配
+        for (int i = 0; i < old_shard_count; ++i) {
+            mapping[i] = (i * new_shard_count) / old_shard_count;
+        }
+
+        return mapping;
+    }
+};
+
+/**
+ * 垂直分片策略
+ */
+class VerticalSharding : public ShardingStrategy {
+private:
+    std::vector<std::vector<std::string>> column_groups;  // 列组定义
+    std::string primary_key_column;
+
+public:
+    VerticalSharding(const std::vector<std::vector<std::string>>& groups,
+                    const std::string& pk_column)
+        : column_groups(groups), primary_key_column(pk_column) {}
+
+    int getShardId(const RowData& data) override {
+        // 垂直分片通常基于查询模式，这里简化实现
+        // 实际系统中可能需要更复杂的规则
+
+        // 根据数据的列分布决定分片
+        for (size_t i = 0; i < column_groups.size(); ++i) {
+            const auto& columns = column_groups[i];
+
+            // 检查数据是否包含该组的列
+            bool has_columns = false;
+            for (const auto& col : columns) {
+                if (data.getValue(col) != "") {
+                    has_columns = true;
+                    break;
+                }
+            }
+
+            if (has_columns) {
+                return i;
+            }
+        }
+
+        // 默认返回第一个分片
+        return 0;
+    }
+
+    int getShardCount() const override {
+        return column_groups.size();
+    }
+
+    std::unordered_map<int, int> reshard(int old_shard_count, int new_shard_count) override {
+        std::unordered_map<int, int> mapping;
+
+        // 垂直分片通常不需要重新分片，因为是基于列的
+        for (int i = 0; i < old_shard_count; ++i) {
+            mapping[i] = i % new_shard_count;
+        }
+
+        return mapping;
+    }
+
+    /**
+     * 获取指定分片的列列表
+     * @param shard_id 分片ID
+     * @return 列名列表
+     */
+    std::vector<std::string> getColumnsForShard(int shard_id) const {
+        if (shard_id >= 0 && shard_id < column_groups.size()) {
+            return column_groups[shard_id];
+        }
+        return {};
+    }
+};
+
+}
+
+// 命名空间继续
+namespace distributed_db {
+
+/**
+ * 分布式表结构
+ */
+class DistributedTable {
+private:
+    std::string table_name;
+    std::unique_ptr<ShardingStrategy> sharding_strategy;
+    std::unordered_map<int, std::vector<RowData>> shard_data;  // 分片ID到数据的映射
+
+public:
+    DistributedTable(const std::string& name, std::unique_ptr<ShardingStrategy> strategy)
+        : table_name(name), sharding_strategy(std::move(strategy)) {}
+
+    /**
+     * 插入数据到分布式表
+     * @param data 行数据
+     * @return 是否成功插入
+     */
+    bool insertRow(const RowData& data) {
+        int shard_id = sharding_strategy->getShardId(data);
+        shard_data[shard_id].push_back(data);
+        return true;
+    }
+
+    /**
+     * 从分布式表查询数据
+     * @param shard_id 分片ID，-1表示查询所有分片
+     * @return 匹配的数据行
+     */
+    std::vector<RowData> queryRows(int shard_id = -1) {
+        if (shard_id == -1) {
+            // 查询所有分片
+            std::vector<RowData> result;
+            for (const auto& pair : shard_data) {
+                result.insert(result.end(), pair.second.begin(), pair.second.end());
+            }
+            return result;
+        } else {
+            auto it = shard_data.find(shard_id);
+            if (it != shard_data.end()) {
+                return it->second;
+            }
+            return {};
+        }
+    }
+
+    /**
+     * 获取表名
+     * @return 表名
+     */
+    std::string getTableName() const {
+        return table_name;
+    }
+
+    /**
+     * 获取分片策略
+     * @return 分片策略指针
+     */
+    ShardingStrategy* getShardingStrategy() const {
+        return sharding_strategy.get();
+    }
+
+    /**
+     * 获取各分片的数据统计
+     * @return 分片统计信息
+     */
+    std::unordered_map<int, size_t> getShardStatistics() const {
+        std::unordered_map<int, size_t> stats;
+
+        for (const auto& pair : shard_data) {
+            stats[pair.first] = pair.second.size();
+        }
+
+        return stats;
+    }
+
+    /**
+     * 重新分片表数据
+     * @param new_strategy 新的分片策略
+     * @return 重新分片后的表
+     */
+    std::unique_ptr<DistributedTable> reshard(std::unique_ptr<ShardingStrategy> new_strategy) {
+        auto new_table = std::make_unique<DistributedTable>(table_name + "_resharded",
+                                                           std::move(new_strategy));
+
+        // 将所有数据重新分配到新分片
+        for (const auto& pair : shard_data) {
+            for (const auto& row : pair.second) {
+                new_table->insertRow(row);
+            }
+        }
+
+        return new_table;
+    }
+};
+
+/**
+ * 分片管理器
+ */
+class ShardManager {
+private:
+    std::unordered_map<std::string, std::unique_ptr<DistributedTable>> tables;
+
+public:
+    /**
+     * 创建分布式表
+     * @param table_name 表名
+     * @param strategy 分片策略
+     * @return 创建的表指针
+     */
+    DistributedTable* createTable(const std::string& table_name,
+                                 std::unique_ptr<ShardingStrategy> strategy) {
+        auto table = std::make_unique<DistributedTable>(table_name, std::move(strategy));
+        auto result = table.get();
+        tables[table_name] = std::move(table);
+        return result;
+    }
+
+    /**
+     * 获取表
+     * @param table_name 表名
+     * @return 表指针
+     */
+    DistributedTable* getTable(const std::string& table_name) {
+        auto it = tables.find(table_name);
+        return it != tables.end() ? it->second.get() : nullptr;
+    }
+
+    /**
+     * 删除表
+     * @param table_name 表名
+     * @return 是否成功删除
+     */
+    bool dropTable(const std::string& table_name) {
+        auto it = tables.find(table_name);
+        if (it != tables.end()) {
+            tables.erase(it);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 获取所有表名
+     * @return 表名列表
+     */
+    std::vector<std::string> getAllTables() const {
+        std::vector<std::string> names;
+        for (const auto& pair : tables) {
+            names.push_back(pair.first);
+        }
+        return names;
+    }
+
+    /**
+     * 获取集群范围的分片统计
+     * @return 所有表的分片统计
+     */
+    std::unordered_map<std::string, std::unordered_map<int, size_t>> getClusterShardStatistics() const {
+        std::unordered_map<std::string, std::unordered_map<int, size_t>> cluster_stats;
+
+        for (const auto& pair : tables) {
+            cluster_stats[pair.first] = pair.second->getShardStatistics();
+        }
+
+        return cluster_stats;
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建分片管理器
+    ShardManager shard_manager;
+
+    // 定义水平哈希分片策略
+    auto user_hash_strategy = std::make_unique<HorizontalHashSharding>("user_id", 4);
+
+    // 创建用户表
+    DistributedTable* users_table = shard_manager.createTable("users", std::move(user_hash_strategy));
+
+    // 插入测试数据
+    for (int i = 1; i <= 20; ++i) {
+        RowData user("user_" + std::to_string(i));
+        user.setValue("user_id", std::to_string(i));
+        user.setValue("name", "User " + std::to_string(i));
+        user.setValue("email", "user" + std::to_string(i) + "@example.com");
+
+        users_table->insertRow(user);
+    }
+
+    // 定义水平范围分片策略
+    std::vector<std::pair<std::string, std::string>> order_ranges = {
+        {"", "1000"},
+        {"1000", "5000"},
+        {"5000", "10000"},
+        {"10000", ""}
+    };
+
+    auto order_range_strategy = std::make_unique<HorizontalRangeSharding>("order_id", order_ranges);
+
+    // 创建订单表
+    DistributedTable* orders_table = shard_manager.createTable("orders", std::move(order_range_strategy));
+
+    // 插入订单数据
+    for (int i = 1; i <= 15; ++i) {
+        RowData order("order_" + std::to_string(i));
+        order.setValue("order_id", std::to_string(i * 500));  // 订单ID: 500, 1000, 1500, ...
+        order.setValue("user_id", std::to_string(i));
+        order.setValue("amount", std::to_string(i * 100.0));
+
+        orders_table->insertRow(order);
+    }
+
+    // 定义垂直分片策略
+    std::vector<std::vector<std::string>> product_columns = {
+        {"product_id", "name", "category"},  // 基本信息
+        {"product_id", "price", "inventory"},  // 价格和库存
+        {"product_id", "description", "specs"}  // 详细信息
+    };
+
+    auto product_vertical_strategy = std::make_unique<VerticalSharding>(product_columns, "product_id");
+
+    // 创建产品表
+    DistributedTable* products_table = shard_manager.createTable("products", std::move(product_vertical_strategy));
+
+    // 插入产品数据
+    for (int i = 1; i <= 10; ++i) {
+        RowData product("product_" + std::to_string(i));
+        product.setValue("product_id", std::to_string(i));
+        product.setValue("name", "Product " + std::to_string(i));
+        product.setValue("category", "Category " + std::to_string(i % 3 + 1));
+        product.setValue("price", std::to_string(i * 50.0));
+        product.setValue("inventory", std::to_string(i * 10));
+        product.setValue("description", "Description for product " + std::to_string(i));
+        product.setValue("specs", "Specs for product " + std::to_string(i));
+
+        products_table->insertRow(product);
+    }
+
+    // 查询分片统计
+    auto cluster_stats = shard_manager.getClusterShardStatistics();
+
+    std::cout << "=== Cluster Shard Statistics ===" << std::endl;
+    for (const auto& table_stats : cluster_stats) {
+        std::cout << "Table: " << table_stats.first << std::endl;
+        for (const auto& shard_stat : table_stats.second) {
+            std::cout << "  Shard " << shard_stat.first << ": " << shard_stat.second << " rows" << std::endl;
+        }
+    }
+
+    // 演示重新分片
+    std::cout << "\n=== Resharding Example ===" << std::endl;
+    auto new_user_strategy = std::make_unique<HorizontalHashSharding>("user_id", 8);
+    auto resharded_users = users_table->reshard(std::move(new_user_strategy));
+
+    auto new_stats = resharded_users->getShardStatistics();
+    std::cout << "Resharded users table to " << new_stats.size() << " shards" << std::endl;
+    for (const auto& stat : new_stats) {
+        std::cout << "  New shard " << stat.first << ": " << stat.second << " rows" << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 3. 分布式查询处理
+
+### 3.1 查询分解与执行
+
+```cpp
+#include <vector>
+#include <string>
+#include <memory>
+#include <unordered_map>
+#include <functional>
+
+namespace distributed_db {
+
+/**
+ * 查询操作类型枚举
+ */
+enum class QueryOperation {
+    SELECT,     // 选择操作
+    PROJECT,    // 投影操作
+    JOIN,       // 连接操作
+    AGGREGATE,  // 聚合操作
+    SORT,       // 排序操作
+    FILTER,     // 过滤操作
+    LIMIT       // 限制操作
+};
+
+/**
+ * 查询条件结构
+ */
+struct QueryCondition {
+    std::string column;
+    std::string operator_str;  // =, >, <, >=, <=, !=, LIKE, IN
+    std::string value;
+
+    QueryCondition(const std::string& col, const std::string& op, const std::string& val)
+        : column(col), operator_str(op), value(val) {}
+};
+
+/**
+ * 查询计划节点
+ */
+struct QueryPlanNode {
+    QueryOperation operation;
+    std::vector<std::string> columns;  // 涉及的列
+    std::vector<QueryCondition> conditions;
+    std::vector<std::shared_ptr<QueryPlanNode>> children;
+    std::unordered_map<std::string, std::string> properties;  // 节点属性
+
+    QueryPlanNode(QueryOperation op) : operation(op) {}
+
+    void addChild(std::shared_ptr<QueryPlanNode> child) {
+        children.push_back(child);
+    }
+
+    void addCondition(const QueryCondition& cond) {
+        conditions.push_back(cond);
+    }
+
+    void addColumn(const std::string& col) {
+        columns.push_back(col);
+    }
+
+    void setProperty(const std::string& key, const std::string& value) {
+        properties[key] = value;
+    }
+
+    std::string getProperty(const std::string& key) const {
+        auto it = properties.find(key);
+        return it != properties.end() ? it->second : "";
+    }
+};
+
+/**
+ * 执行节点位置枚举
+ */
+enum class ExecutionLocation {
+    LOCAL,      // 本地执行
+    REMOTE,     // 远程执行
+    DISTRIBUTED  // 分布式执行
+};
+
+/**
+ * 执行计划节点
+ */
+struct ExecutionPlanNode {
+    std::shared_ptr<QueryPlanNode> query_node;
+    ExecutionLocation location;
+    int target_node_id;  // 目标节点ID
+    std::vector<std::shared_ptr<ExecutionPlanNode>> dependencies;
+    std::unordered_map<std::string, std::string> execution_properties;
+
+    ExecutionPlanNode(std::shared_ptr<QueryPlanNode> qn, ExecutionLocation loc, int node_id)
+        : query_node(qn), location(loc), target_node_id(node_id) {}
+
+    void addDependency(std::shared_ptr<ExecutionPlanNode> dep) {
+        dependencies.push_back(dep);
+    }
+
+    void setExecutionProperty(const std::string& key, const std::string& value) {
+        execution_properties[key] = value;
+    }
+
+    std::string getExecutionProperty(const std::string& key) const {
+        auto it = execution_properties.find(key);
+        return it != execution.end() ? it->second : "";
+    }
+};
+
+/**
+ * 查询优化器接口
+ */
+class QueryOptimizer {
+public:
+    virtual ~QueryOptimizer() = default;
+
+    /**
+     * 优化查询计划
+     * @param query_plan 原始查询计划
+     * @return 优化后的查询计划
+     */
+    virtual std::shared_ptr<QueryPlanNode> optimize(std::shared_ptr<QueryPlanNode> query_plan) = 0;
+
+    /**
+     * 估算查询成本
+     * @param query_plan 查询计划
+     * @return 估算的成本
+     */
+    virtual double estimateCost(std::shared_ptr<QueryPlanNode> query_plan) = 0;
+};
+
+/**
+ * 基于规则的查询优化器
+ */
+class RuleBasedQueryOptimizer : public QueryOptimizer {
+public:
+    std::shared_ptr<QueryPlanNode> optimize(std::shared_ptr<QueryPlanNode> query_plan) override {
+        // 应用优化规则
+        auto optimized_plan = applyPushDownPredicates(query_plan);
+        optimized_plan = applyJoinOrderOptimization(optimized_plan);
+        optimized_plan = applyProjectionPushDown(optimized_plan);
+
+        return optimized_plan;
+    }
+
+    double estimateCost(std::shared_ptr<QueryPlanNode> query_plan) override {
+        // 简化的成本估算
+        double cost = 0.0;
+
+        // 根据操作类型和条件估算成本
+        switch (query_plan->operation) {
+            case QueryOperation::SELECT:
+                cost = estimateSelectCost(query_plan);
+                break;
+            case QueryOperation::JOIN:
+                cost = estimateJoinCost(query_plan);
+                break;
+            case QueryOperation::AGGREGATE:
+                cost = estimateAggregateCost(query_plan);
+                break;
+            default:
+                cost = 10.0;  // 默认成本
+        }
+
+        // 递归计算子节点的成本
+        for (const auto& child : query_plan->children) {
+            cost += estimateCost(child);
+        }
+
+        return cost;
+    }
+
+private:
+    /**
+     * 应用谓词下推优化
+     */
+    std::shared_ptr<QueryPlanNode> applyPushDownPredicates(std::shared_ptr<QueryPlanNode> node) {
+        if (!node || node->children.empty()) {
+            return node;
+        }
+
+        // 递归优化子节点
+        for (auto& child : node->children) {
+            child = applyPushDownPredicates(child);
+        }
+
+        // 如果当前节点是JOIN，尝试将条件下推到子节点
+        if (node->operation == QueryOperation::JOIN && !node->conditions.empty()) {
+            std::vector<QueryCondition> pushable_conditions;
+
+            for (const auto& cond : node->conditions) {
+                if (canPushDownCondition(cond, node->children[0])) {
+                    pushable_conditions.push_back(cond);
+                }
+            }
+
+            // 将可下推的条件移动到子节点
+            for (const auto& cond : pushable_conditions) {
+                node->children[0]->addCondition(cond);
+
+                // 从当前节点移除条件
+                auto it = std::find(node->conditions.begin(), node->conditions.end(), cond);
+                if (it != node->conditions.end()) {
+                    node->conditions.erase(it);
+                }
+            }
+        }
+
+        return node;
+    }
+
+    /**
+     * 应用连接顺序优化
+     */
+    std::shared_ptr<QueryPlanNode> applyJoinOrderOptimization(std::shared_ptr<QueryPlanNode> node) {
+        if (!node || node->operation != QueryOperation::JOIN || node->children.size() < 2) {
+            return node;
+        }
+
+        // 递归优化子节点
+        for (auto& child : node->children) {
+            child = applyJoinOrderOptimization(child);
+        }
+
+        // 简化的连接顺序优化：选择较小的表作为驱动表
+        auto left_size = estimateTableSize(node->children[0]);
+        auto right_size = estimateTableSize(node->children[1]);
+
+        if (left_size > right_size) {
+            // 交换子节点顺序
+            std::swap(node->children[0], node->children[1]);
+        }
+
+        return node;
+    }
+
+    /**
+     * 应用投影下推优化
+     */
+    std::shared_ptr<QueryPlanNode> applyProjectionPushDown(std::shared_ptr<QueryPlanNode> node) {
+        if (!node) {
+            return node;
+        }
+
+        // 递归优化子节点
+        for (auto& child : node->children) {
+            child = applyProjectionPushDown(child);
+        }
+
+        // 如果当前节点有投影列，尝试下推到子节点
+        if (!node->columns.empty() && !node->children.empty()) {
+            // 将投影列下推到子节点
+            for (auto& child : node->children) {
+                for (const auto& col : node->columns) {
+                    if (std::find(child->columns.begin(), child->columns.end(), col) == child->columns.end()) {
+                        child->addColumn(col);
+                    }
+                }
+            }
+        }
+
+        return node;
+    }
+
+    bool canPushDownCondition(const QueryCondition& cond, std::shared_ptr<QueryPlanNode> node) {
+        // 简化实现：检查条件列是否在子节点的列中
+        return std::find(node->columns.begin(), node->columns.end(), cond.column) != node->columns.end();
+    }
+
+    double estimateSelectCost(std::shared_ptr<QueryPlanNode> node) {
+        // 基于条件数量和选择性估算成本
+        double selectivity = 1.0;
+        for (const auto& cond : node->conditions) {
+            if (cond.operator_str == "=") {
+                selectivity *= 0.1;  // 等值条件选择性较高
+            } else {
+                selectivity *= 0.5;  // 范围条件选择性较低
+            }
+        }
+
+        return 100.0 * selectivity;  // 基础成本 * 选择性
+    }
+
+    double estimateJoinCost(std::shared_ptr<QueryPlanNode> node) {
+        if (node->children.size() < 2) {
+            return 1000.0;  // 无效的连接计划
+        }
+
+        auto left_size = estimateTableSize(node->children[0]);
+        auto right_size = estimateTableSize(node->children[1]);
+
+        // 简化的连接成本估算
+        return left_size * right_size * 0.01;  // 假设有合适的索引
+    }
+
+    double estimateAggregateCost(std::shared_ptr<QueryPlanNode> node) {
+        auto input_size = estimateTableSize(node->children[0]);
+        return input_size * 0.1;  // 聚合通常比全表扫描便宜
+    }
+
+    size_t estimateTableSize(std::shared_ptr<QueryPlanNode> node) {
+        // 简化实现：返回固定大小
+        // 实际系统中需要统计信息
+        return 1000;
+    }
+};
+
+}
+
+// 命名空间继续
+namespace distributed_db {
+
+/**
+ * 查询执行器接口
+ */
+class QueryExecutor {
+public:
+    virtual ~QueryExecutor() = default;
+
+    /**
+     * 执行查询计划
+     * @param execution_plan 执行计划
+     * @return 查询结果
+     */
+    virtual std::vector<RowData> execute(std::shared_ptr<ExecutionPlanNode> execution_plan) = 0;
+
+    /**
+     * 取消查询执行
+     * @param query_id 查询ID
+     * @return 是否成功取消
+     */
+    virtual bool cancelQuery(const std::string& query_id) = 0;
+
+    /**
+     * 获取查询状态
+     * @param query_id 查询ID
+     * @return 查询状态信息
+     */
+    virtual std::unordered_map<std::string, std::string> getQueryStatus(const std::string& query_id) = 0;
+};
+
+/**
+ * 分布式查询执行器
+ */
+class DistributedQueryExecutor : public QueryExecutor {
+private:
+    std::unordered_map<std::string, std::shared_ptr<DistributedTable>> tables;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> query_statuses;
+
+public:
+    /**
+     * 注册表
+     * @param name 表名
+     * @param table 表指针
+     */
+    void registerTable(const std::string& name, std::shared_ptr<DistributedTable> table) {
+        tables[name] = table;
+    }
+
+    std::vector<RowData> execute(std::shared_ptr<ExecutionPlanNode> execution_plan) override {
+        std::string query_id = generateQueryId();
+        query_statuses[query_id] = {{"status", "running"}, {"start_time", getCurrentTime()}};
+
+        try {
+            auto result = executeNode(execution_plan);
+            query_statuses[query_id]["status"] = "completed";
+            query_statuses[query_id]["end_time"] = getCurrentTime();
+            return result;
+        } catch (const std::exception& e) {
+            query_statuses[query_id]["status"] = "failed";
+            query_statuses[query_id]["error"] = e.what();
+            throw;
+        }
+    }
+
+    bool cancelQuery(const std::string& query_id) override {
+        auto it = query_statuses.find(query_id);
+        if (it != query_statuses.end() && it->second["status"] == "running") {
+            it->second["status"] = "cancelled";
+            return true;
+        }
+        return false;
+    }
+
+    std::unordered_map<std::string, std::string> getQueryStatus(const std::string& query_id) override {
+        auto it = query_statuses.find(query_id);
+        return it != query_statuses.end() ? it->second : std::unordered_map<std::string, std::string>();
+    }
+
+private:
+    /**
+     * 执行执行计划节点
+     */
+    std::vector<RowData> executeNode(std::shared_ptr<ExecutionPlanNode> node) {
+        if (!node) {
+            return {};
+        }
+
+        // 先执行依赖节点
+        std::vector<std::vector<RowData>> dependency_results;
+        for (const auto& dep : node->dependencies) {
+            dependency_results.push_back(executeNode(dep));
+        }
+
+        // 根据节点位置决定执行方式
+        switch (node->location) {
+            case ExecutionLocation::LOCAL:
+                return executeLocalNode(node, dependency_results);
+            case ExecutionLocation::REMOTE:
+                return executeRemoteNode(node, dependency_results);
+            case ExecutionLocation::DISTRIBUTED:
+                return executeDistributedNode(node, dependency_results);
+            default:
+                throw std::runtime_error("Unknown execution location");
+        }
+    }
+
+    /**
+     * 本地执行节点
+     */
+    std::vector<RowData> executeLocalNode(std::shared_ptr<ExecutionPlanNode> node,
+                                        const std::vector<std::vector<RowData>>& dependency_results) {
+        auto query_node = node->query_node;
+
+        switch (query_node->operation) {
+            case QueryOperation::SELECT:
+                return executeSelect(query_node, dependency_results);
+            case QueryOperation::PROJECT:
+                return executeProject(query_node, dependency_results);
+            case QueryOperation::JOIN:
+                return executeJoin(query_node, dependency_results);
+            case QueryOperation::AGGREGATE:
+                return executeAggregate(query_node, dependency_results);
+            case QueryOperation::FILTER:
+                return executeFilter(query_node, dependency_results);
+            default:
+                throw std::runtime_error("Unsupported operation for local execution");
+        }
+    }
+
+    /**
+     * 远程执行节点
+     */
+    std::vector<RowData> executeRemoteNode(std::shared_ptr<ExecutionPlanNode> node,
+                                          const std::vector<std::vector<RowData>>& dependency_results) {
+        // 模拟远程执行
+        // 实际系统中需要网络通信
+
+        std::cout << "Executing remotely on node " << node->target_node_id << std::endl;
+
+        // 简化实现：调用本地执行
+        return executeLocalNode(node, dependency_results);
+    }
+
+    /**
+     * 分布式执行节点
+     */
+    std::vector<RowData> executeDistributedNode(std::shared_ptr<ExecutionPlanNode> node,
+                                               const std::vector<std::vector<RowData>>& dependency_results) {
+        // 分布式执行通常涉及多个节点的协同
+        std::cout << "Executing distributed query" << std::endl;
+
+        // 根据查询类型选择分布式执行策略
+        auto query_node = node->query_node;
+
+        switch (query_node->operation) {
+            case QueryOperation::JOIN:
+                return executeDistributedJoin(query_node, dependency_results);
+            case QueryOperation::AGGREGATE:
+                return executeDistributedAggregate(query_node, dependency_results);
+            default:
+                // 对于其他操作，回退到本地执行
+                return executeLocalNode(node, dependency_results);
+        }
+    }
+
+    /**
+     * 执行选择操作
+     */
+    std::vector<RowData> executeSelect(std::shared_ptr<QueryPlanNode> node,
+                                     const std::vector<std::vector<RowData>>& input_data) {
+        if (input_data.empty()) {
+            return {};
+        }
+
+        std::vector<RowData> result;
+        const auto& data = input_data[0];
+
+        for (const auto& row : data) {
+            if (matchesConditions(row, node->conditions)) {
+                result.push_back(row);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 执行投影操作
+     */
+    std::vector<RowData> executeProject(std::shared_ptr<QueryPlanNode> node,
+                                      const std::vector<std::vector<RowData>>& input_data) {
+        if (input_data.empty() || node->columns.empty()) {
+            return {};
+        }
+
+        std::vector<RowData> result;
+        const auto& data = input_data[0];
+
+        for (const auto& row : data) {
+            RowData projected_row(row.row_id + "_projected");
+            for (const auto& col : node->columns) {
+                projected_row.setValue(col, row.getValue(col));
+            }
+            result.push_back(projected_row);
+        }
+
+        return result;
+    }
+
+    /**
+     * 执行连接操作
+     */
+    std::vector<RowData> executeJoin(std::shared_ptr<QueryPlanNode> node,
+                                    const std::vector<std::vector<RowData>>& input_data) {
+        if (input_data.size() < 2) {
+            return {};
+        }
+
+        const auto& left_data = input_data[0];
+        const auto& right_data = input_data[1];
+
+        std::vector<RowData> result;
+
+        // 简化的嵌套循环连接
+        for (const auto& left_row : left_data) {
+            for (const auto& right_row : right_data) {
+                if (matchesJoinConditions(left_row, right_row, node->conditions)) {
+                    RowData joined_row(left_row.row_id + "_" + right_row.row_id);
+
+                    // 合并两个行的数据
+                    for (const auto& pair : left_row.values) {
+                        joined_row.setValue(pair.first, pair.second);
+                    }
+                    for (const auto& pair : right_row.values) {
+                        joined_row.setValue(pair.first, pair.second);
+                    }
+
+                    result.push_back(joined_row);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 执行聚合操作
+     */
+    std::vector<RowData> executeAggregate(std::shared_ptr<QueryPlanNode> node,
+                                         const std::vector<std::vector<RowData>>& input_data) {
+        if (input_data.empty()) {
+            return {};
+        }
+
+        const auto& data = input_data[0];
+
+        // 简化的聚合实现
+        std::unordered_map<std::string, double> sum_values;
+        std::unordered_map<std::string, int> count_values;
+
+        for (const auto& row : data) {
+            for (const auto& col : node->columns) {
+                std::string value = row.getValue(col);
+                if (!value.empty()) {
+                    try {
+                        double num_value = std::stod(value);
+                        sum_values[col] += num_value;
+                        count_values[col]++;
+                    } catch (const std::exception&) {
+                        // 忽略非数值数据
+                    }
+                }
+            }
+        }
+
+        // 创建聚合结果行
+        RowData aggregate_result("aggregate_result");
+        for (const auto& col : node->columns) {
+            if (count_values[col] > 0) {
+                double avg = sum_values[col] / count_values[col];
+                aggregate_result.setValue(col + "_avg", std::to_string(avg));
+                aggregate_result.setValue(col + "_sum", std::to_string(sum_values[col]));
+                aggregate_result.setValue(col + "_count", std::to_string(count_values[col]));
+            }
+        }
+
+        return {aggregate_result};
+    }
+
+    /**
+     * 执行过滤操作
+     */
+    std::vector<RowData> executeFilter(std::shared_ptr<QueryPlanNode> node,
+                                      const std::vector<std::vector<RowData>>& input_data) {
+        return executeSelect(node, input_data);  // 过滤与选择逻辑相同
+    }
+
+    /**
+     * 执行分布式连接
+     */
+    std::vector<RowData> executeDistributedJoin(std::shared_ptr<QueryPlanNode> node,
+                                               const std::vector<std::vector<RowData>>& input_data) {
+        // 分布式连接需要考虑数据局部性和网络传输
+        std::cout << "Executing distributed join with data shuffling" << std::endl;
+
+        // 简化实现：使用广播连接策略
+        return executeJoin(node, input_data);
+    }
+
+    /**
+     * 执行分布式聚合
+     */
+    std::vector<RowData> executeDistributedAggregate(std::shared_ptr<QueryPlanNode> node,
+                                                   const std::vector<std::vector<RowData>>& input_data) {
+        // 分布式聚合通常分为两个阶段：
+        // 1. 本地聚合（每个节点独立聚合）
+        // 2. 全局聚合（合并各节点的结果）
+
+        std::cout << "Executing distributed aggregate in two phases" << std::endl;
+
+        // 阶段1：本地聚合
+        auto local_results = executeAggregate(node, input_data);
+
+        // 阶段2：全局聚合（这里简化为直接返回本地结果）
+        return local_results;
+    }
+
+    bool matchesConditions(const RowData& row, const std::vector<QueryCondition>& conditions) {
+        for (const auto& cond : conditions) {
+            std::string row_value = row.getValue(cond.column);
+
+            if (cond.operator_str == "=") {
+                if (row_value != cond.value) return false;
+            } else if (cond.operator_str == ">") {
+                if (row_value <= cond.value) return false;
+            } else if (cond.operator_str == "<") {
+                if (row_value >= cond.value) return false;
+            }
+            // 其他操作符...
+        }
+        return true;
+    }
+
+    bool matchesJoinConditions(const RowData& left_row, const RowData& right_row,
+                             const std::vector<QueryCondition>& conditions) {
+        for (const auto& cond : conditions) {
+            std::string left_value = left_row.getValue(cond.column);
+            std::string right_value = right_row.getValue(cond.value);  // 假设value是右表的列名
+
+            if (left_value != right_value) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string generateQueryId() {
+        static int counter = 0;
+        return "query_" + std::to_string(++counter);
+    }
+
+    std::string getCurrentTime() {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        return std::ctime(&time_t);
+    }
+};
+
+}
+
+// 主函数示例
+int main() {
+    using namespace distributed_db;
+
+    // 创建查询优化器
+    auto optimizer = std::make_shared<RuleBasedQueryOptimizer>();
+
+    // 创建分布式查询执行器
+    auto executor = std::make_shared<DistributedQueryExecutor>();
+
+    // 构建查询计划
+    auto scan_node = std::make_shared<QueryPlanNode>(QueryOperation::SELECT);
+    scan_node->addColumn("user_id");
+    scan_node->addColumn("name");
+    scan_node->addColumn("email");
+
+    auto filter_node = std::make_shared<QueryPlanNode>(QueryOperation::FILTER);
+    filter_node->addCondition(QueryCondition("user_id", ">", "1000"));
+    filter_node->addColumn("user_id");
+    filter_node->addColumn("name");
+    filter_node->addChild(scan_node);
+
+    auto project_node = std::make_shared<QueryPlanNode>(QueryOperation::PROJECT);
+    project_node->addColumn("user_id");
+    project_node->addColumn("name");
+    project_node->addChild(filter_node);
+
+    // 优化查询计划
+    auto optimized_plan = optimizer->optimize(project_node);
+
+    // 估算查询成本
+    double cost = optimizer->estimateCost(optimized_plan);
+    std::cout << "Estimated query cost: " << cost << std::endl;
+
+    // 创建执行计划
+    auto execution_plan = std::make_shared<ExecutionPlanNode>(
+        optimized_plan, ExecutionLocation::LOCAL, 1);
+
+    // 执行查询
+    try {
+        auto results = executor->execute(execution_plan);
+        std::cout << "Query executed successfully, returned " << results.size() << " rows" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Query execution failed: " << e.what() << std::endl;
+    }
+
+    return 0;
+}
+```
+
+## 4. 实践练习
+
+### 练习1：实现一致性哈希
+
+实现一个完整的一致性哈希算法，包括虚拟节点、节点添加/删除时的数据重分布。
+
+### 练习2：分布式查询优化
+
+扩展查询优化器，实现基于成本的优化策略，包括统计信息收集和成本模型。
+
+### 练习3：实现数据复制策略
+
+实现主从复制和多主复制策略，包括故障检测和自动故障转移机制。
+
+### 练习4：分布式事务管理
+
+实现两阶段提交协议，包括协调器、参与者、超时处理和恢复机制。
+
+## 总结
+
+本节课我们深入学习了分布式数据库的架构设计，包括：
+
+1. **分布式架构模式**：无共享、共享内存、共享磁盘三种架构的特点和适用场景
+2. **数据分区策略**：水平分片、垂直分片、哈希分区、范围分区等策略
+3. **查询处理**：分布式查询的分解、优化和执行技术
+4. **系统设计**：可扩展性、可用性、一致性的平衡
+
+这些概念和技术是构建大规模分布式数据库系统的基础，对于理解现代云数据库的架构和实现至关重要。在下一节课中，我们将继续学习分布式数据库的更高级主题，包括分布式事务、一致性协议等。

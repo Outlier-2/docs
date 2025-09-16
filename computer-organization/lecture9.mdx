@@ -1,0 +1,1501 @@
+---
+title: 第9讲：虚拟内存
+description: 虚拟内存管理、页面置换、地址转换和内存保护
+---
+
+# 第9讲：虚拟内存
+
+## 虚拟内存概述
+
+虚拟内存是计算机系统中的一种内存管理技术，它为每个进程提供了一个独立的、连续的虚拟地址空间，使得程序可以使用比物理内存更大的地址空间。
+
+### 虚拟内存的优势
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <time.h>
+
+// 虚拟内存参数
+typedef struct {
+    size_t virtual_address_size;   // 虚拟地址位数
+    size_t physical_address_size;  // 物理地址位数
+    size_t page_size;             // 页面大小
+    size_t tlb_entries;           // TLB条目数
+    size_t page_table_entries;     // 页表条目数
+} VirtualMemoryConfig;
+
+// 虚拟内存优势分析
+typedef struct {
+    bool memory_isolation;        // 内存隔离
+    bool memory_protection;       // 内存保护
+    bool demand_paging;           // 请求分页
+    bool memory_overcommitment;   // 内存超分配
+    bool shared_memory;           // 共享内存
+    bool memory_mapping;          // 内存映射
+} VirtualMemoryAdvantages;
+
+// 地址空间分析器
+typedef struct {
+    size_t virtual_space_size;     // 虚拟地址空间大小
+    size_t physical_space_size;    // 物理地址空间大小
+    size_t used_virtual_space;     // 已使用虚拟空间
+    size_t used_physical_space;    // 已使用物理空间
+    size_t shared_pages;            // 共享页面数
+    size_t private_pages;           // 私有页面数
+} AddressSpaceAnalyzer;
+
+// 初始化虚拟内存配置
+VirtualMemoryConfig* init_virtual_memory_config() {
+    VirtualMemoryConfig* config = malloc(sizeof(VirtualMemoryConfig));
+    config->virtual_address_size = 32;   // 32位虚拟地址
+    config->physical_address_size = 24;  // 24位物理地址
+    config->page_size = 4096;           // 4KB页面
+    config->tlb_entries = 64;           // 64条目TLB
+    config->page_table_entries = 1024;   // 1024页表条目
+    return config;
+}
+
+// 计算地址空间大小
+void calculate_address_space_size(VirtualMemoryConfig* config,
+                                AddressSpaceAnalyzer* analyzer) {
+    analyzer->virtual_space_size = 1ULL << config->virtual_address_size;
+    analyzer->physical_space_size = 1ULL << config->physical_address_size;
+
+    printf("地址空间分析\n");
+    printf("============\n");
+    printf("虚拟地址空间: %zu GB\n", analyzer->virtual_space_size / (1024 * 1024 * 1024));
+    printf("物理地址空间: %zu MB\n", analyzer->physical_space_size / (1024 * 1024));
+    printf("页面大小: %zu KB\n", config->page_size / 1024);
+    printf("虚拟页面数: %zu\n", analyzer->virtual_space_size / config->page_size);
+    printf("物理页面数: %zu\n", analyzer->physical_space_size / config->page_size);
+}
+
+// 虚拟内存优势演示
+void demonstrate_virtual_memory_advantages() {
+    printf("\n虚拟内存优势演示\n");
+    printf("==================\n");
+
+    VirtualMemoryAdvantages advantages = {
+        .memory_isolation = true,
+        .memory_protection = true,
+        .demand_paging = true,
+        .memory_overcommitment = true,
+        .shared_memory = true,
+        .memory_mapping = true
+    };
+
+    printf("1. 内存隔离\n");
+    printf("   - 每个进程拥有独立的虚拟地址空间\n");
+    printf("   - 进程间相互隔离，提高系统稳定性\n");
+    printf("   - 防止恶意程序访问其他进程内存\n\n");
+
+    printf("2. 内存保护\n");
+    printf("   - 读/写/执行权限控制\n");
+    printf("   - 内核空间保护\n");
+    printf("   - 防止非法内存访问\n\n");
+
+    printf("3. 请求分页\n");
+    printf("   - 按需分配物理内存\n");
+    printf("   - 提高内存利用率\n");
+    printf("   - 支持大程序运行\n\n");
+
+    printf("4. 内存超分配\n");
+    printf("   - 虚拟内存总和可超过物理内存\n");
+    printf("   - 提高系统并发度\n");
+    printf("   - 需要合理的页面置换策略\n\n");
+
+    printf("5. 共享内存\n");
+    printf("   - 多个进程共享相同物理页面\n");
+    printf("   - 库函数共享\n");
+    printf("   - 进程间通信\n\n");
+
+    printf("6. 内存映射\n");
+    printf("   - 文件映射到内存\n");
+    printf("   - 零拷贝操作\n");
+    printf("   - 简化文件访问\n");
+}
+
+// 虚拟内存地址转换演示
+void demonstrate_address_translation() {
+    printf("\n虚拟内存地址转换演示\n");
+    printf("=====================\n");
+
+    // 模拟地址转换过程
+    uint32_t virtual_address = 0x00401000;  // 示例虚拟地址
+    uint32_t page_size = 4096;
+
+    printf("虚拟地址: 0x%08x\n", virtual_address);
+
+    // 分解虚拟地址
+    uint32_t vpn = virtual_address / page_size;
+    uint32_t offset = virtual_address % page_size;
+
+    printf("虚拟页号(VPN): %u\n", vpn);
+    printf("页内偏移: %u\n", offset);
+
+    // 模拟页表查找
+    uint32_t page_table[1024];
+    for (int i = 0; i < 1024; i++) {
+        page_table[i] = i + 100;  // 简化映射关系
+    }
+
+    uint32_t ppn = page_table[vpn];
+    uint32_t physical_address = ppn * page_size + offset;
+
+    printf("物理页号(PPN): %u\n", ppn);
+    printf("物理地址: 0x%08x\n", physical_address);
+
+    printf("\n地址转换步骤：\n");
+    printf("1. CPU生成虚拟地址\n");
+    printf("2. MMU分解虚拟地址为VPN和偏移\n");
+    printf("3. 查找TLB（如果有）获取页表项\n");
+    printf("4. TLB缺失则查找页表\n");
+    printf("5. 页表缺失则触发缺页中断\n");
+    printf("6. 操作系统处理缺页中断\n");
+    printf("7. 更新TLB和页表\n");
+    printf("8. 构造物理地址\n");
+}
+
+// 内存分配策略演示
+void demonstrate_memory_allocation_strategies() {
+    printf("\n内存分配策略演示\n");
+    printf("==================\n");
+
+    // 模拟内存分配
+    size_t total_memory = 1024 * 1024;  // 1MB物理内存
+    size_t allocated_memory = 0;
+    size_t shared_memory = 0;
+
+    printf("总物理内存: %zu KB\n", total_memory / 1024);
+
+    // 模拟多个进程
+    int processes[] = {1, 2, 3, 4, 5};
+    size_t process_sizes[] = {256, 512, 128, 384, 192};  // KB
+
+    for (int i = 0; i < 5; i++) {
+        printf("\n进程 %d:\n", processes[i]);
+        printf("- 虚拟内存需求: %zu KB\n", process_sizes[i]);
+
+        // 模拟请求分页
+        size_t allocated = process_sizes[i] / 2;  // 初始分配一半
+        allocated_memory += allocated;
+
+        printf("- 初始分配: %zu KB\n", allocated);
+        printf("- 累计分配: %zu KB\n", allocated_memory);
+
+        // 检查是否超分配
+        if (allocated_memory > total_memory) {
+            printf("- 触发页面置换\n");
+            allocated_memory = total_memory;
+        }
+    }
+
+    printf("\n共享内存区域:\n");
+    printf("- 系统库: 64 KB\n");
+    printf("- 内核代码: 128 KB\n");
+    printf("- 共享数据: 32 KB\n");
+
+    shared_memory = 64 + 128 + 32;
+    printf("- 总共享内存: %zu KB\n", shared_memory);
+
+    printf("\n内存利用率:\n");
+    printf("- 物理内存利用率: %.1f%%\n",
+           (double)allocated_memory / total_memory * 100);
+    printf("- 共享内存节省: %zu KB\n", shared_memory);
+}
+
+// 主函数
+int main() {
+    printf("虚拟内存概述分析器\n");
+    printf("=================\n\n");
+
+    // 初始化配置
+    VirtualMemoryConfig* config = init_virtual_memory_config();
+    AddressSpaceAnalyzer analyzer = {0};
+
+    // 地址空间分析
+    calculate_address_space_size(config, &analyzer);
+
+    // 虚拟内存优势演示
+    demonstrate_virtual_memory_advantages();
+
+    // 地址转换演示
+    demonstrate_address_translation();
+
+    // 内存分配策略演示
+    demonstrate_memory_allocation_strategies();
+
+    // 清理资源
+    free(config);
+
+    return 0;
+}
+```
+
+## 页表和地址转换
+
+页表是虚拟内存系统的核心数据结构，用于维护虚拟地址到物理地址的映射关系。
+
+### 页表结构设计
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// 页表项结构
+typedef struct {
+    bool valid;          // 有效位
+    bool present;        // 存在位
+    bool read;           // 读权限
+    bool write;          // 写权限
+    bool execute;        // 执行权限
+    bool user;           // 用户访问权限
+    bool dirty;          // 脏位
+    bool referenced;     // 访问位
+    uint32_t ppn;        // 物理页号
+    uint32_t reserved;   // 保留字段
+} PageTableEntry;
+
+// 多级页表结构
+typedef struct {
+    uint32_t* entries;   // 页表项数组
+    size_t num_entries;  // 条目数量
+    bool is_leaf;        // 是否为叶节点
+} PageTable;
+
+// 地址转换结果
+typedef struct {
+    bool success;        // 转换是否成功
+    uint32_t paddr;      // 物理地址
+    uint32_t fault_type; // 缺页类型
+    const char* error_msg; // 错误信息
+} TranslationResult;
+
+// 页表统计信息
+typedef struct {
+    uint32_t total_entries;      // 总条目数
+    uint32_t valid_entries;      // 有效条目数
+    uint32_t present_entries;    // 存在条目数
+    uint32_t dirty_entries;      // 脏条目数
+    uint32_t access_count;       // 访问计数
+    uint32_t page_faults;        // 缺页次数
+    uint32_t tlb_hits;           // TLB命中次数
+    uint32_t tlb_misses;         // TLB缺失次数
+} PageTableStats;
+
+// 初始化页表项
+void init_page_table_entry(PageTableEntry* pte) {
+    pte->valid = false;
+    pte->present = false;
+    pte->read = false;
+    pte->write = false;
+    pte->execute = false;
+    pte->user = false;
+    pte->dirty = false;
+    pte->referenced = false;
+    pte->ppn = 0;
+    pte->reserved = 0;
+}
+
+// 创建页表
+PageTable* create_page_table(size_t num_entries, bool is_leaf) {
+    PageTable* pt = malloc(sizeof(PageTable));
+    pt->entries = malloc(num_entries * sizeof(uint32_t));
+    pt->num_entries = num_entries;
+    pt->is_leaf = is_leaf;
+
+    for (size_t i = 0; i < num_entries; i++) {
+        pt->entries[i] = 0;  // 初始化为0
+    }
+
+    return pt;
+}
+
+// 获取页表项指针
+PageTableEntry* get_page_table_entry(PageTable* pt, uint32_t index) {
+    if (index >= pt->num_entries) {
+        return NULL;
+    }
+    return (PageTableEntry*)&pt->entries[index];
+}
+
+// 设置页表项
+void set_page_table_entry(PageTable* pt, uint32_t index,
+                         uint32_t ppn, bool read, bool write, bool execute) {
+    if (index >= pt->num_entries) return;
+
+    PageTableEntry* pte = get_page_table_entry(pt, index);
+    pte->valid = true;
+    pte->present = true;
+    pte->read = read;
+    pte->write = write;
+    pte->execute = execute;
+    pte->user = true;
+    pte->dirty = false;
+    pte->referenced = false;
+    pte->ppn = ppn;
+}
+
+// 两级页表地址转换
+TranslationResult two_level_address_translation(
+    PageTable* pgd, PageTable** pmd_table, PageTable** pte_tables,
+    uint32_t vaddr, uint32_t page_size, PageTableStats* stats) {
+
+    TranslationResult result = {0};
+    stats->access_count++;
+
+    // 分解虚拟地址
+    uint32_t pgd_index = (vaddr >> 22) & 0x3FF;     // 页目录索引
+    uint32_t pmd_index = (vaddr >> 12) & 0x3FF;     // 页中间目录索引
+    uint32_t offset = vaddr & 0xFFF;                // 页内偏移
+
+    // 查找页目录
+    PageTableEntry* pgd_entry = get_page_table_entry(pgd, pgd_index);
+    if (!pgd_entry || !pgd_entry->valid || !pgd_entry->present) {
+        result.success = false;
+        result.fault_type = 1;  // 页目录缺失
+        result.error_msg = "页目录项不存在";
+        stats->page_faults++;
+        return result;
+    }
+
+    // 查找页中间目录
+    uint32_t pmd_table_index = pgd_entry->ppn;
+    PageTable* pmd = pmd_table[pmd_table_index];
+    PageTableEntry* pmd_entry = get_page_table_entry(pmd, pmd_index);
+
+    if (!pmd_entry || !pmd_entry->valid || !pmd_entry->present) {
+        result.success = false;
+        result.fault_type = 2;  // 页中间目录缺失
+        result.error_msg = "页中间目录项不存在";
+        stats->page_faults++;
+        return result;
+    }
+
+    // 查找页表
+    uint32_t pte_table_index = pmd_entry->ppn;
+    PageTable* pte_table = pte_tables[pte_table_index];
+    PageTableEntry* pte = get_page_table_entry(pte_table, pmd_index);
+
+    if (!pte || !pte->valid || !pte->present) {
+        result.success = false;
+        result.fault_type = 3;  // 页表缺失
+        result.error_msg = "页表项不存在";
+        stats->page_faults++;
+        return result;
+    }
+
+    // 检查访问权限
+    if (!pte->read) {
+        result.success = false;
+        result.fault_type = 4;  // 读权限错误
+        result.error_msg = "无读权限";
+        return result;
+    }
+
+    // 构造物理地址
+    result.success = true;
+    result.paddr = (pte->ppn << 12) | offset;
+
+    // 更新访问位
+    pte->referenced = true;
+
+    return result;
+}
+
+// 倒置页表地址转换
+TranslationResult inverted_page_table_translation(
+    uint32_t* inverted_pt, size_t pt_size, uint32_t asid, uint32_t vpn,
+    uint32_t page_size, PageTableStats* stats) {
+
+    TranslationResult result = {0};
+    stats->access_count++;
+
+    // 在倒置页表中搜索
+    for (size_t i = 0; i < pt_size; i++) {
+        uint32_t entry = inverted_pt[i];
+        uint32_t entry_asid = (entry >> 24) & 0xFF;
+        uint32_t entry_vpn = entry & 0xFFFFFF;
+
+        if (entry_asid == asid && entry_vpn == vpn) {
+            // 找到匹配项
+            result.success = true;
+            result.paddr = (i << 12) | (vpn & 0xFFF);
+            return result;
+        }
+    }
+
+    // 未找到匹配项
+    result.success = false;
+    result.fault_type = 1;  // 页表缺失
+    result.error_msg = "页表项不存在";
+    stats->page_faults++;
+    return result;
+}
+
+// 页表统计
+void update_page_table_stats(PageTable* pt, PageTableStats* stats) {
+    stats->total_entries = pt->num_entries;
+    stats->valid_entries = 0;
+    stats->present_entries = 0;
+    stats->dirty_entries = 0;
+
+    for (size_t i = 0; i < pt->num_entries; i++) {
+        PageTableEntry* pte = get_page_table_entry(pt, i);
+        if (pte->valid) {
+            stats->valid_entries++;
+            if (pte->present) {
+                stats->present_entries++;
+            }
+            if (pte->dirty) {
+                stats->dirty_entries++;
+            }
+        }
+    }
+}
+
+// 打印页表项信息
+void print_page_table_entry(PageTableEntry* pte, uint32_t index) {
+    printf("PTE[%u]: ", index);
+    if (!pte->valid) {
+        printf("无效\n");
+        return;
+    }
+
+    printf("PPN=%u, ", pte->ppn);
+    printf("权限=%s%s%s, ",
+           pte->read ? "R" : "-",
+           pte->write ? "W" : "-",
+           pte->execute ? "X" : "-");
+    printf("用户=%s, ", pte->user ? "Y" : "N");
+    printf("脏位=%s, ", pte->dirty ? "Y" : "N");
+    printf("访问=%s", pte->referenced ? "Y" : "N");
+}
+
+// 页表性能分析
+void analyze_page_table_performance(PageTableStats* stats) {
+    printf("\n页表性能分析\n");
+    printf("==============\n");
+    printf("总访问次数: %u\n", stats->access_count);
+    printf("缺页次数: %u\n", stats->page_faults);
+    printf("缺页率: %.2f%%\n",
+           stats->access_count > 0 ?
+           (double)stats->page_faults / stats->access_count * 100 : 0);
+    printf("TLB命中次数: %u\n", stats->tlb_hits);
+    printf("TLB缺失次数: %u\n", stats->tlb_misses);
+    printf("TLB命中率: %.2f%%\n",
+           stats->tlb_hits + stats->tlb_misses > 0 ?
+           (double)stats->tlb_hits / (stats->tlb_hits + stats->tlb_misses) * 100 : 0);
+}
+
+// 页表内存开销计算
+void calculate_page_table_overhead(size_t virtual_address_space,
+                                  size_t page_size, size_t entry_size) {
+    printf("\n页表内存开销计算\n");
+    printf("==================\n");
+
+    size_t num_pages = virtual_address_space / page_size;
+    size_t total_entries = num_pages;
+    size_t total_memory = total_entries * entry_size;
+
+    printf("虚拟地址空间: %zu GB\n", virtual_address_space / (1024 * 1024 * 1024));
+    printf("页面大小: %zu KB\n", page_size / 1024);
+    printf("页表项大小: %zu bytes\n", entry_size);
+    printf("总页数: %zu\n", num_pages);
+    printf("页表内存开销: %zu MB\n", total_memory / (1024 * 1024));
+    printf("开销比例: %.2f%%\n",
+           (double)total_memory / virtual_address_space * 100);
+
+    // 多级页表优化
+    printf("\n多级页表优化:\n");
+    printf("两级页表: ~%.2f MB\n", (double)total_memory / 1024);
+    printf("三级页表: ~%.2f MB\n", (double)total_memory / (1024 * 1024));
+    printf("倒置页表: ~%.2f MB\n", (double)total_memory / (1024 * 1024 * 1024));
+}
+
+// 主函数
+int main() {
+    printf("页表和地址转换分析器\n");
+    printf("===================\n\n");
+
+    // 创建两级页表
+    PageTable* pgd = create_page_table(1024, false);  // 页目录
+    PageTable* pmd_tables[4];  // 页中间目录
+    PageTable* pte_tables[16]; // 页表
+
+    for (int i = 0; i < 4; i++) {
+        pmd_tables[i] = create_page_table(1024, false);
+    }
+
+    for (int i = 0; i < 16; i++) {
+        pte_tables[i] = create_page_table(1024, true);
+    }
+
+    // 设置一些页表项
+    set_page_table_entry(pgd, 1, 0, true, true, true);
+    set_page_table_entry(pmd_tables[0], 1, 1, true, true, true);
+    set_page_table_entry(pte_tables[1], 1, 100, true, true, true);
+
+    // 统计信息
+    PageTableStats stats = {0};
+
+    // 测试地址转换
+    printf("地址转换测试:\n");
+    printf("==============\n");
+
+    uint32_t test_addresses[] = {
+        0x00401000,  // 有效地址
+        0x00802000,  // 有效地址
+        0x00C03000,  // 无效地址
+        0x00404000   // 有效地址
+    };
+
+    for (int i = 0; i < 4; i++) {
+        uint32_t vaddr = test_addresses[i];
+        printf("虚拟地址: 0x%08x\n", vaddr);
+
+        TranslationResult result = two_level_address_translation(
+            pgd, pmd_tables, pte_tables, vaddr, 4096, &stats);
+
+        if (result.success) {
+            printf("转换成功: 物理地址 = 0x%08x\n", result.paddr);
+        } else {
+            printf("转换失败: %s\n", result.error_msg);
+        }
+        printf("---\n");
+    }
+
+    // 打印页表统计
+    update_page_table_stats(pgd, &stats);
+    analyze_page_table_performance(&stats);
+
+    // 计算页表开销
+    calculate_page_table_overhead(4ULL * 1024 * 1024 * 1024, 4096, 4);
+
+    // 清理资源
+    free(pgd->entries);
+    free(pgd);
+
+    for (int i = 0; i < 4; i++) {
+        free(pmd_tables[i]->entries);
+        free(pmd_tables[i]);
+    }
+
+    for (int i = 0; i < 16; i++) {
+        free(pte_tables[i]->entries);
+        free(pte_tables[i]);
+    }
+
+    return 0;
+}
+```
+
+### 页表类型
+
+1. **单级页表**：简单直接，内存开销大
+2. **多级页表**：层次化结构，减少内存开销
+3. **倒置页表**：基于物理页号，节省内存
+4. **哈希页表**：哈希索引，快速查找
+
+## 页面置换算法
+
+当物理内存不足时，需要选择合适的页面置换算法来决定哪些页面应该被换出内存。
+
+### 页面置换策略
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <time.h>
+
+// 页面置换算法类型
+typedef enum {
+    ALGO_FIFO,        // 先进先出
+    ALGO_LRU,         // 最近最少使用
+    ALGO_OPTIMAL,     // 最佳置换
+    ALGO_CLOCK,       // 时钟算法
+    ALGO_SECOND_CHANCE, // 第二次机会
+    ALGO_LFU,         // 最不经常使用
+    ALGO_MFU          // 最经常使用
+} ReplacementAlgorithm;
+
+// 页面表项
+typedef struct {
+    bool valid;        // 有效位
+    bool referenced;   // 访问位
+    bool modified;     // 修改位
+    uint32_t page_no;  // 页面号
+    uint32_t load_time; // 加载时间
+    uint32_t last_access; // 最后访问时间
+    uint32_t access_count; // 访问计数
+} PageEntry;
+
+// 页面表
+typedef struct {
+    PageEntry* entries;    // 页面表项数组
+    size_t num_entries;    // 页面表项数量
+    size_t num_valid;      // 有效页面数量
+    ReplacementAlgorithm algo; // 置换算法
+    uint32_t current_time; // 当前时间
+} PageTable;
+
+// 页面访问序列
+typedef struct {
+    uint32_t* references;  // 访问序列
+    size_t length;         // 序列长度
+    size_t working_set_size; // 工作集大小
+} ReferenceString;
+
+// 性能统计
+typedef struct {
+    uint32_t page_faults;   // 缺页次数
+    uint32_t page_hits;     // 命中次数
+    uint32_t writes;        // 写操作次数
+    uint32_t disk_io;       // 磁盘I/O次数
+    double hit_ratio;       // 命中率
+    double fault_rate;      // 缺页率
+} PerformanceStats;
+
+// 初始化页面表
+PageTable* init_page_table(size_t size, ReplacementAlgorithm algo) {
+    PageTable* pt = malloc(sizeof(PageTable));
+    pt->entries = malloc(size * sizeof(PageEntry));
+    pt->num_entries = size;
+    pt->num_valid = 0;
+    pt->algo = algo;
+    pt->current_time = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        pt->entries[i].valid = false;
+        pt->entries[i].referenced = false;
+        pt->entries[i].modified = false;
+        pt->entries[i].page_no = 0;
+        pt->entries[i].load_time = 0;
+        pt->entries[i].last_access = 0;
+        pt->entries[i].access_count = 0;
+    }
+
+    return pt;
+}
+
+// 查找页面
+int find_page(PageTable* pt, uint32_t page_no) {
+    for (size_t i = 0; i < pt->num_entries; i++) {
+        if (pt->entries[i].valid && pt->entries[i].page_no == page_no) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// 查找空闲页面
+int find_free_page(PageTable* pt) {
+    for (size_t i = 0; i < pt->num_entries; i++) {
+        if (!pt->entries[i].valid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// FIFO置换算法
+int fifo_replace(PageTable* pt) {
+    size_t oldest = 0;
+    uint32_t min_time = pt->entries[0].load_time;
+
+    for (size_t i = 1; i < pt->num_entries; i++) {
+        if (pt->entries[i].load_time < min_time) {
+            min_time = pt->entries[i].load_time;
+            oldest = i;
+        }
+    }
+
+    return oldest;
+}
+
+// LRU置换算法
+int lru_replace(PageTable* pt) {
+    size_t lru = 0;
+    uint32_t min_time = pt->entries[0].last_access;
+
+    for (size_t i = 1; i < pt->num_entries; i++) {
+        if (pt->entries[i].last_access < min_time) {
+            min_time = pt->entries[i].last_access;
+            lru = i;
+        }
+    }
+
+    return lru;
+}
+
+// 最佳置换算法（需要预知未来）
+int optimal_replace(PageTable* pt, uint32_t* future_refs, size_t future_len, size_t current_pos) {
+    size_t farthest = 0;
+    int farthest_distance = -1;
+
+    for (size_t i = 0; i < pt->num_entries; i++) {
+        if (!pt->entries[i].valid) continue;
+
+        // 在未来引用中查找该页面的下一次访问
+        int distance = -1;
+        for (size_t j = current_pos; j < future_len; j++) {
+            if (future_refs[j] == pt->entries[i].page_no) {
+                distance = j - current_pos;
+                break;
+            }
+        }
+
+        // 如果页面在未来不再被访问，选择它
+        if (distance == -1) {
+            return i;
+        }
+
+        // 选择最远才被访问的页面
+        if (distance > farthest_distance) {
+            farthest_distance = distance;
+            farthest = i;
+        }
+    }
+
+    return farthest;
+}
+
+// 时钟算法
+int clock_replace(PageTable* pt) {
+    static size_t clock_hand = 0;
+
+    while (true) {
+        if (!pt->entries[clock_hand].valid) {
+            int result = clock_hand;
+            clock_hand = (clock_hand + 1) % pt->num_entries;
+            return result;
+        }
+
+        if (!pt->entries[clock_hand].referenced) {
+            int result = clock_hand;
+            clock_hand = (clock_hand + 1) % pt->num_entries;
+            return result;
+        }
+
+        pt->entries[clock_hand].referenced = false;
+        clock_hand = (clock_hand + 1) % pt->num_entries;
+    }
+}
+
+// LFU置换算法
+int lfu_replace(PageTable* pt) {
+    size_t lfu = 0;
+    uint32_t min_count = pt->entries[0].access_count;
+
+    for (size_t i = 1; i < pt->num_entries; i++) {
+        if (pt->entries[i].access_count < min_count) {
+            min_count = pt->entries[i].access_count;
+            lfu = i;
+        }
+    }
+
+    return lfu;
+}
+
+// 页面访问处理
+bool access_page(PageTable* pt, uint32_t page_no, bool is_write,
+                uint32_t* future_refs, size_t future_len, size_t current_pos,
+                PerformanceStats* stats) {
+    int page_index = find_page(pt, page_no);
+
+    if (page_index != -1) {
+        // 页面命中
+        stats->page_hits++;
+        pt->entries[page_index].last_access = pt->current_time;
+        pt->entries[page_index].access_count++;
+        pt->entries[page_index].referenced = true;
+
+        if (is_write) {
+            pt->entries[page_index].modified = true;
+            stats->writes++;
+        }
+
+        return true;
+    } else {
+        // 页面缺失
+        stats->page_faults++;
+
+        // 查找空闲页面
+        int free_page = find_free_page(pt);
+        int victim_page;
+
+        if (free_page != -1) {
+            victim_page = free_page;
+        } else {
+            // 选择置换页面
+            switch (pt->algo) {
+                case ALGO_FIFO:
+                    victim_page = fifo_replace(pt);
+                    break;
+                case ALGO_LRU:
+                    victim_page = lru_replace(pt);
+                    break;
+                case ALGO_OPTIMAL:
+                    victim_page = optimal_replace(pt, future_refs, future_len, current_pos);
+                    break;
+                case ALGO_CLOCK:
+                    victim_page = clock_replace(pt);
+                    break;
+                case ALGO_LFU:
+                    victim_page = lfu_replace(pt);
+                    break;
+                default:
+                    victim_page = lru_replace(pt);
+            }
+        }
+
+        // 如果页面被修改，需要写回磁盘
+        if (pt->entries[victim_page].valid && pt->entries[victim_page].modified) {
+            stats->disk_io++;
+        }
+
+        // 加载新页面
+        pt->entries[victim_page].valid = true;
+        pt->entries[victim_page].page_no = page_no;
+        pt->entries[victim_page].load_time = pt->current_time;
+        pt->entries[victim_page].last_access = pt->current_time;
+        pt->entries[victim_page].access_count = 1;
+        pt->entries[victim_page].referenced = true;
+        pt->entries[victim_page].modified = is_write;
+
+        if (is_write) {
+            stats->writes++;
+        }
+
+        return false;
+    }
+}
+
+// 模拟页面访问序列
+void simulate_reference_string(PageTable* pt, ReferenceString* ref_str,
+                              PerformanceStats* stats) {
+    for (size_t i = 0; i < ref_str->length; i++) {
+        pt->current_time++;
+        access_page(pt, ref_str->references[i], false,
+                   ref_str->references, ref_str->length, i, stats);
+    }
+
+    // 计算性能指标
+    stats->hit_ratio = (double)stats->page_hits / ref_str->length;
+    stats->fault_rate = (double)stats->page_faults / ref_str->length;
+}
+
+// 生成局部性访问序列
+ReferenceString* generate_locality_reference(size_t length, size_t working_set) {
+    ReferenceString* ref = malloc(sizeof(ReferenceString));
+    ref->references = malloc(length * sizeof(uint32_t));
+    ref->length = length;
+    ref->working_set_size = working_set;
+
+    srand(time(NULL));
+
+    for (size_t i = 0; i < length; i++) {
+        if (i < working_set) {
+            // 初始化工作集
+            ref->references[i] = i;
+        } else {
+            // 80%概率访问工作集内页面
+            if (rand() % 100 < 80) {
+                ref->references[i] = rand() % working_set;
+            } else {
+                ref->references[i] = rand() % (working_set * 2);
+            }
+        }
+    }
+
+    return ref;
+}
+
+// 比较不同置换算法
+void compare_replacement_algorithms() {
+    printf("页面置换算法比较\n");
+    printf("=================\n");
+
+    size_t page_table_size = 10;
+    size_t reference_length = 100;
+    size_t working_set_size = 20;
+
+    // 生成访问序列
+    ReferenceString* ref_str = generate_locality_reference(reference_length, working_set_size);
+
+    // 测试不同算法
+    ReplacementAlgorithm algorithms[] = {
+        ALGO_FIFO, ALGO_LRU, ALGO_OPTIMAL, ALGO_CLOCK, ALGO_LFU
+    };
+
+    const char* algo_names[] = {
+        "FIFO", "LRU", "OPTIMAL", "CLOCK", "LFU"
+    };
+
+    printf("算法\t缺页次数\t命中率\t磁盘I/O\n");
+    printf("----\t--------\t------\t------\n");
+
+    for (int i = 0; i < 5; i++) {
+        PageTable* pt = init_page_table(page_table_size, algorithms[i]);
+        PerformanceStats stats = {0};
+
+        simulate_reference_string(pt, ref_str, &stats);
+
+        printf("%s\t%u\t\t%.2f%%\t%u\n",
+               algo_names[i], stats.page_faults, stats.hit_ratio * 100, stats.disk_io);
+
+        free(pt->entries);
+        free(pt);
+    }
+
+    free(ref_str->references);
+    free(ref_str);
+}
+
+// 工作集分析
+void analyze_working_set() {
+    printf("\n工作集分析\n");
+    printf("==========\n");
+
+    size_t working_sets[] = {5, 10, 15, 20, 25, 30};
+    size_t num_sets = sizeof(working_sets) / sizeof(working_sets[0]);
+
+    printf("工作集大小\tFIFO缺页率\tLRU缺页率\tOPTIMAL缺页率\n");
+    printf("--------\t--------\t--------\t--------\n");
+
+    for (size_t i = 0; i < num_sets; i++) {
+        size_t ws = working_sets[i];
+        ReferenceString* ref_str = generate_locality_reference(100, ws);
+
+        double fifo_rate, lru_rate, optimal_rate;
+
+        // FIFO
+        PageTable* pt_fifo = init_page_table(10, ALGO_FIFO);
+        PerformanceStats stats_fifo = {0};
+        simulate_reference_string(pt_fifo, ref_str, &stats_fifo);
+        fifo_rate = stats_fifo.fault_rate;
+
+        // LRU
+        PageTable* pt_lru = init_page_table(10, ALGO_LRU);
+        PerformanceStats stats_lru = {0};
+        simulate_reference_string(pt_lru, ref_str, &stats_lru);
+        lru_rate = stats_lru.fault_rate;
+
+        // OPTIMAL
+        PageTable* pt_optimal = init_page_table(10, ALGO_OPTIMAL);
+        PerformanceStats stats_optimal = {0};
+        simulate_reference_string(pt_optimal, ref_str, &stats_optimal);
+        optimal_rate = stats_optimal.fault_rate;
+
+        printf("%zu\t\t%.2f%%\t%.2f%%\t%.2f%%\n",
+               ws, fifo_rate * 100, lru_rate * 100, optimal_rate * 100);
+
+        free(pt_fifo->entries);
+        free(pt_fifo);
+        free(pt_lru->entries);
+        free(pt_lru);
+        free(pt_optimal->entries);
+        free(pt_optimal);
+
+        free(ref_str->references);
+        free(ref_str);
+    }
+}
+
+// Belady异常分析
+void analyze_belady_anomaly() {
+    printf("\nBelady异常分析\n");
+    printf("==============\n");
+
+    // 会导致Belady异常的访问序列
+    uint32_t anomaly_sequence[] = {1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5};
+    size_t seq_length = sizeof(anomaly_sequence) / sizeof(anomaly_sequence[0]);
+
+    printf("访问序列: ");
+    for (size_t i = 0; i < seq_length; i++) {
+        printf("%u ", anomaly_sequence[i]);
+    }
+    printf("\n");
+
+    printf("页面数\tFIFO缺页次数\tLRU缺页次数\n");
+    printf("----\t--------\t--------\n");
+
+    for (size_t num_pages = 3; num_pages <= 6; num_pages++) {
+        // FIFO
+        PageTable* pt_fifo = init_page_table(num_pages, ALGO_FIFO);
+        PerformanceStats stats_fifo = {0};
+
+        ReferenceString ref_str = {
+            .references = anomaly_sequence,
+            .length = seq_length,
+            .working_set_size = 5
+        };
+
+        simulate_reference_string(pt_fifo, &ref_str, &stats_fifo);
+
+        // LRU
+        PageTable* pt_lru = init_page_table(num_pages, ALGO_LRU);
+        PerformanceStats stats_lru = {0};
+        simulate_reference_string(pt_lru, &ref_str, &stats_lru);
+
+        printf("%zu\t%u\t\t%u\n", num_pages, stats_fifo.page_faults, stats_lru.page_faults);
+
+        free(pt_fifo->entries);
+        free(pt_fifo);
+        free(pt_lru->entries);
+        free(pt_lru);
+    }
+
+    printf("\nBelady异常：增加页面数量反而增加缺页次数\n");
+}
+
+// 主函数
+int main() {
+    printf("页面置换算法分析器\n");
+    printf("==================\n\n");
+
+    // 比较不同置换算法
+    compare_replacement_algorithms();
+
+    // 工作集分析
+    analyze_working_set();
+
+    // Belady异常分析
+    analyze_belady_anomaly();
+
+    // 算法选择建议
+    printf("\n算法选择建议：\n");
+    printf("1. FIFO：实现简单，可能出现Belady异常\n");
+    printf("2. LRU：性能较好，实现复杂度中等\n");
+    printf("3. OPTIMAL：理论最优，需要预知未来\n");
+    printf("4. CLOCK：LRU的近似，硬件开销小\n");
+    printf("5. LFU：适合稳定的访问模式\n");
+
+    return 0;
+}
+```
+
+### 页面置换算法选择
+
+1. **FIFO**：简单实现，可能出现Belady异常
+2. **LRU**：性能良好，实现复杂度较高
+3. **OPTIMAL**：理论最优，需要预知未来
+4. **CLOCK**：LRU的近似实现，硬件开销小
+5. **LFU**：适合稳定的访问模式
+
+## 内存保护机制
+
+虚拟内存系统提供了多种内存保护机制，确保系统安全和稳定运行。
+
+### 内存保护策略
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+// 内存保护类型
+typedef enum {
+    PROTECTION_NONE,     // 无保护
+    PROTECTION_READ,     // 只读
+    PROTECTION_WRITE,    // 读写
+    PROTECTION_EXECUTE,  // 执行
+    PROTECTION_KERNEL    // 内核空间
+} MemoryProtection;
+
+// 内存区域类型
+typedef enum {
+    REGION_KERNEL,       // 内核代码
+    REGION_USER_CODE,    // 用户代码
+    REGION_USER_DATA,    // 用户数据
+    REGION_SHARED,       // 共享内存
+    REGION_MAPPED,       // 内存映射文件
+    REGION_STACK,        // 栈
+    REGION_HEAP          // 堆
+} MemoryRegionType;
+
+// 内存访问类型
+typedef enum {
+    ACCESS_READ,         // 读访问
+    ACCESS_WRITE,        // 写访问
+    ACCESS_EXECUTE,      // 执行访问
+    ACCESS_KERNEL        // 内核访问
+} AccessType;
+
+// 内存区域描述符
+typedef struct {
+    uint32_t start_addr;  // 起始地址
+    uint32_t end_addr;    // 结束地址
+    MemoryRegionType type; // 区域类型
+    MemoryProtection prot; // 保护权限
+    bool shared;          // 是否共享
+    bool copy_on_write;   // 写时复制
+    uint32_t owner_pid;   // 所有者进程ID
+} MemoryRegion;
+
+// 内存保护单元（MPU）
+typedef struct {
+    MemoryRegion* regions;    // 内存区域数组
+    size_t num_regions;      // 区域数量
+    bool enabled;            // MPU是否启用
+    uint32_t fault_addr;     // 故障地址
+    uint32_t fault_type;     // 故障类型
+} MemoryProtectionUnit;
+
+// 内存访问结果
+typedef struct {
+    bool allowed;            // 访问是否允许
+    uint32_t fault_code;     // 故障代码
+    const char* error_msg;   // 错误信息
+    MemoryRegion* region;    // 相关内存区域
+} AccessResult;
+
+// 访问统计
+typedef struct {
+    uint32_t total_accesses; // 总访问次数
+    uint32_t allowed_accesses; // 允许的访问
+    uint32_t denied_accesses;  // 被拒绝的访问
+    uint32_t read_violations; // 读违规
+    uint32_t write_violations; // 写违规
+    uint32_t execute_violations; // 执行违规
+    uint32_t kernel_violations; // 内核违规
+} ProtectionStats;
+
+// 初始化MPU
+MemoryProtectionUnit* init_mpu(size_t max_regions) {
+    MemoryProtectionUnit* mpu = malloc(sizeof(MemoryProtectionUnit));
+    mpu->regions = malloc(max_regions * sizeof(MemoryRegion));
+    mpu->num_regions = 0;
+    mpu->enabled = true;
+    mpu->fault_addr = 0;
+    mpu->fault_type = 0;
+    return mpu;
+}
+
+// 添加内存区域
+bool add_memory_region(MemoryProtectionUnit* mpu, uint32_t start, uint32_t end,
+                      MemoryRegionType type, MemoryProtection prot,
+                      bool shared, bool cow, uint32_t owner_pid) {
+    if (mpu->num_regions >= 100) {  // 假设最大100个区域
+        return false;
+    }
+
+    MemoryRegion* region = &mpu->regions[mpu->num_regions++];
+    region->start_addr = start;
+    region->end_addr = end;
+    region->type = type;
+    region->prot = prot;
+    region->shared = shared;
+    region->copy_on_write = cow;
+    region->owner_pid = owner_pid;
+
+    return true;
+}
+
+// 查找内存区域
+MemoryRegion* find_memory_region(MemoryProtectionUnit* mpu, uint32_t addr) {
+    for (size_t i = 0; i < mpu->num_regions; i++) {
+        if (addr >= mpu->regions[i].start_addr && addr < mpu->regions[i].end_addr) {
+            return &mpu->regions[i];
+        }
+    }
+    return NULL;
+}
+
+// 检查访问权限
+bool check_access_permission(MemoryRegion* region, AccessType access_type, bool is_kernel) {
+    if (!region) return false;
+
+    // 内核可以访问任何区域
+    if (is_kernel) return true;
+
+    // 检查用户访问权限
+    switch (access_type) {
+        case ACCESS_READ:
+            return region->prot >= PROTECTION_READ;
+        case ACCESS_WRITE:
+            return region->prot >= PROTECTION_WRITE;
+        case ACCESS_EXECUTE:
+            return region->prot >= PROTECTION_EXECUTE;
+        default:
+            return false;
+    }
+}
+
+// 处理内存访问
+AccessResult handle_memory_access(MemoryProtectionUnit* mpu, uint32_t addr,
+                                 AccessType access_type, bool is_kernel,
+                                 ProtectionStats* stats) {
+    AccessResult result = {0};
+    stats->total_accesses++;
+
+    if (!mpu->enabled) {
+        result.allowed = true;
+        stats->allowed_accesses++;
+        return result;
+    }
+
+    // 查找内存区域
+    MemoryRegion* region = find_memory_region(mpu, addr);
+    result.region = region;
+
+    if (!region) {
+        result.allowed = false;
+        result.fault_code = 1;  // 无效地址
+        result.error_msg = "访问无效内存区域";
+        stats->denied_accesses++;
+        return result;
+    }
+
+    // 检查访问权限
+    if (!check_access_permission(region, access_type, is_kernel)) {
+        result.allowed = false;
+        result.fault_code = 2;  // 权限不足
+
+        switch (access_type) {
+            case ACCESS_READ:
+                result.error_msg = "读权限不足";
+                stats->read_violations++;
+                break;
+            case ACCESS_WRITE:
+                result.error_msg = "写权限不足";
+                stats->write_violations++;
+                break;
+            case ACCESS_EXECUTE:
+                result.error_msg = "执行权限不足";
+                stats->execute_violations++;
+                break;
+            default:
+                result.error_msg = "未知权限错误";
+        }
+
+        stats->denied_accesses++;
+        return result;
+    }
+
+    // 检查写时复制
+    if (access_type == ACCESS_WRITE && region->copy_on_write) {
+        // 这里应该复制页面，简化处理
+        region->copy_on_write = false;
+    }
+
+    result.allowed = true;
+    stats->allowed_accesses++;
+    return result;
+}
+
+// 创建默认内存布局
+void create_default_memory_layout(MemoryProtectionUnit* mpu, uint32_t pid) {
+    // 内核空间 (0x00000000 - 0x7FFFFFFF)
+    add_memory_region(mpu, 0x00000000, 0x7FFFFFFF, REGION_KERNEL,
+                     PROTECTION_KERNEL, false, false, 0);
+
+    // 用户代码段 (0x08000000 - 0x080FFFFF)
+    add_memory_region(mpu, 0x08000000, 0x080FFFFF, REGION_USER_CODE,
+                     PROTECTION_EXECUTE, false, false, pid);
+
+    // 用户数据段 (0x08100000 - 0x081FFFFF)
+    add_memory_region(mpu, 0x08100000, 0x081FFFFF, REGION_USER_DATA,
+                     PROTECTION_WRITE, false, false, pid);
+
+    // 用户栈 (0xBFFFF000 - 0xC0000000)
+    add_memory_region(mpu, 0xBFFFF000, 0xC0000000, REGION_STACK,
+                     PROTECTION_WRITE, false, false, pid);
+
+    // 用户堆 (0x08200000 - 0x082FFFFF)
+    add_memory_region(mpu, 0x08200000, 0x082FFFFF, REGION_HEAP,
+                     PROTECTION_WRITE, false, false, pid);
+
+    // 共享库 (0x40000000 - 0x400FFFFF)
+    add_memory_region(mpu, 0x40000000, 0x400FFFFF, REGION_SHARED,
+                     PROTECTION_READ, true, true, 0);
+}
+
+// 模拟内存访问
+void simulate_memory_access(MemoryProtectionUnit* mpu, uint32_t pid) {
+    printf("\n模拟进程 %u 的内存访问\n", pid);
+    printf("========================\n");
+
+    ProtectionStats stats = {0};
+
+    // 测试访问序列
+    struct {
+        uint32_t addr;
+        AccessType access;
+        bool is_kernel;
+        const char* description;
+    } test_accesses[] = {
+        {0x08001000, ACCESS_EXECUTE, false, "执行用户代码"},
+        {0x08101000, ACCESS_WRITE, false, "写入用户数据"},
+        {0x08101000, ACCESS_READ, false, "读取用户数据"},
+        {0xBFFFFF00, ACCESS_WRITE, false, "写入栈空间"},
+        {0x40001000, ACCESS_READ, false, "读取共享库"},
+        {0x40001000, ACCESS_WRITE, false, "尝试写入共享库"},
+        {0x08001000, ACCESS_WRITE, false, "尝试写入代码段"},
+        {0x00001000, ACCESS_READ, true, "内核读取内核空间"},
+        {0x00001000, ACCESS_READ, false, "用户尝试读取内核空间"},
+        {0x09000000, ACCESS_READ, false, "访问未映射区域"}
+    };
+
+    for (size_t i = 0; i < sizeof(test_accesses) / sizeof(test_accesses[0]); i++) {
+        printf("%s (0x%08x): ", test_accesses[i].description, test_accesses[i].addr);
+
+        AccessResult result = handle_memory_access(
+            mpu, test_accesses[i].addr, test_accesses[i].access,
+            test_accesses[i].is_kernel, &stats);
+
+        if (result.allowed) {
+            printf("允许\n");
+        } else {
+            printf("拒绝 - %s\n", result.error_msg);
+        }
+    }
+
+    // 输出统计信息
+    printf("\n访问统计：\n");
+    printf("总访问次数: %u\n", stats.total_accesses);
+    printf("允许访问: %u (%.1f%%)\n", stats.allowed_accesses,
+           (double)stats.allowed_accesses / stats.total_accesses * 100);
+    printf("拒绝访问: %u (%.1f%%)\n", stats.denied_accesses,
+           (double)stats.denied_accesses / stats.total_accesses * 100);
+    printf("读违规: %u\n", stats.read_violations);
+    printf("写违规: %u\n", stats.write_violations);
+    printf("执行违规: %u\n", stats.execute_violations);
+    printf("内核违规: %u\n", stats.kernel_violations);
+}
+
+// 内存保护策略分析
+void analyze_protection_strategies() {
+    printf("\n内存保护策略分析\n");
+    printf("================\n");
+
+    printf("1. 基于权限的保护\n");
+    printf("   - 读/写/执行权限控制\n");
+    printf("   - 用户/内核空间隔离\n");
+    printf("   - 细粒度访问控制\n\n");
+
+    printf("2. 基于区域的保护\n");
+    printf("   - 代码段保护（防止代码修改）\n");
+    printf("   - 数据段保护（防止代码执行）\n");
+    printf("   - 栈保护（防止栈溢出）\n");
+    printf("   - 内核空间保护（防止用户访问）\n\n");
+
+    printf("3. 高级保护技术\n");
+    printf("   - ASLR（地址空间布局随机化）\n");
+    printf("   - DEP（数据执行保护）\n");
+    printf("   - 写时复制（Copy-on-Write）\n");
+    printf("   - 内存加密（Memory Encryption）\n\n");
+
+    printf("4. 安全增强机制\n");
+    printf("   - 页表项权限位\n");
+    printf("   - SMAP/SMEP（管理模式访问/执行保护）\n");
+    printf("   - KASLR（内核地址空间布局随机化）\n");
+    printf("   - Control-Flow Integrity (CFI)\n");
+}
+
+// 保护性能分析
+void analyze_protection_performance() {
+    printf("\n保护性能分析\n");
+    printf("============\n");
+
+    printf("保护机制开销：\n");
+    printf("1. 地址转换开销：TLB查找、页表遍历\n");
+    printf("2. 权限检查开销：硬件支持、软件模拟\n");
+    printf("3. 缺页处理开销：异常处理、页面调度\n");
+    printf("4. 上下文切换开销：TLB刷新、缓存失效\n\n");
+
+    printf("性能优化策略：\n");
+    printf("1. 硬件支持：MPU、MMU、TLB\n");
+    printf("2. 缓存优化：TLB预取、页表缓存\n");
+    printf("3. 批量处理：减少权限检查次数\n");
+    printf("4. 延迟检查：按需进行权限验证\n");
+}
+
+// 主函数
+int main() {
+    printf("内存保护机制分析器\n");
+    printf("=================\n\n");
+
+    // 初始化MPU
+    MemoryProtectionUnit* mpu = init_mpu(100);
+
+    // 创建默认内存布局
+    uint32_t test_pid = 1234;
+    create_default_memory_layout(mpu, test_pid);
+
+    printf("内存区域布局：\n");
+    printf("==============\n");
+    for (size_t i = 0; i < mpu->num_regions; i++) {
+        MemoryRegion* region = &mpu->regions[i];
+        const char* type_names[] = {"内核", "用户代码", "用户数据", "共享", "映射", "栈", "堆"};
+        const char* prot_names[] = {"无", "读", "读写", "执行", "内核"};
+
+        printf("区域 %zu: 0x%08x - 0x%08x [%s] [%s] %s %s\n",
+               i, region->start_addr, region->end_addr,
+               type_names[region->type], prot_names[region->prot],
+               region->shared ? "共享" : "私有",
+               region->copy_on_write ? "写时复制" : "");
+    }
+
+    // 模拟内存访问
+    simulate_memory_access(mpu, test_pid);
+
+    // 内存保护策略分析
+    analyze_protection_strategies();
+
+    // 保护性能分析
+    analyze_protection_performance();
+
+    // 清理资源
+    free(mpu->regions);
+    free(mpu);
+
+    return 0;
+}
+```
+
+### 内存保护特性
+
+1. **权限控制**：读、写、执行权限的细粒度控制
+2. **空间隔离**：用户空间和内核空间的隔离
+3. **区域保护**：代码段、数据段、栈、堆的保护
+4. **安全增强**：ASLR、DEP、写时复制等机制
+
+## 总结
+
+虚拟内存是现代操作系统的重要特性，提供了内存管理、保护和优化的综合解决方案。
+
+### 关键概念回顾
+
+1. **虚拟内存优势**：内存隔离、内存保护、请求分页、内存超分配
+2. **页表结构**：单级、多级、倒置页表等不同结构
+3. **地址转换**：虚拟地址到物理地址的转换过程
+4. **页面置换**：FIFO、LRU、OPTIMAL等置换算法
+5. **内存保护**：权限控制、空间隔离、安全增强机制
+
+### 性能优化
+
+- **TLB优化**：提高地址转换速度
+- **页面大小**：大页面减少TLB压力
+- **预取策略**：预测缺页并提前加载
+- **工作集管理**：保持常用页面在内存中
+
+### 实际应用
+
+1. **操作系统**：虚拟内存管理、进程隔离
+2. **应用程序**：大内存支持、内存映射文件
+3. **安全系统**：内存保护、漏洞防护
+4. **嵌入式系统**：受保护内存区域
+
+虚拟内存技术是现代计算系统的基础，理解其原理对于系统设计和性能优化至关重要。
